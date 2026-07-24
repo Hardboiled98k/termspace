@@ -635,7 +635,6 @@ body {
 /* ── Worker 卡片（F7，cdx 状态投影）─────────────────── */
 .worker-node {
   width: 100%;
-  height: 100%;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -690,6 +689,68 @@ body {
   margin-left: auto;
   font-variant-numeric: tabular-nums;
 }
+.worker-node-reply {
+  display: flex;
+  gap: 6px;
+}
+.worker-node-reply input {
+  flex: 1;
+  font-size: 11px;
+  font-family: var(--tb-font-ui);
+  color: var(--tb-text);
+  background: var(--tb-terminal);
+  border: 0.5px solid var(--tb-hairline);
+  border-radius: 7px;
+  padding: 5px 8px;
+  outline: none;
+  min-width: 0;
+}
+.worker-node-reply input:focus {
+  border-color: rgba(255, 159, 10, 0.5);
+}
+.worker-node-reply button,
+.worker-node-actions button {
+  font-size: 11px;
+  font-family: var(--tb-font-ui);
+  padding: 4px 10px;
+  border-radius: var(--tb-radius-pill);
+  border: none;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--tb-text);
+  cursor: pointer;
+}
+.worker-node-reply button:hover,
+.worker-node-actions button:hover {
+  background: rgba(10, 132, 255, 0.9);
+  color: #fff;
+}
+.worker-node-actions button.danger:hover {
+  background: var(--tb-red);
+}
+.worker-node-actions button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.worker-node-actions {
+  display: flex;
+  gap: 6px;
+}
+.worker-node-result {
+  font-size: 10.5px;
+  font-family: var(--tb-font-mono);
+  color: var(--tb-muted);
+  background: var(--tb-terminal);
+  border: 0.5px solid var(--tb-hairline);
+  border-radius: 7px;
+  padding: 8px 10px;
+  max-height: 140px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+  cursor: text;
+}
+
 .worker-node-question {
   font-size: 11px;
   color: var(--tb-orange);

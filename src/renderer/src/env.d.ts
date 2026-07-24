@@ -48,6 +48,11 @@ interface TermboardApi {
     }) => void
   ) => () => void
   ready: () => void
+  workerAction: (
+    action: 'result' | 'kill' | 'send',
+    task: string,
+    text?: string
+  ) => Promise<{ ok: boolean; output: string }>
   onWorkers: (
     cb: (
       rows: {

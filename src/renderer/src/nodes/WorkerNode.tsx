@@ -1,4 +1,4 @@
-import { memo } from 'react'
+import { memo, useState } from 'react'
 import type { Node, NodeProps } from '@xyflow/react'
 
 /* F7：detached worker 卡片（cdx 引擎，只显示不持久化） */
@@ -24,6 +24,8 @@ const STATE_LABEL: Record<string, string> = {
   done: '完成'
 }
 
+const TERMINAL_STATES = new Set(['done', 'failed', 'killed'])
+
 function stateClass(state: string): string {
   if (state === 'working') return 'running'
   if (state === 'awaiting_reply' || state === 'stalled') return 'attention'
@@ -38,8 +40,37 @@ function fmtAge(s?: number): string {
   return `${Math.floor(s / 3600)}h${Math.floor((s % 3600) / 60)}m`
 }
 
+/** 从 cdx result --json 里抠出最终消息文本（字段名以 cdx.py 为准，做宽松兜底） */
+function extractResult(output: string): string {
+  try {
+    const obj = JSON.parse(output) as Record<string, unknown>
+    for (const key of ['message', 'result', 'last_message', 'output']) {
+      const v = obj[key]
+      if (typeof v === 'string' && v.trim()) return v
+    }
+    return output
+  } catch {
+    return output
+  }
+}
+
 function WorkerNodeImpl({ data }: NodeProps<WorkerNodeT>): React.JSX.Element {
   const cls = stateClass(data.state)
+  const [reply, setReply] = useState('')
+  const [resultText, setResultText] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const act = async (action: 'result' | 'kill' | 'send', text?: string): Promise<void> => {
+    setBusy(true)
+    try {
+      const r = await window.termboard.workerAction(action, data.task, text)
+      if (action === 'result') setResultText(extractResult(r.output))
+      if (action === 'send') setReply('')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return (
     <div className={`worker-node status-${cls}`}>
       <div className="worker-node-head">
@@ -58,6 +89,37 @@ function WorkerNodeImpl({ data }: NodeProps<WorkerNodeT>): React.JSX.Element {
         <div className="worker-node-question" title={data.question}>
           ❓ {data.question}
         </div>
+      )}
+      {data.state === 'awaiting_reply' && (
+        <div className="worker-node-reply nodrag">
+          <input
+            placeholder="回复 worker…"
+            value={reply}
+            disabled={busy}
+            onChange={(e) => setReply(e.currentTarget.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && reply.trim()) void act('send', reply)
+            }}
+          />
+          <button disabled={busy || !reply.trim()} onClick={() => void act('send', reply)}>
+            发送
+          </button>
+        </div>
+      )}
+      <div className="worker-node-actions nodrag">
+        {TERMINAL_STATES.has(data.state) && (
+          <button disabled={busy} onClick={() => void act('result')}>
+            收结果
+          </button>
+        )}
+        {!TERMINAL_STATES.has(data.state) && (
+          <button className="danger" disabled={busy} onClick={() => void act('kill')}>
+            杀掉
+          </button>
+        )}
+      </div>
+      {resultText && (
+        <div className="worker-node-result nodrag nowheel">{resultText.slice(0, 2000)}</div>
       )}
     </div>
   )

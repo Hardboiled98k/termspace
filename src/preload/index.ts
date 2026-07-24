@@ -54,6 +54,12 @@ const api = {
   ready: (): void => {
     ipcRenderer.send('renderer:ready')
   },
+  workerAction: (
+    action: 'result' | 'kill' | 'send',
+    task: string,
+    text?: string
+  ): Promise<{ ok: boolean; output: string }> =>
+    ipcRenderer.invoke('worker:action', action, task, text),
   onWorkers: (cb: (rows: unknown[]) => void): (() => void) => {
     const listener = (_e: IpcRendererEvent, rows: unknown[]): void => cb(rows)
     ipcRenderer.on('workers:update', listener)

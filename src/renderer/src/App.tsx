@@ -513,9 +513,8 @@ function Board(): React.JSX.Element {
             return {
               id,
               type: 'worker' as const,
-              position: { x: baseX, y: 80 + placed++ * 150 },
-              width: 260,
-              height: 130,
+              position: { x: baseX, y: 80 + placed++ * 170 },
+              width: 280, // 高度随内容自适应（回复框/结果区会展开）
               data
             }
           })

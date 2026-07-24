@@ -23,6 +23,28 @@ const CDX = path.join(os.homedir(), '.claude', 'skills', 'cxcc-subagent', 'scrip
 const STATE_DIR = path.join(os.homedir(), '.codex-agents')
 const POLL_MS = 3000
 
+const TASK_RE = /^[a-zA-Z0-9_-]+$/
+
+/** worker 卡片操作：result / kill / send（回复 worker 提问）*/
+export async function workerAction(
+  action: 'result' | 'kill' | 'send',
+  task: string,
+  text?: string
+): Promise<{ ok: boolean; output: string }> {
+  if (!TASK_RE.test(task)) return { ok: false, output: 'bad task name' }
+  const args = [CDX, action, task, '--json']
+  if (action === 'send') {
+    if (!text?.trim()) return { ok: false, output: 'empty reply' }
+    args.splice(3, 0, text) // cdx send <task> <prompt> --json
+  }
+  return new Promise((resolve) => {
+    execFile('python3', args, { timeout: 30_000, maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => {
+      // cdx 用非零退出码表状态（10/11/12/13），stdout JSON 仍有效 → 一律回传
+      resolve({ ok: !err || stdout.length > 0, output: stdout.trim() || String(err ?? '') })
+    })
+  })
+}
+
 export interface WorkerWatch {
   refresh: () => void
   dispose: () => void

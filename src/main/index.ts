@@ -12,7 +12,7 @@ import {
   resolveIdentityEnv
 } from './identity-store'
 import { listPresets, upsertPreset, deletePreset } from './preset-store'
-import { startWorkerWatch, type WorkerWatch } from './worker-watch'
+import { startWorkerWatch, workerAction, type WorkerWatch } from './worker-watch'
 
 // dev 下 app 名默认是 "Electron"，userData 会指向共享目录 → 显式隔离
 app.setPath('userData', path.join(app.getPath('appData'), 'termboard'))
@@ -142,6 +142,17 @@ ipcMain.on('pty:resize', (_e, id: string, cols: number, rows: number) => {
 ipcMain.on('pty:kill', (_e, id: string) => {
   killPty(id)
 })
+
+// ── Worker 操作 IPC（F7）──
+ipcMain.handle(
+  'worker:action',
+  (_e, action: 'result' | 'kill' | 'send', task: string, text?: string) => {
+    const r = workerAction(action, task, text)
+    // 操作后强制刷新一轮（比如 kill 后状态立刻变）
+    setTimeout(() => workerWatch?.refresh(), 500)
+    return r
+  }
+)
 
 // ── Agent 预设 IPC ──
 ipcMain.handle('preset:list', () => listPresets())
