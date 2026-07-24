@@ -53,6 +53,16 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
   const lod = useStore((s) => s.transform[2] < LOD_ZOOM)
   const { deleteElements, updateNodeData } = useReactFlow()
   const [editing, setEditing] = useState(false)
+  const [ctxPct, setCtxPct] = useState<number | null>(null)
+
+  // per-node 订阅，避免高频 usage 更新走 setNodes 触发全画布 rerender
+  useEffect(
+    () =>
+      window.termboard.onAgentContext((e) => {
+        if (e.nodeId === id) setCtxPct(e.usedPercent)
+      }),
+    [id]
+  )
 
   useEffect(() => {
     const el = holderRef.current
@@ -134,6 +144,14 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
         ) : (
           <span className="term-node-title" onDoubleClick={() => setEditing(true)}>
             {data.title}
+          </span>
+        )}
+        {ctxPct !== null && (
+          <span
+            className={`ctx-meter ${ctxPct > 80 ? 'hot' : ctxPct > 60 ? 'warm' : ''}`}
+            title={`上下文已用 ${ctxPct}%`}
+          >
+            <span className="ctx-fill" style={{ width: `${ctxPct}%` }} />
           </span>
         )}
         <span className={`status-chip ${data.status}`}>{STATUS_LABEL[data.status]}</span>

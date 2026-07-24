@@ -39,6 +39,53 @@ interface Workspace {
 
 const DEFAULT_SIZE = { width: 580, height: 380 }
 
+/* ── 额度 HUD（数据源: ~/.claude/claude-usage.json，60s 轮询）── */
+interface QuotaPool {
+  used_percentage: number
+  resets_at: number
+}
+interface Quota {
+  five_hour?: QuotaPool
+  seven_day?: QuotaPool
+}
+
+function zoneClass(pct: number): string {
+  // 对齐太极三区：🟢<60 🟡60-78 🔴>78
+  return pct > 78 ? 'red' : pct > 60 ? 'yellow' : 'green'
+}
+
+function resetIn(resetsAt: number): string {
+  const min = Math.max(0, Math.round((resetsAt * 1000 - Date.now()) / 60_000))
+  return min >= 60 ? `${Math.floor(min / 60)}h${min % 60}m` : `${min}m`
+}
+
+function QuotaRow({ label, pool }: { label: string; pool: QuotaPool }): React.JSX.Element {
+  const pct = Math.round(pool.used_percentage)
+  return (
+    <div className="quota-row" title={`${label} 已用 ${pct}%，${resetIn(pool.resets_at)} 后重置`}>
+      <span className="quota-label">{label}</span>
+      <span className="quota-bar">
+        <span className={`quota-fill ${zoneClass(pct)}`} style={{ width: `${pct}%` }} />
+      </span>
+      <span className="quota-pct">{pct}%</span>
+      <span className="quota-reset">{resetIn(pool.resets_at)}</span>
+    </div>
+  )
+}
+
+function QuotaHUD(): React.JSX.Element | null {
+  const [quota, setQuota] = useState<Quota | null>(null)
+  useEffect(() => window.termboard.onQuota(setQuota), [])
+  if (!quota?.five_hour && !quota?.seven_day) return null
+  return (
+    <Panel position="top-right" className="quota-hud">
+      <span className="quota-title">Claude</span>
+      {quota.five_hour && <QuotaRow label="5h" pool={quota.five_hour} />}
+      {quota.seven_day && <QuotaRow label="周" pool={quota.seven_day} />}
+    </Panel>
+  )
+}
+
 function seedNodes(): TermNode[] {
   return [
     {
@@ -228,6 +275,7 @@ function Board(): React.JSX.Element {
           nodeColor={(n) => statusColor[(n.data as { status?: string }).status ?? 'idle']}
           nodeStrokeWidth={3}
         />
+        <QuotaHUD />
         <Panel position="top-left" className="toolbar">
           <span className="toolbar-title">TermBoard</span>
           <span className="toolbar-sep" />

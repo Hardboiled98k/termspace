@@ -12,6 +12,21 @@ interface TermboardApi {
   onAgentStatus: (
     cb: (e: { nodeId: string; agentId: string; state: string; newTurn: boolean }) => void
   ) => () => void
+  onAgentContext: (
+    cb: (e: {
+      nodeId: string
+      usedTokens: number
+      windowTokens: number
+      usedPercent: number
+      model: string
+    }) => void
+  ) => () => void
+  onQuota: (
+    cb: (q: {
+      five_hour?: { used_percentage: number; resets_at: number }
+      seven_day?: { used_percentage: number; resets_at: number }
+    }) => void
+  ) => () => void
 }
 
 declare interface Window {

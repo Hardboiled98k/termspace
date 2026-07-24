@@ -202,6 +202,102 @@ body {
   color: #fff;
 }
 
+/* 上下文用量微型条（节点头部） */
+.ctx-meter {
+  margin-left: auto;
+  width: 44px;
+  height: 3.5px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.ctx-meter + .status-chip {
+  margin-left: 0;
+}
+.ctx-fill {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--tb-green);
+  transition: width 0.4s ease;
+}
+.ctx-meter.warm .ctx-fill {
+  background: var(--tb-orange);
+}
+.ctx-meter.hot .ctx-fill {
+  background: var(--tb-red);
+}
+
+/* ── 额度 HUD（右上玻璃面板）───────────────────────────── */
+.quota-hud {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 10px 14px;
+  background: var(--tb-panel-glass);
+  backdrop-filter: blur(24px) saturate(180%);
+  border: 0.5px solid var(--tb-hairline);
+  border-radius: var(--tb-radius);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  margin-top: 34px;
+  min-width: 190px;
+}
+.quota-title {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--tb-muted);
+}
+.quota-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.quota-label {
+  font-size: 11px;
+  color: var(--tb-text);
+  width: 18px;
+  flex-shrink: 0;
+}
+.quota-bar {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+}
+.quota-fill {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.4s ease;
+}
+.quota-fill.green {
+  background: var(--tb-green);
+}
+.quota-fill.yellow {
+  background: var(--tb-orange);
+}
+.quota-fill.red {
+  background: var(--tb-red);
+}
+.quota-pct {
+  font-size: 11px;
+  color: var(--tb-text);
+  font-variant-numeric: tabular-nums;
+  width: 34px;
+  text-align: right;
+}
+.quota-reset {
+  font-size: 10px;
+  color: var(--tb-muted);
+  font-variant-numeric: tabular-nums;
+  width: 44px;
+  text-align: right;
+}
+
 .status-dot {
   width: 8px;
   height: 8px;

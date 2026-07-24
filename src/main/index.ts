@@ -4,15 +4,22 @@ import path from 'node:path'
 import os from 'node:os'
 import * as pty from 'node-pty'
 import { startHookSystem, type HookSystem } from './hooks'
+import { createContextTail, type ContextTail } from './context-tail'
 
 // dev 下 app 名默认是 "Electron"，userData 会指向共享目录 → 显式隔离
 app.setPath('userData', path.join(app.getPath('appData'), 'termboard'))
 
 const ptys = new Map<string, pty.IPty>()
 let hookSystem: HookSystem | null = null
+let contextTail: ContextTail | null = null
 let mainWin: BrowserWindow | null = null
 
+function sendToWin(channel: string, data: unknown): void {
+  if (mainWin && !mainWin.isDestroyed()) mainWin.webContents.send(channel, data)
+}
+
 function killPty(id: string): void {
+  contextTail?.untrack(id)
   const p = ptys.get(id)
   if (!p) return
   ptys.delete(id)
@@ -131,18 +138,33 @@ app.whenReady().then(async () => {
   nativeTheme.themeSource = 'dark'
 
   // hook 系统先于窗口（pty spawn 需要 endpoint 路径）；失败不阻塞启动
+  contextTail = createContextTail((u) => sendToWin('agent:context', u))
   try {
-    hookSystem = await startHookSystem((e) => {
-      if (mainWin && !mainWin.isDestroyed()) {
-        mainWin.webContents.send('agent:status', e)
-      }
-    })
+    hookSystem = await startHookSystem(
+      (e) => sendToWin('agent:status', e),
+      (nodeId, tp) => contextTail?.track(nodeId, tp)
+    )
   } catch (err) {
     console.error('hook system failed to start:', err)
   }
 
+  // 额度 HUD：读官方真值文件（statusline 同源），60s 轮询
+  const quotaFile = path.join(os.homedir(), '.claude', 'claude-usage.json')
+  const pushQuota = async (): Promise<void> => {
+    try {
+      const q = JSON.parse(await readFile(quotaFile, 'utf8'))
+      sendToWin('quota:update', q)
+    } catch {
+      // 文件缺失/损坏时 HUD 不显示
+    }
+  }
+  const quotaTimer = setInterval(() => void pushQuota(), 60_000)
+  app.on('before-quit', () => clearInterval(quotaTimer))
+
   const win = createWindow()
   mainWin = win
+  // 渲染层就绪后立即推一次（reload 后也会重推）
+  win.webContents.on('did-finish-load', () => void pushQuota())
 
   // 自检模式：TERMBOARD_SHOT=/path/x.png 启动 → 6 秒后截图退出
   const shotPath = process.env['TERMBOARD_SHOT']

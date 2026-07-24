@@ -33,6 +33,29 @@ const api = {
     ): void => cb(ev)
     ipcRenderer.on('agent:status', listener)
     return () => ipcRenderer.removeListener('agent:status', listener)
+  },
+  onAgentContext: (
+    cb: (e: {
+      nodeId: string
+      usedTokens: number
+      windowTokens: number
+      usedPercent: number
+      model: string
+    }) => void
+  ): (() => void) => {
+    const listener = (_e: IpcRendererEvent, ev: Parameters<typeof cb>[0]): void => cb(ev)
+    ipcRenderer.on('agent:context', listener)
+    return () => ipcRenderer.removeListener('agent:context', listener)
+  },
+  onQuota: (
+    cb: (q: {
+      five_hour?: { used_percentage: number; resets_at: number }
+      seven_day?: { used_percentage: number; resets_at: number }
+    }) => void
+  ): (() => void) => {
+    const listener = (_e: IpcRendererEvent, q: Parameters<typeof cb>[0]): void => cb(q)
+    ipcRenderer.on('quota:update', listener)
+    return () => ipcRenderer.removeListener('quota:update', listener)
   }
 }
 

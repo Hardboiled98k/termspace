@@ -139,7 +139,8 @@ export interface HookSystem {
 }
 
 export async function startHookSystem(
-  onStatus: (e: AgentStatusEvent) => void
+  onStatus: (e: AgentStatusEvent) => void,
+  onTranscript?: (nodeId: string, transcriptPath: string) => void
 ): Promise<HookSystem> {
   const dir = app.getPath('userData')
   const hooksDir = path.join(dir, 'hooks')
@@ -186,6 +187,8 @@ export async function startHookSystem(
         } catch {
           // payload 解析失败不影响状态事件本身
         }
+        const tp = (payload as { transcript_path?: unknown } | null)?.transcript_path
+        if (typeof tp === 'string' && tp) onTranscript?.(nodeId, tp)
         const state = normalizeClaude(event, payload)
         if (state) {
           onStatus({ nodeId, agentId: 'claude', state, newTurn: event === 'UserPromptSubmit' })
