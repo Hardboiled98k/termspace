@@ -87,15 +87,88 @@ function QuotaRow({ label, pool }: { label: string; pool: QuotaPool }): React.JS
   )
 }
 
-function QuotaHUD(): React.JSX.Element | null {
+/* ── HUD：额度 + 画布概览（M4，用户想法 #1）── */
+interface NodeCtx {
+  pct: number
+  model: string
+}
+
+function shortModel(model: string): string {
+  return model.replace(/^claude-/, '').slice(0, 16)
+}
+
+function BoardHUD({
+  nodes,
+  ctxMap,
+  onFocus
+}: {
+  nodes: BoardNode[]
+  ctxMap: Record<string, NodeCtx>
+  onFocus: (id: string) => void
+}): React.JSX.Element | null {
   const [quota, setQuota] = useState<Quota | null>(null)
   useEffect(() => window.termboard.onQuota(setQuota), [])
-  if (!quota?.five_hour && !quota?.seven_day) return null
+
+  const terms = nodes.filter((n): n is TermNode => n.type === 'terminal')
+  const running = terms.filter((n) => n.data.status === 'running').length
+  const attention = terms.filter((n) => n.data.status === 'attention').length
+  // "agent 节点" = 有 provider / 有 context 数据 / 非空闲，最多列 6 行
+  const agentRows = terms
+    .filter((n) => n.data.provider || ctxMap[n.id] || n.data.status !== 'idle')
+    .sort((a, b) => {
+      const rank = (s: string): number => (s === 'attention' ? 0 : s === 'running' ? 1 : 2)
+      return rank(a.data.status) - rank(b.data.status)
+    })
+  const shown = agentRows.slice(0, 6)
+
+  const hasQuota = quota?.five_hour || quota?.seven_day
+  if (!hasQuota && agentRows.length === 0) return null
+
   return (
     <Panel position="top-right" className="quota-hud">
-      <span className="quota-title">Claude</span>
-      {quota.five_hour && <QuotaRow label="5h" pool={quota.five_hour} />}
-      {quota.seven_day && <QuotaRow label="周" pool={quota.seven_day} />}
+      {hasQuota && (
+        <>
+          <span className="quota-title">Claude</span>
+          {quota?.five_hour && <QuotaRow label="5h" pool={quota.five_hour} />}
+          {quota?.seven_day && <QuotaRow label="周" pool={quota.seven_day} />}
+        </>
+      )}
+      {agentRows.length > 0 && (
+        <>
+          <div className="hud-divider" />
+          <span className="quota-title">
+            画布 · {terms.length} 终端
+            {running > 0 && ` · ${running} 运行`}
+            {attention > 0 && ` · ${attention} 需要你`}
+          </span>
+          {shown.map((n) => {
+            const ctx = ctxMap[n.id]
+            return (
+              <button
+                key={n.id}
+                className="hud-node-row"
+                title="点击聚焦节点"
+                onClick={() => onFocus(n.id)}
+              >
+                <span className={`status-dot ${n.data.status}`} />
+                <span className="hud-node-title">{n.data.title}</span>
+                {ctx && (
+                  <>
+                    <span className="hud-node-model">{shortModel(ctx.model)}</span>
+                    <span className={`ctx-meter ${ctx.pct > 80 ? 'hot' : ctx.pct > 60 ? 'warm' : ''}`}>
+                      <span className="ctx-fill" style={{ width: `${ctx.pct}%` }} />
+                    </span>
+                    <span className="hud-node-pct">{ctx.pct}%</span>
+                  </>
+                )}
+              </button>
+            )
+          })}
+          {agentRows.length > shown.length && (
+            <span className="hud-more">还有 {agentRows.length - shown.length} 个…</span>
+          )}
+        </>
+      )}
     </Panel>
   )
 }
@@ -387,9 +460,26 @@ function Board(): React.JSX.Element {
   const [showIdentities, setShowIdentities] = useState(false)
   const [showPresetPanel, setShowPresetPanel] = useState(false)
   const [showAgentMenu, setShowAgentMenu] = useState(false)
+  const [ctxMap, setCtxMap] = useState<Record<string, NodeCtx>>({})
   const hadSaved = useRef(false)
   const viewportRef = useRef<Viewport | null>(null)
   const { setViewport, fitView } = useReactFlow()
+
+  // HUD 画布概览用：收集各节点 context 用量（事件只在变化时来，频率低）
+  useEffect(
+    () =>
+      window.termboard.onAgentContext((e) => {
+        setCtxMap((m) => ({ ...m, [e.nodeId]: { pct: e.usedPercent, model: e.model } }))
+      }),
+    []
+  )
+
+  const focusNode = useCallback(
+    (id: string) => {
+      void fitView({ nodes: [{ id }], duration: 300, maxZoom: 1 })
+    },
+    [fitView]
+  )
 
   useEffect(() => {
     void window.termboard.listIdentities().then(setIdentities)
@@ -614,7 +704,7 @@ function Board(): React.JSX.Element {
             }
             nodeStrokeWidth={3}
           />
-          <QuotaHUD />
+          <BoardHUD nodes={nodes} ctxMap={ctxMap} onFocus={focusNode} />
           <Panel position="top-left" className="toolbar">
             <span className="toolbar-title">TermBoard</span>
             <span className="toolbar-sep" />

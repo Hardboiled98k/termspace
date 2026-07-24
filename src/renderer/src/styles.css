@@ -298,6 +298,59 @@ body {
   text-align: right;
 }
 
+/* HUD 画布概览区 */
+.hud-divider {
+  height: 0.5px;
+  background: var(--tb-hairline);
+  margin: 2px 0;
+}
+.hud-node-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  margin: 0 -6px;
+  border: none;
+  border-radius: 7px;
+  background: none;
+  color: var(--tb-text);
+  font-family: var(--tb-font-ui);
+  cursor: pointer;
+  text-align: left;
+}
+.hud-node-row:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+.hud-node-row .ctx-meter {
+  margin-left: 0;
+  width: 34px;
+}
+.hud-node-title {
+  font-size: 11px;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 110px;
+}
+.hud-node-model {
+  font-size: 9px;
+  color: var(--tb-muted);
+  font-family: var(--tb-font-mono);
+}
+.hud-node-pct {
+  font-size: 10px;
+  color: var(--tb-muted);
+  font-variant-numeric: tabular-nums;
+  width: 28px;
+  text-align: right;
+}
+.hud-more {
+  font-size: 10px;
+  color: var(--tb-muted);
+  text-align: center;
+}
+
 .status-dot {
   width: 8px;
   height: 8px;
