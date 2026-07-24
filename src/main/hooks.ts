@@ -135,12 +135,52 @@ async function installClaudeHooks(scriptPath: string): Promise<void> {
 
 export interface HookSystem {
   endpointFile: string
+  binDir: string // 注入 PATH 的目录（内含 tb 命令）
   dispose: () => void
+}
+
+/** F8：tb 命令 —— agent 在终端里直接调，零常驻 token */
+function buildTbScript(): string {
+  return `#!/bin/sh
+# TermBoard 工具中枢客户端（自动生成）
+[ -n "$TERMBOARD_HOOK_ENDPOINT" ] && [ -f "$TERMBOARD_HOOK_ENDPOINT" ] && . "$TERMBOARD_HOOK_ENDPOINT"
+if [ -z "$TERMBOARD_HOOK_PORT" ]; then echo "tb: TermBoard 服务不可用（请在 TermBoard 终端内使用）" >&2; exit 1; fi
+BASE="http://127.0.0.1:$TERMBOARD_HOOK_PORT"
+H="X-Termboard-Token: $TERMBOARD_HOOK_TOKEN"
+cmd="$1"; shift 2>/dev/null
+case "$cmd" in
+  skills|search)
+    curl -s -H "$H" --get --data-urlencode "q=$*" "$BASE/tb/skills" ;;
+  load|skill)
+    curl -s -H "$H" --get --data-urlencode "name=$*" "$BASE/tb/load" ;;
+  agents|ls)
+    curl -s -H "$H" "$BASE/tb/agents" ;;
+  ""|help|-h|--help)
+    cat <<'EOF'
+tb — TermBoard 工具中枢
+
+  tb skills <关键词>    搜索可用 skill（返回名称 + 一行说明）
+  tb load <名称>        取出该 skill 全文，按其指示执行
+  tb agents             列出本画布上的其他 agent 终端
+
+用法：先 skills 找，再 load 取全文。不要凭记忆猜 skill 内容。
+EOF
+    ;;
+  *) echo "tb: 未知命令 '$cmd'（tb help 查看用法）" >&2; exit 2 ;;
+esac
+`
+}
+
+export interface TbHandlers {
+  skills: (q: string) => Promise<string>
+  load: (name: string) => Promise<string>
+  agents: () => Promise<string>
 }
 
 export async function startHookSystem(
   onStatus: (e: AgentStatusEvent) => void,
-  onTranscript?: (nodeId: string, transcriptPath: string) => void
+  onTranscript?: (nodeId: string, transcriptPath: string) => void,
+  tb?: TbHandlers
 ): Promise<HookSystem> {
   const dir = app.getPath('userData')
   const hooksDir = path.join(dir, 'hooks')
@@ -160,11 +200,36 @@ export async function startHookSystem(
       res.statusCode = 204
       res.end()
     }
-    if (req.method !== 'POST' || !req.url?.startsWith('/hook/')) return done()
-    req.setTimeout(2000, () => req.destroy())
-
+    req.setTimeout(5000, () => req.destroy())
     const given = Buffer.from(String(req.headers['x-termboard-token'] ?? ''))
     const authed = given.length === tokenBuf.length && timingSafeEqual(given, tokenBuf)
+
+    // ── tb 工具中枢路由（GET，纯文本返回，给 agent 直接读）──
+    if (req.url?.startsWith('/tb/')) {
+      if (!authed || !tb) {
+        res.statusCode = 403
+        return res.end('forbidden')
+      }
+      const u = new URL(req.url, 'http://127.0.0.1')
+      const reply = (text: string): void => {
+        res.statusCode = 200
+        res.setHeader('content-type', 'text/plain; charset=utf-8')
+        res.end(text)
+      }
+      const route = u.pathname.slice(4)
+      const run =
+        route === 'skills'
+          ? tb.skills(u.searchParams.get('q') ?? '')
+          : route === 'load'
+            ? tb.load(u.searchParams.get('name') ?? '')
+            : route === 'agents'
+              ? tb.agents()
+              : Promise.resolve('unknown route')
+      void run.then(reply).catch(() => reply('内部错误'))
+      return
+    }
+
+    if (req.method !== 'POST' || !req.url?.startsWith('/hook/')) return done()
 
     let size = 0
     const chunks: Buffer[] = []
@@ -200,6 +265,13 @@ export async function startHookSystem(
     })
   })
 
+  // tb 命令写进 bin 目录，spawn 时把它挂到 PATH 最前面
+  const binDir = path.join(dir, 'bin')
+  await mkdir(binDir, { recursive: true })
+  const tbPath = path.join(binDir, 'tb')
+  await writeAtomic(tbPath, buildTbScript())
+  await chmod(tbPath, 0o755)
+
   const endpointFile = path.join(dir, 'hook-endpoint.env')
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   const address = server.address()
@@ -209,6 +281,7 @@ export async function startHookSystem(
 
   return {
     endpointFile,
+    binDir,
     dispose: () => server.close()
   }
 }

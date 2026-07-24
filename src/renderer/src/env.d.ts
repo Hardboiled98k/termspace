@@ -40,6 +40,10 @@ interface TermboardApi {
   getSettings: () => Promise<AppSettings>
   setSettings: (patch: Partial<AppSettings>) => Promise<AppSettings>
   hooksStatus: () => Promise<{ installed: boolean; endpoint: string; settingsPath: string }>
+  listSkills: () => Promise<{ name: string; description: string; source: string }[]>
+  reportAgents: (
+    list: { id: string; title: string; provider?: string; status: string }[]
+  ) => void
   write: (id: string, data: string) => void
   resize: (id: string, cols: number, rows: number) => void
   kill: (id: string) => void

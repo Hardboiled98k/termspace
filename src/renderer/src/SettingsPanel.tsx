@@ -24,10 +24,12 @@ export function SettingsPanel({
   const [section, setSection] = useState<Section>(initial)
   const [s, setS] = useState<AppSettings | null>(null)
   const [hooks, setHooks] = useState<{ installed: boolean; settingsPath: string } | null>(null)
+  const [skills, setSkills] = useState<{ name: string; description: string }[]>([])
 
   useEffect(() => {
     void window.termboard.getSettings().then(setS)
     void window.termboard.hooksStatus().then(setHooks)
+    void window.termboard.listSkills().then(setSkills)
   }, [])
 
   const patch = (p: Partial<AppSettings>): void => {
@@ -71,11 +73,26 @@ export function SettingsPanel({
               <p className="settings-note">
                 单个终端可用 ⌥+滚轮 或右键菜单单独调整，不影响此默认值。
               </p>
-              <h3 className="settings-h">Skill 库（F8 工具中枢）</h3>
+              <h3 className="settings-h">工具中枢 · Skill 库（{skills.length}）</h3>
               <p className="settings-note">
-                将在这里管理供全部 agent 共用的 skill 目录，通过单个 MCP
-                渐进式披露，避免把规则塞满每个 agent 的上下文。当前版本尚未启用。
+                画布上每个终端都自带 <code>tb</code> 命令：agent 跑 <code>tb skills 关键词</code>{' '}
+                搜工具、<code>tb load 名称</code> 取全文、<code>tb agents</code> 看同伴。
+                常驻上下文里只有一句路由提示（约 60 token），工具全文按需拉取——
+                不用把 skill 规则塞满每个 agent。默认扫描 <code>~/.claude/skills</code>。
               </p>
+              <div className="skill-list">
+                {skills.slice(0, 40).map((sk) => (
+                  <div key={sk.name} className="skill-row">
+                    <span className="skill-name">{sk.name}</span>
+                    <span className="skill-desc">{sk.description}</span>
+                  </div>
+                ))}
+                {skills.length === 0 && (
+                  <div className="identity-empty">
+                    ~/.claude/skills 下没扫到 skill（需 &lt;skill&gt;/SKILL.md 结构）
+                  </div>
+                )}
+              </div>
             </>
           )}
 

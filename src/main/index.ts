@@ -15,6 +15,7 @@ import {
 import { listPresets, upsertPreset, deletePreset } from './preset-store'
 import { startWorkerWatch, workerAction, type WorkerWatch } from './worker-watch'
 import { getSettings, setSettings, type Settings } from './settings-store'
+import { searchSkills, loadSkill, listSkills } from './skill-index'
 import { ensureTmux, hasSession, killSession, buildSpawnArgs } from './tmux'
 
 // dev 下 app 名默认是 "Electron"，userData 会指向共享目录 → 显式隔离
@@ -25,6 +26,11 @@ let hookSystem: HookSystem | null = null
 let contextTail: ContextTail | null = null
 let workerWatch: WorkerWatch | null = null
 let mainWin: BrowserWindow | null = null
+/** 渲染层推来的画布 agent 摘要，供 tb agents / 派活用 */
+let boardAgents: { id: string; title: string; provider?: string; status: string }[] = []
+ipcMain.on('board:agents', (_e, list: typeof boardAgents) => {
+  boardAgents = Array.isArray(list) ? list : []
+})
 
 function sendToWin(channel: string, data: unknown): void {
   if (mainWin && !mainWin.isDestroyed()) mainWin.webContents.send(channel, data)
@@ -112,10 +118,13 @@ ipcMain.handle(
     // hook 门控：托管脚本只在带 NODE_ID 的终端里工作
     env['TERMBOARD_NODE_ID'] = id
     env['TERMBOARD_AGENT_ID'] = opts?.provider ?? 'claude'
-    if (hookSystem) env['TERMBOARD_HOOK_ENDPOINT'] = hookSystem.endpointFile
-    // F2 上下文：只注入「连到本终端」的简报（不同 agent 可以不同上下文）
-    const merged = await buildMergedContext(id, opts?.contextNodeIds ?? [])
-    if (merged) env['TERMBOARD_CONTEXT_FILE'] = merged
+    if (hookSystem) {
+      env['TERMBOARD_HOOK_ENDPOINT'] = hookSystem.endpointFile
+      // F8：tb 命令挂到 PATH 最前，agent 直接可用
+      env['PATH'] = `${hookSystem.binDir}:${env['PATH'] ?? ''}`
+    }
+    // F2 上下文 + F8 工具路由提示（合成一份文件，Claude 预设经 --append-system-prompt 注入）
+    env['TERMBOARD_CONTEXT_FILE'] = await buildMergedContext(id, opts?.contextNodeIds ?? [])
     // identity env 包注入（多账号/多 key，密文存储主进程解密）
     const idEnv = await resolveIdentityEnv(opts?.identityId)
     if (idEnv) Object.assign(env, idEnv)
@@ -192,6 +201,14 @@ ipcMain.handle(
 // ── 设置 IPC ──
 ipcMain.handle('settings:get', () => getSettings())
 ipcMain.handle('settings:set', (_e, patch: Partial<Settings>) => setSettings(patch))
+ipcMain.handle('skills:list', async () => {
+  const dirs = (await getSettings()).skillDirs
+  return (await listSkills(dirs)).map((s) => ({
+    name: s.name,
+    description: s.description,
+    source: s.source
+  }))
+})
 ipcMain.handle('hooks:status', () => ({
   installed: !!hookSystem,
   endpoint: hookSystem?.endpointFile ?? '',
@@ -254,10 +271,17 @@ ipcMain.handle('context:save', async (_e, nodeId: string, text: string) => {
   }
 })
 
+/* F8 L0 路由提示：常驻成本 ~60 token，只讲"何时去查"，不讲工具内容。
+   没有它模型不会主动去 tb 查，整个渐进式披露就白设计了。 */
+const TOOL_ROUTING_HINT = `## TermBoard 工具中枢
+本终端可用 \`tb\` 命令按需取用共享工具（不要凭记忆猜工具用法）：
+- 遇到需要专门方法的任务（设计/浏览器/出图/部署/数据/视频/文档等）先跑 \`tb skills <关键词>\`
+- 命中后用 \`tb load <名称>\` 取全文再照做
+- \`tb agents\` 可看本画布其他 agent 终端`
+
 /** 把连到该终端的所有简报节点合并成一个文件，返回路径（无连线则返回空串） */
 async function buildMergedContext(termId: string, ctxIds: string[]): Promise<string> {
-  if (!ctxIds.length) return ''
-  const parts: string[] = []
+  const parts: string[] = [TOOL_ROUTING_HINT]
   for (const cid of ctxIds) {
     try {
       const t = (await readFile(ctxFile(cid), 'utf8')).trim()
@@ -266,7 +290,6 @@ async function buildMergedContext(termId: string, ctxIds: string[]): Promise<str
       // 该简报还没存过内容
     }
   }
-  if (!parts.length) return ''
   await mkdir(ctxDir(), { recursive: true })
   const out = path.join(ctxDir(), `merged-${termId.replace(/[^a-zA-Z0-9_-]/g, '_')}.md`)
   await writeFile(out, parts.join('\n\n---\n\n'))
@@ -301,7 +324,27 @@ app.whenReady().then(async () => {
   try {
     hookSystem = await startHookSystem(
       (e) => sendToWin('agent:status', e),
-      (nodeId, tp) => contextTail?.track(nodeId, tp)
+      (nodeId, tp) => contextTail?.track(nodeId, tp),
+      {
+        // F8 工具中枢：agent 在终端里跑 tb 命令走这三个处理器
+        skills: async (q) => {
+          const dirs = (await getSettings()).skillDirs
+          const hits = await searchSkills(q, dirs)
+          if (!hits.length) return `没有匹配「${q}」的 skill。tb skills 不带参数可列出全部。`
+          return hits.map((s) => `${s.name}\n    ${s.description}`).join('\n')
+        },
+        load: async (name) => {
+          const dirs = (await getSettings()).skillDirs
+          const text = await loadSkill(name, dirs)
+          return text ?? `未找到 skill「${name}」，先用 tb skills <关键词> 查名字。`
+        },
+        agents: async () => {
+          if (!boardAgents.length) return '画布上暂无其他 agent 终端。'
+          return boardAgents
+            .map((a) => `${a.id}\t${a.title}\t${a.provider ?? 'shell'}\t${a.status}`)
+            .join('\n')
+        }
+      }
     )
   } catch (err) {
     console.error('hook system failed to start:', err)

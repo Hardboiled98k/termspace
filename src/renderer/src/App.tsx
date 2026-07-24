@@ -964,6 +964,20 @@ function Board(): React.JSX.Element {
     window.termboard.ready()
   }, [])
 
+  // 把画布 agent 摘要同步给主进程（tb agents / 派活要用）
+  useEffect(() => {
+    window.termboard.reportAgents(
+      nodes
+        .filter((n): n is TermNode => n.type === 'terminal')
+        .map((n) => ({
+          id: n.id,
+          title: n.data.title,
+          provider: n.data.provider,
+          status: n.data.status
+        }))
+    )
+  }, [nodes])
+
   // 右键菜单动作
   const menuNode = menu?.nodeId ? nodes.find((n) => n.id === menu.nodeId) : undefined
   const bumpFont = useCallback(

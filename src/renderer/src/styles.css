@@ -974,6 +974,39 @@ body {
   flex-direction: column;
   gap: 12px;
 }
+.skill-list {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.skill-row {
+  display: flex;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+}
+.skill-row:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+.skill-name {
+  font-family: var(--tb-font-mono);
+  color: var(--tb-blue);
+  flex-shrink: 0;
+  width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.skill-desc {
+  color: var(--tb-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .identity-overlay {
   position: fixed;

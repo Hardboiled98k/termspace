@@ -17,6 +17,10 @@ const api = {
   getSettings: (): Promise<unknown> => ipcRenderer.invoke('settings:get'),
   setSettings: (patch: unknown): Promise<unknown> => ipcRenderer.invoke('settings:set', patch),
   hooksStatus: (): Promise<unknown> => ipcRenderer.invoke('hooks:status'),
+  listSkills: (): Promise<unknown> => ipcRenderer.invoke('skills:list'),
+  reportAgents: (list: unknown): void => {
+    ipcRenderer.send('board:agents', list)
+  },
   write: (id: string, data: string): void => {
     ipcRenderer.send('pty:write', id, data)
   },
