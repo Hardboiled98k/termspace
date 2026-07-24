@@ -24,6 +24,7 @@ export type TermNode = Node<
     command?: string // agent 预设启动命令
     provider?: string
     fontSize?: number
+    cwd?: string
   },
   'terminal'
 >
@@ -133,7 +134,8 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
       identityId: data.identityId,
       command: data.command,
       provider: data.provider,
-      contextNodeIds: ctxIds ? ctxIds.split(',') : []
+      contextNodeIds: ctxIds ? ctxIds.split(',') : [],
+      cwd: data.cwd
     })
     const inputSub = term.onData((d) => window.termboard.write(id, d))
 
@@ -162,7 +164,7 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
     // identityId/command 变更 = 重生成会话（cleanup kill → respawn）
     // ctxIds 变更也重生成：上下文是启动时注入的
     // fontSize 故意不在依赖里：改字号只重排，不重开会话
-  }, [id, data.identityId, data.command, ctxIds])
+  }, [id, data.identityId, data.command, data.cwd, ctxIds])
 
   // 字号变更：改渲染 + refit + 通知 pty 新 cols/rows（会话不动）
   useEffect(() => {

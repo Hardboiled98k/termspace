@@ -25,8 +25,10 @@ interface TermboardApi {
       command?: string
       provider?: string
       contextNodeIds?: string[]
+      cwd?: string
     }
   ) => Promise<void>
+  pickFolder: () => Promise<string | null>
   write: (id: string, data: string) => void
   resize: (id: string, cols: number, rows: number) => void
   kill: (id: string) => void

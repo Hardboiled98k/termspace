@@ -1,5 +1,6 @@
-import { app, BrowserWindow, ipcMain, nativeTheme } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme } from 'electron'
 import { readFile, writeFile, rename, mkdir } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import * as pty from 'node-pty'
@@ -84,6 +85,7 @@ interface SpawnOpts {
   command?: string // agent 预设启动命令，spawn 后写入 shell
   provider?: string
   contextNodeIds?: string[] // 画布上连到本终端的简报节点
+  cwd?: string // 工作目录（来自项目标签页）
 }
 
 ipcMain.handle(
@@ -114,12 +116,13 @@ ipcMain.handle(
   const tmux = await ensureTmux()
   // fresh 判定：无可接会话 = 冷启动，才写入预设启动命令（重接不能重复敲）
   const fresh = tmux ? !(await hasSession(id)) : true
-  const { file, args } = buildSpawnArgs(tmux, id, shell, os.homedir(), env)
+  const cwd = opts?.cwd && existsSync(opts.cwd) ? opts.cwd : os.homedir()
+  const { file, args } = buildSpawnArgs(tmux, id, shell, cwd, env)
   const p = pty.spawn(file, args, {
     name: 'xterm-256color',
     cols: cols > 0 ? cols : 80,
     rows: rows > 0 ? rows : 24,
-    cwd: os.homedir(),
+    cwd,
     env
   })
   ptys.set(id, p)
@@ -178,6 +181,15 @@ ipcMain.handle(
     return r
   }
 )
+
+// ── 选择项目文件夹 ──
+ipcMain.handle('dialog:pickFolder', async () => {
+  const r = await dialog.showOpenDialog({
+    properties: ['openDirectory', 'createDirectory'],
+    title: '选择项目文件夹'
+  })
+  return r.canceled ? null : r.filePaths[0]
+})
 
 // ── Agent 预设 IPC ──
 ipcMain.handle('preset:list', () => listPresets())

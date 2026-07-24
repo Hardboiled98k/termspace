@@ -10,8 +10,10 @@ const api = {
       command?: string
       provider?: string
       contextNodeIds?: string[]
+      cwd?: string
     }
   ): Promise<void> => ipcRenderer.invoke('pty:spawn', id, cols, rows, opts),
+  pickFolder: (): Promise<string | null> => ipcRenderer.invoke('dialog:pickFolder'),
   write: (id: string, data: string): void => {
     ipcRenderer.send('pty:write', id, data)
   },

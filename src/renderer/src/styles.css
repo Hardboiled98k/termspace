@@ -579,6 +579,85 @@ body {
   color: var(--tb-muted);
 }
 
+/* ── 顶部：项目标签页 + 工具栏 ───────────────────────── */
+.board-top {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 34px; /* 让开 traffic lights */
+}
+.project-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  background: var(--tb-panel-glass);
+  backdrop-filter: blur(24px) saturate(180%);
+  border: 0.5px solid var(--tb-hairline);
+  border-radius: 11px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  max-width: 62vw;
+  overflow-x: auto;
+  width: fit-content;
+}
+.project-tabs::-webkit-scrollbar {
+  display: none;
+}
+.project-tab {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 5px 11px;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  color: var(--tb-muted);
+  font-family: var(--tb-font-ui);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background 0.16s ease,
+    color 0.16s ease;
+}
+.project-tab:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--tb-text);
+}
+.project-tab.active {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--tb-text);
+}
+.project-tab.active .project-tab-name {
+  font-weight: 600;
+}
+.project-tab-cwd {
+  font-size: 9.5px;
+  opacity: 0.55;
+  font-family: var(--tb-font-mono);
+  max-width: 130px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.project-tab-close {
+  font-size: 9px;
+  opacity: 0;
+  padding: 0 2px;
+  transition: opacity 0.15s ease;
+}
+.project-tab:hover .project-tab-close {
+  opacity: 0.6;
+}
+.project-tab-close:hover {
+  opacity: 1;
+  color: var(--tb-red);
+}
+.project-tab.add {
+  color: var(--tb-muted);
+  font-size: 13px;
+  padding: 5px 9px;
+}
+
 /* ── 工具栏 · 悬浮玻璃胶囊 ───────────────────────────── */
 .toolbar {
   display: flex;
@@ -590,7 +669,7 @@ body {
   border: 0.5px solid var(--tb-hairline);
   border-radius: var(--tb-radius-pill);
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
-  margin-top: 34px; /* 让开 traffic lights */
+  width: fit-content;
 }
 .toolbar-title {
   font-size: 13px;

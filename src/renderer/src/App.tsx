@@ -64,6 +64,7 @@ interface SavedNode {
   command?: string
   provider?: string
   fontSize?: number
+  cwd?: string
 }
 interface SavedEdge {
   id: string
@@ -71,10 +72,29 @@ interface SavedEdge {
   target: string
   kind: 'context' | 'delegate'
 }
-interface Workspace {
+/* 项目 = 一张画布 + 一个工作目录（新终端继承它） */
+interface Project {
+  id: string
+  name: string
+  cwd: string
+}
+interface SavedBoard {
   nodes: SavedNode[]
   edges?: SavedEdge[]
   viewport?: Viewport
+}
+interface Workspace extends SavedBoard {
+  // v2
+  projects?: Project[]
+  activeProjectId?: string
+  boards?: Record<string, SavedBoard>
+}
+
+const HOME_LABEL = '默认'
+
+function shortPath(p: string): string {
+  const home = p.match(/^\/Users\/[^/]+/)?.[0]
+  return home ? p.replace(home, '~') : p
 }
 
 /* 连线语义：简报→终端 = 注入上下文；终端→终端 = 派活通道（M5-p3 接 MCP） */
@@ -509,7 +529,8 @@ function fromSaved(s: SavedNode): BoardNode {
       identityId: s.identityId,
       command: s.command,
       provider: s.provider,
-      fontSize: s.fontSize
+      fontSize: s.fontSize,
+      cwd: s.cwd
     }
   }
 }
@@ -531,17 +552,25 @@ function toSaved(n: Exclude<BoardNode, WorkerNodeT>): SavedNode {
     identityId: n.data.identityId,
     command: n.data.command,
     provider: n.data.provider,
-    fontSize: n.data.fontSize
+    fontSize: n.data.fontSize,
+    cwd: n.data.cwd
   }
 }
 
-function nextId(nodes: BoardNode[], prefix: string): string {
-  const max = nodes.reduce((m, n) => {
-    if (!n.id.startsWith(prefix)) return m
-    const num = parseInt(n.id.slice(prefix.length), 10)
+function nextIdFrom(ids: string[], prefix: string): string {
+  const max = ids.reduce((m, i) => {
+    if (!i.startsWith(prefix)) return m
+    const num = parseInt(i.slice(prefix.length), 10)
     return Number.isFinite(num) && num > m ? num : m
   }, 0)
   return `${prefix}${max + 1}`
+}
+
+function nextId(nodes: BoardNode[], prefix: string): string {
+  return nextIdFrom(
+    nodes.map((n) => n.id),
+    prefix
+  )
 }
 
 function Board(): React.JSX.Element {
@@ -559,6 +588,10 @@ function Board(): React.JSX.Element {
   const [mapActive, setMapActive] = useState(false)
   const mapTimer = useRef(0)
   const [ctxMap, setCtxMap] = useState<Record<string, NodeCtx>>({})
+  const [projects, setProjects] = useState<Project[]>([])
+  const [activeProject, setActiveProject] = useState('')
+  // 非活跃项目的画布（终端不销毁 pty，tmux 会话续存，切回来自动 attach）
+  const boardsRef = useRef<Record<string, SavedBoard>>({})
   const hadSaved = useRef(false)
   const viewportRef = useRef<Viewport | null>(null)
   const { setViewport, fitView } = useReactFlow()
@@ -626,54 +659,129 @@ function Board(): React.JSX.Element {
     void window.termboard.listPresets().then(setPresets)
   }, [])
 
-  // 启动恢复：有存档用存档，没有播种默认节点
-  useEffect(() => {
-    void window.termboard.loadWorkspace().then((raw) => {
-      const ws = raw as Workspace | null
-      if (ws?.nodes?.length) {
-        hadSaved.current = true
-        setNodes(ws.nodes.map(fromSaved))
-        setEdges(
-          (ws.edges ?? []).map((e) => ({
-            id: e.id,
-            source: e.source,
-            target: e.target,
-            ...edgeStyle(e.kind)
-          }))
-        )
-        if (ws.viewport) {
-          viewportRef.current = ws.viewport
-          void setViewport(ws.viewport)
-        }
-      } else {
-        setNodes(seedNodes())
-        // 节点 set 是异步渲染，等一帧再 fitView（prop 版在空画布时已错过时机）
-        setTimeout(() => void fitView({ padding: 0.25, maxZoom: 1 }), 60)
-      }
-      setLoaded(true)
-    })
-  }, [setViewport, fitView])
-
-  // 防抖落盘：布局/标题/视口变化 500ms 后写 JSON
-  useEffect(() => {
-    if (!loaded) return
-    const t = setTimeout(() => {
-      void window.termboard.saveWorkspace({
-        // worker 卡片是运行时投影（cdx 状态），不持久化
-        nodes: nodes
-          .filter((n): n is Exclude<BoardNode, WorkerNodeT> => n.type !== 'worker')
-          .map(toSaved),
-        edges: edges.map((e) => ({
+  const applyBoard = useCallback(
+    (b: SavedBoard | undefined) => {
+      setNodes((b?.nodes ?? []).map(fromSaved))
+      setEdges(
+        (b?.edges ?? []).map((e) => ({
           id: e.id,
           source: e.source,
           target: e.target,
-          kind: (e.data?.kind as 'context' | 'delegate') ?? 'delegate'
-        })),
-        viewport: viewportRef.current ?? undefined
+          ...edgeStyle(e.kind)
+        }))
+      )
+      viewportRef.current = b?.viewport ?? null
+      if (b?.viewport) void setViewport(b.viewport)
+      else setTimeout(() => void fitView({ padding: 0.25, maxZoom: 1 }), 60)
+    },
+    [setViewport, fitView]
+  )
+
+  // 启动恢复（含 v1 单画布 → v2 多项目迁移）
+  useEffect(() => {
+    void window.termboard.loadWorkspace().then((raw) => {
+      const ws = raw as Workspace | null
+      let projs = ws?.projects
+      let boards = ws?.boards
+      let active = ws?.activeProjectId
+
+      if (!projs?.length) {
+        // v1 迁移：老画布收编成「默认」项目
+        const def: Project = { id: 'p1', name: HOME_LABEL, cwd: '' }
+        projs = [def]
+        boards = {
+          p1: {
+            nodes:
+              ws?.nodes ??
+              seedNodes()
+                .filter((n): n is Exclude<BoardNode, WorkerNodeT> => n.type !== 'worker')
+                .map(toSaved),
+            edges: ws?.edges,
+            viewport: ws?.viewport
+          }
+        }
+        active = 'p1'
+      }
+      hadSaved.current = true
+      boardsRef.current = boards ?? {}
+      setProjects(projs)
+      const act = active && projs.some((p) => p.id === active) ? active : projs[0].id
+      setActiveProject(act)
+      applyBoard(boardsRef.current[act])
+      setLoaded(true)
+    })
+  }, [applyBoard])
+
+  // 当前画布快照（worker 卡片是运行时投影，不持久化）
+  const snapshot = useCallback(
+    (): SavedBoard => ({
+      nodes: nodes
+        .filter((n): n is Exclude<BoardNode, WorkerNodeT> => n.type !== 'worker')
+        .map(toSaved),
+      edges: edges.map((e) => ({
+        id: e.id,
+        source: e.source,
+        target: e.target,
+        kind: (e.data?.kind as 'context' | 'delegate') ?? 'delegate'
+      })),
+      viewport: viewportRef.current ?? undefined
+    }),
+    [nodes, edges]
+  )
+
+  // 防抖落盘：当前画布写回所属项目，整个工作区一起存
+  useEffect(() => {
+    if (!loaded || !activeProject) return
+    const t = setTimeout(() => {
+      boardsRef.current[activeProject] = snapshot()
+      void window.termboard.saveWorkspace({
+        projects,
+        activeProjectId: activeProject,
+        boards: boardsRef.current
       })
     }, 500)
     return () => clearTimeout(t)
-  }, [nodes, edges, saveTick, loaded])
+  }, [saveTick, loaded, activeProject, projects, snapshot])
+
+  const switchProject = useCallback(
+    (pid: string) => {
+      if (pid === activeProject) return
+      boardsRef.current[activeProject] = snapshot()
+      setActiveProject(pid)
+      applyBoard(boardsRef.current[pid])
+    },
+    [activeProject, snapshot, applyBoard]
+  )
+
+  const addProject = useCallback(async () => {
+    const dir = await window.termboard.pickFolder()
+    if (!dir) return
+    const pid = `p${Date.now().toString(36)}`
+    boardsRef.current[activeProject] = snapshot()
+    boardsRef.current[pid] = { nodes: [], edges: [] }
+    setProjects((ps) => [...ps, { id: pid, name: dir.split('/').pop() || '项目', cwd: dir }])
+    setActiveProject(pid)
+    applyBoard(boardsRef.current[pid])
+  }, [activeProject, snapshot, applyBoard])
+
+  const closeProject = useCallback(
+    (pid: string) => {
+      // 只从标签栏移除；画布记录保留（tmux 会话也还活着），重新添加同目录即恢复
+      setProjects((ps) => {
+        if (ps.length <= 1) return ps
+        const rest = ps.filter((p) => p.id !== pid)
+        if (pid === activeProject) {
+          const next = rest[0].id
+          setActiveProject(next)
+          applyBoard(boardsRef.current[next])
+        }
+        return rest
+      })
+    },
+    [activeProject, applyBoard]
+  )
+
+  const projectCwd = projects.find((p) => p.id === activeProject)?.cwd || undefined
 
   const onEdgesChange = useCallback(
     (changes: EdgeChange[]) => setEdges((es) => applyEdgeChanges(changes, es)),
@@ -765,7 +873,12 @@ function Board(): React.JSX.Element {
     (preset?: Preset) => {
       setShowAgentMenu(false)
       setNodes((ns) => {
-        const id = nextId(ns, 't')
+        // id 必须全工作区唯一：它就是 tmux 会话名，跨项目撞名会串会话
+        const allIds = [
+          ...ns.map((n) => n.id),
+          ...Object.values(boardsRef.current).flatMap((b) => b.nodes.map((n) => n.id))
+        ]
+        const id = nextIdFrom(allIds, 't')
         const n = ns.length
         return [
           ...ns,
@@ -779,13 +892,14 @@ function Board(): React.JSX.Element {
               status: 'idle' as const,
               identityId: preset?.identityId || defaultIdentity || undefined,
               command: preset?.command || undefined,
-              provider: preset?.provider
+              provider: preset?.provider,
+              cwd: projectCwd // 新终端落在当前项目目录
             }
           }
         ]
       })
     },
-    [defaultIdentity]
+    [defaultIdentity, projectCwd]
   )
 
   // F2: 共享上下文 Hub — 无则建（一块板一个），有则聚焦
@@ -975,9 +1089,35 @@ function Board(): React.JSX.Element {
             nodeStrokeWidth={3}
           />
           <BoardHUD nodes={nodes} ctxMap={ctxMap} onFocus={focusNode} />
-          <Panel position="top-left" className="toolbar">
-            <span className="toolbar-title">TermBoard</span>
-            <span className="toolbar-sep" />
+          <Panel position="top-left" className="board-top">
+            <div className="project-tabs">
+              {projects.map((p) => (
+                <button
+                  key={p.id}
+                  className={`project-tab${p.id === activeProject ? ' active' : ''}`}
+                  title={p.cwd ? shortPath(p.cwd) : '未指定目录（终端在 ~ 启动）'}
+                  onClick={() => switchProject(p.id)}
+                >
+                  <span className="project-tab-name">{p.name}</span>
+                  {p.cwd && <span className="project-tab-cwd">{shortPath(p.cwd)}</span>}
+                  {projects.length > 1 && (
+                    <span
+                      className="project-tab-close"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        closeProject(p.id)
+                      }}
+                    >
+                      ✕
+                    </span>
+                  )}
+                </button>
+              ))}
+              <button className="project-tab add" title="打开项目文件夹" onClick={addProject}>
+                ＋
+              </button>
+            </div>
+            <div className="toolbar">
             <button className="toolbar-btn" title="新建终端" onClick={() => addTerminal()}>
               <IconTerminal />
               <span>终端</span>
@@ -1059,6 +1199,7 @@ function Board(): React.JSX.Element {
               <IconSettings />
             </button>
             <span className="toolbar-count">{nodes.length}</span>
+            </div>
           </Panel>
           {menu && (
             <div
