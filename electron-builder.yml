@@ -9,6 +9,7 @@ files:
 # node-pty 是原生模块，需按 Electron ABI 打进包
 asarUnpack:
   - '**/node_modules/node-pty/**'
+publish: null # 不发布/不做 auto-update（避免 channel 计算报错）
 mac:
   category: public.app-category.developer-tools
   target:

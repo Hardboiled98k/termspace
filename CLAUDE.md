@@ -27,7 +27,9 @@ src/
 npm run dev        # 开发模式
 npm run typecheck  # tsc --noEmit
 npm run rebuild    # node-pty 重编译（换 Electron 版本后必跑）
+npm run dist       # 打包未签名 arm64 dmg → dist/TermBoard-*.dmg（118MB）
 TERMBOARD_SHOT=/tmp/shot.png npm run dev  # 自检：6 秒后截图退出
+TERMBOARD_PANEL=terminal npm run dev      # 自检：直接展开设置面板某分区
 ```
 
 ## 关键决策 / 坑
