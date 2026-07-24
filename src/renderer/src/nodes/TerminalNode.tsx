@@ -167,9 +167,11 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
             className="identity-select nodrag"
             value={data.identityId ?? ''}
             title="切换凭证会重开会话"
-            onChange={(e) =>
+            onChange={(e) => {
+              // 换身份 = 新 env → 必须真杀旧会话（否则 tmux -A 会接回旧 env 的会话）
+              window.termboard.destroy(id)
               updateNodeData(id, { identityId: e.currentTarget.value || undefined })
-            }
+            }}
           >
             <option value="">默认身份</option>
             {identities.map((i) => (
@@ -193,7 +195,8 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
           title="关闭终端（结束会话）"
           onClick={(e) => {
             e.stopPropagation()
-            void deleteElements({ nodes: [{ id }] }) // unmount cleanup 会 kill pty
+            window.termboard.destroy(id) // 真杀 tmux 会话（unmount cleanup 只释放客户端）
+            void deleteElements({ nodes: [{ id }] })
           }}
         >
           ✕

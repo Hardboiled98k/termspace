@@ -16,6 +16,9 @@ const api = {
   kill: (id: string): void => {
     ipcRenderer.send('pty:kill', id)
   },
+  destroy: (id: string): void => {
+    ipcRenderer.send('pty:destroy', id)
+  },
   onData: (id: string, cb: (data: string) => void): (() => void) => {
     const listener = (_e: IpcRendererEvent, data: string): void => cb(data)
     ipcRenderer.on(`pty:data:${id}`, listener)

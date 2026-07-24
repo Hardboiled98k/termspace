@@ -13,6 +13,7 @@ import {
 } from './identity-store'
 import { listPresets, upsertPreset, deletePreset } from './preset-store'
 import { startWorkerWatch, workerAction, type WorkerWatch } from './worker-watch'
+import { ensureTmux, hasSession, killSession, buildSpawnArgs } from './tmux'
 
 // dev 下 app 名默认是 "Electron"，userData 会指向共享目录 → 显式隔离
 app.setPath('userData', path.join(app.getPath('appData'), 'termboard'))
@@ -27,8 +28,8 @@ function sendToWin(channel: string, data: unknown): void {
   if (mainWin && !mainWin.isDestroyed()) mainWin.webContents.send(channel, data)
 }
 
-function killPty(id: string): void {
-  contextTail?.untrack(id)
+/** 只杀客户端，tmux 会话存活（reload / app 退出 / 重挂载）— 续存的关键 */
+function releasePty(id: string): void {
   const p = ptys.get(id)
   if (!p) return
   ptys.delete(id)
@@ -37,6 +38,13 @@ function killPty(id: string): void {
   } catch {
     // 进程可能已退出
   }
+}
+
+/** 真结束：kill-session + 客户端（节点 ✕ / 换身份重生成）*/
+function destroyPty(id: string): void {
+  contextTail?.untrack(id)
+  void killSession(id)
+  releasePty(id)
 }
 
 function createWindow(): BrowserWindow {
@@ -57,10 +65,10 @@ function createWindow(): BrowserWindow {
     }
   })
 
-  // reload 时 renderer effect cleanup 不执行，孤儿 pty 在导航提交时全量回收
+  // reload 时 renderer effect cleanup 不执行 → 释放客户端（tmux 会话存活，新页面 -A 接回）
   // （did-navigate 先于新页面 JS 执行，不会误杀新 spawn）
   win.webContents.on('did-navigate', () => {
-    for (const id of [...ptys.keys()]) killPty(id)
+    for (const id of [...ptys.keys()]) releasePty(id)
   })
 
   if (process.env['ELECTRON_RENDERER_URL']) {
@@ -80,12 +88,15 @@ interface SpawnOpts {
 ipcMain.handle(
   'pty:spawn',
   async (e, id: string, cols: number, rows: number, opts?: SpawnOpts) => {
-    killPty(id)
+    releasePty(id) // 只释放客户端；有 tmux 会话则下面 -A 接回
     const shell = process.env['SHELL'] || '/bin/zsh'
     const env: Record<string, string> = {}
     for (const [k, v] of Object.entries(process.env)) {
       if (v !== undefined) env[k] = v
     }
+    // 防嵌套：app 若从 tmux 里启动，tmux 会拒绝
+    delete env['TMUX']
+    delete env['TMUX_PANE']
     env['TERM'] = 'xterm-256color'
     env['COLORTERM'] = 'truecolor'
     // hook 门控：托管脚本只在带 NODE_ID 的终端里工作
@@ -96,7 +107,11 @@ ipcMain.handle(
     const idEnv = await resolveIdentityEnv(opts?.identityId)
     if (idEnv) Object.assign(env, idEnv)
 
-  const p = pty.spawn(shell, ['-l'], {
+  const tmux = await ensureTmux()
+  // fresh 判定：无可接会话 = 冷启动，才写入预设启动命令（重接不能重复敲）
+  const fresh = tmux ? !(await hasSession(id)) : true
+  const { file, args } = buildSpawnArgs(tmux, id, shell, os.homedir(), env)
+  const p = pty.spawn(file, args, {
     name: 'xterm-256color',
     cols: cols > 0 ? cols : 80,
     rows: rows > 0 ? rows : 24,
@@ -107,7 +122,7 @@ ipcMain.handle(
 
   // agent 预设：等 shell 就绪后写入启动命令（tty 缓冲会排队，200ms 只是保险）
   const cmd = opts?.command?.trim()
-  if (cmd) {
+  if (cmd && fresh) {
     setTimeout(() => {
       if (ptys.get(id) === p) p.write(`${cmd}\r`)
     }, 200)
@@ -140,7 +155,13 @@ ipcMain.on('pty:resize', (_e, id: string, cols: number, rows: number) => {
 })
 
 ipcMain.on('pty:kill', (_e, id: string) => {
-  killPty(id)
+  // effect cleanup（remount/HMR/reload 前奏）→ 释放客户端，会话续存
+  releasePty(id)
+})
+
+ipcMain.on('pty:destroy', (_e, id: string) => {
+  // 节点 ✕ / 换身份 → 真杀会话
+  destroyPty(id)
 })
 
 // ── Worker 操作 IPC（F7）──
@@ -247,7 +268,8 @@ app.whenReady().then(async () => {
 })
 
 app.on('window-all-closed', () => {
-  for (const id of [...ptys.keys()]) killPty(id)
+  // 只释放客户端 —— tmux 会话跨 app 重启存活（续存核心语义）
+  for (const id of [...ptys.keys()]) releasePty(id)
   hookSystem?.dispose()
   workerWatch?.dispose()
   contextTail?.dispose()
