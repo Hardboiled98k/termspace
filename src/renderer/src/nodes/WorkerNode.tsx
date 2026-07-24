@@ -1,5 +1,6 @@
 import { memo, useState } from 'react'
 import { useReactFlow, type Node, type NodeProps } from '@xyflow/react'
+import { FarChip, FAR_ZOOM, useZoom } from './FarChip'
 
 /* F7：detached worker 卡片（cdx 引擎，只显示不持久化） */
 export type WorkerNodeT = Node<
@@ -56,6 +57,8 @@ function extractResult(output: string): string {
 
 function WorkerNodeImpl({ id, data }: NodeProps<WorkerNodeT>): React.JSX.Element {
   const cls = stateClass(data.state)
+  const zoom = useZoom()
+  const far = zoom < FAR_ZOOM
   const { deleteElements } = useReactFlow()
   const [reply, setReply] = useState('')
   const [resultText, setResultText] = useState('')
@@ -70,6 +73,21 @@ function WorkerNodeImpl({ id, data }: NodeProps<WorkerNodeT>): React.JSX.Element
     } finally {
       setBusy(false)
     }
+  }
+
+  if (far) {
+    return (
+      <div className={`worker-node status-${cls} far far-${cls}`}>
+        <FarChip
+          zoom={zoom}
+          dotClass={cls}
+          title={data.task}
+          state={STATE_LABEL[data.state] ?? data.state}
+          stateClass={cls}
+          extra={data.backend}
+        />
+      </div>
+    )
   }
 
   return (

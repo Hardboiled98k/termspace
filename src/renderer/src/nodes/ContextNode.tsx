@@ -1,5 +1,6 @@
 import { memo, useEffect, useRef, useState } from 'react'
 import { NodeResizer, useReactFlow, type Node, type NodeProps } from '@xyflow/react'
+import { FarChip, FAR_ZOOM, useZoom } from './FarChip'
 
 /* F2：共享上下文 Hub — 编辑单一事实源文件（userData/board-context.md）
    注入路径：所有终端 env TERMBOARD_CONTEXT_FILE；
@@ -8,6 +9,7 @@ export type ContextNodeT = Node<{ title: string }, 'context'>
 
 function ContextNodeImpl({ id, selected }: NodeProps<ContextNodeT>): React.JSX.Element {
   const { deleteElements } = useReactFlow()
+  const zoom = useZoom()
   const [text, setText] = useState('')
   const [loaded, setLoaded] = useState(false)
   const [dirty, setDirty] = useState(false)
@@ -27,6 +29,19 @@ function ContextNodeImpl({ id, selected }: NodeProps<ContextNodeT>): React.JSX.E
     timer.current = window.setTimeout(() => {
       void window.termboard.saveContext(v).then(() => setDirty(false))
     }, 800)
+  }
+
+  if (zoom < FAR_ZOOM) {
+    return (
+      <div className="context-node far far-context">
+        <FarChip
+          zoom={zoom}
+          dotClass="context"
+          title="共享上下文"
+          state={text.trim() ? `${text.trim().length} 字` : '空'}
+        />
+      </div>
+    )
   }
 
   return (

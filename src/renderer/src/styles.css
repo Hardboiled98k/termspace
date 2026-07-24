@@ -475,6 +475,99 @@ body {
   height: 100%;
 }
 
+/* ── 极远缩放：节点退化成状态色块 + 恒定尺寸标签 ─────── */
+.term-node.far,
+.worker-node.far,
+.context-node.far {
+  border-width: 0;
+  box-shadow: none;
+  background: #4a4a4f; /* 空闲块也要在近黑画布上看得见 */
+  height: 100%;
+  padding: 0;
+  gap: 0;
+}
+.worker-node.far > *:not(.term-node-far),
+.context-node.far > *:not(.term-node-far) {
+  display: none;
+}
+.context-node.far {
+  background: rgba(191, 90, 242, 0.85);
+}
+.worker-node.far-running,
+.term-node.far-running {
+  background: rgba(10, 132, 255, 0.9);
+}
+.worker-node.far-attention,
+.term-node.far-attention {
+  background: rgba(255, 159, 10, 0.92);
+  animation: far-pulse 1.6s ease-in-out infinite;
+}
+.worker-node.far-error {
+  background: rgba(255, 69, 58, 0.85);
+}
+.status-dot.context {
+  background: #bf5af2;
+  box-shadow: 0 0 6px rgba(191, 90, 242, 0.7);
+}
+.term-node.far::before,
+.term-node.far::after {
+  display: none;
+}
+.term-node.far .term-node-header,
+.term-node.far .term-node-body {
+  display: none;
+}
+@keyframes far-pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+.term-node-far {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  overflow: visible;
+}
+.term-node-far-chip {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform-origin: center center;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  white-space: nowrap;
+  background: rgba(28, 28, 30, 0.92);
+  border: 0.5px solid var(--tb-hairline-strong);
+  border-radius: 980px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+}
+.term-node-far-title {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--tb-text);
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.term-node-far-state {
+  font-size: 9px;
+  color: var(--tb-muted);
+}
+.term-node-far-state.running {
+  color: var(--tb-blue);
+}
+.term-node-far-state.attention {
+  color: var(--tb-orange);
+}
+.term-node-far-ctx {
+  font-size: 9px;
+  color: var(--tb-muted);
+  font-variant-numeric: tabular-nums;
+}
+
 /* LOD 占位（缩小视图） */
 .term-node-lod {
   position: absolute;

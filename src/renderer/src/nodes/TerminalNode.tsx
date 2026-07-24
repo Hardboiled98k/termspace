@@ -1,5 +1,6 @@
 import { memo, useContext, useEffect, useRef, useState } from 'react'
 import { IdentityContext } from '../identity-context'
+import { FarChip, FAR_ZOOM } from './FarChip'
 import {
   NodeResizer,
   useReactFlow,
@@ -67,7 +68,9 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
   const holderRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
-  const lod = useStore((s) => s.transform[2] < LOD_ZOOM)
+  const zoom = useStore((s) => s.transform[2])
+  const lod = zoom < LOD_ZOOM
+  const far = zoom < FAR_ZOOM
   const { deleteElements, updateNodeData } = useReactFlow()
   const identities = useContext(IdentityContext)
   const [editing, setEditing] = useState(false)
@@ -164,7 +167,11 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
   }
 
   return (
-    <div className={`term-node status-${data.status}${selected ? ' selected' : ''}`}>
+    <div
+      className={`term-node status-${data.status}${selected ? ' selected' : ''}${
+        far ? ` far far-${data.status}` : ''
+      }`}
+    >
       <NodeResizer minWidth={360} minHeight={220} isVisible={selected} />
       <div className="term-node-header">
         <span className={`status-dot ${data.status}`} />
@@ -251,11 +258,21 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
           if (!e.ctrlKey) e.stopPropagation()
         }}
       />
-      {lod && (
+      {lod && !far && (
         <div className="term-node-lod">
           <span className={`status-dot big ${data.status}`} />
           <span className="term-node-lod-title">{data.title}</span>
         </div>
+      )}
+      {far && (
+        <FarChip
+          zoom={zoom}
+          dotClass={data.status}
+          title={data.title}
+          state={STATUS_LABEL[data.status]}
+          stateClass={data.status}
+          extra={ctxPct !== null ? `${ctxPct}%` : undefined}
+        />
       )}
     </div>
   )
