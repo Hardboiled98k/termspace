@@ -14,7 +14,13 @@ import '@xterm/xterm/css/xterm.css'
 
 export type TermStatus = 'running' | 'idle' | 'attention'
 export type TermNode = Node<
-  { title: string; status: TermStatus; identityId?: string },
+  {
+    title: string
+    status: TermStatus
+    identityId?: string
+    command?: string // agent 预设启动命令
+    provider?: string
+  },
   'terminal'
 >
 
@@ -100,7 +106,11 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
     const offExit = window.termboard.onExit(id, (code) =>
       term.write(`\r\n\x1b[38;5;244m[进程已退出 code=${code}]\x1b[0m\r\n`)
     )
-    void window.termboard.spawn(id, term.cols, term.rows, data.identityId)
+    void window.termboard.spawn(id, term.cols, term.rows, {
+      identityId: data.identityId,
+      command: data.command,
+      provider: data.provider
+    })
     const inputSub = term.onData((d) => window.termboard.write(id, d))
 
     let raf = 0
@@ -123,8 +133,8 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
       window.termboard.kill(id)
       term.dispose()
     }
-    // identityId 变更 = 换凭证重生成会话（cleanup kill → respawn 注入新 env）
-  }, [id, data.identityId])
+    // identityId/command 变更 = 重生成会话（cleanup kill → respawn）
+  }, [id, data.identityId, data.command])
 
   return (
     <div className={`term-node status-${data.status}${selected ? ' selected' : ''}`}>

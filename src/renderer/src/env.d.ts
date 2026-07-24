@@ -7,8 +7,21 @@ interface IdentityMeta {
   envKeys: string[]
 }
 
+interface Preset {
+  id: string
+  name: string
+  provider: 'claude' | 'codex' | 'gemini' | 'custom'
+  command: string
+  identityId?: string
+}
+
 interface TermboardApi {
-  spawn: (id: string, cols: number, rows: number, identityId?: string) => Promise<void>
+  spawn: (
+    id: string,
+    cols: number,
+    rows: number,
+    opts?: { identityId?: string; command?: string; provider?: string }
+  ) => Promise<void>
   write: (id: string, data: string) => void
   resize: (id: string, cols: number, rows: number) => void
   kill: (id: string) => void
@@ -34,6 +47,9 @@ interface TermboardApi {
       seven_day?: { used_percentage: number; resets_at: number }
     }) => void
   ) => () => void
+  listPresets: () => Promise<Preset[]>
+  upsertPreset: (input: Omit<Preset, 'id'> & { id?: string }) => Promise<Preset[]>
+  deletePreset: (id: string) => Promise<Preset[]>
   listIdentities: () => Promise<IdentityMeta[]>
   upsertIdentity: (input: {
     id?: string

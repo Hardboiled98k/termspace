@@ -11,6 +11,7 @@ import {
   deleteIdentity,
   resolveIdentityEnv
 } from './identity-store'
+import { listPresets, upsertPreset, deletePreset } from './preset-store'
 
 // dev 下 app 名默认是 "Electron"，userData 会指向共享目录 → 显式隔离
 app.setPath('userData', path.join(app.getPath('appData'), 'termboard'))
@@ -68,9 +69,15 @@ function createWindow(): BrowserWindow {
   return win
 }
 
+interface SpawnOpts {
+  identityId?: string
+  command?: string // agent 预设启动命令，spawn 后写入 shell
+  provider?: string
+}
+
 ipcMain.handle(
   'pty:spawn',
-  async (e, id: string, cols: number, rows: number, identityId?: string) => {
+  async (e, id: string, cols: number, rows: number, opts?: SpawnOpts) => {
     killPty(id)
     const shell = process.env['SHELL'] || '/bin/zsh'
     const env: Record<string, string> = {}
@@ -81,9 +88,10 @@ ipcMain.handle(
     env['COLORTERM'] = 'truecolor'
     // hook 门控：托管脚本只在带 NODE_ID 的终端里工作
     env['TERMBOARD_NODE_ID'] = id
+    env['TERMBOARD_AGENT_ID'] = opts?.provider ?? 'claude'
     if (hookSystem) env['TERMBOARD_HOOK_ENDPOINT'] = hookSystem.endpointFile
     // identity env 包注入（多账号/多 key，密文存储主进程解密）
-    const idEnv = await resolveIdentityEnv(identityId)
+    const idEnv = await resolveIdentityEnv(opts?.identityId)
     if (idEnv) Object.assign(env, idEnv)
 
   const p = pty.spawn(shell, ['-l'], {
@@ -94,6 +102,14 @@ ipcMain.handle(
     env
   })
   ptys.set(id, p)
+
+  // agent 预设：等 shell 就绪后写入启动命令（tty 缓冲会排队，200ms 只是保险）
+  const cmd = opts?.command?.trim()
+  if (cmd) {
+    setTimeout(() => {
+      if (ptys.get(id) === p) p.write(`${cmd}\r`)
+    }, 200)
+  }
 
   const wc = e.sender
   p.onData((data) => {
@@ -124,6 +140,13 @@ ipcMain.on('pty:resize', (_e, id: string, cols: number, rows: number) => {
 ipcMain.on('pty:kill', (_e, id: string) => {
   killPty(id)
 })
+
+// ── Agent 预设 IPC ──
+ipcMain.handle('preset:list', () => listPresets())
+ipcMain.handle('preset:upsert', (_e, input: Parameters<typeof upsertPreset>[0]) =>
+  upsertPreset(input)
+)
+ipcMain.handle('preset:delete', (_e, id: string) => deletePreset(id))
 
 // ── Identity（凭证）IPC：渲染层只见元数据，env 值不出主进程 ──
 ipcMain.handle('identity:list', () => listIdentities())

@@ -550,6 +550,83 @@ body {
   color: var(--tb-red);
 }
 
+/* ── 集群（组）节点 ─────────────────────────────────── */
+.group-node {
+  width: 100%;
+  height: 100%;
+  border: 1px dashed var(--tb-hairline-strong);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.025);
+}
+.group-node.has-attention {
+  border-color: rgba(255, 159, 10, 0.5);
+}
+.group-node-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  cursor: grab;
+}
+.group-node-title {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.group-node-counts {
+  font-size: 11px;
+  color: var(--tb-muted);
+  flex: 1;
+}
+
+/* ── Agent 预设菜单 ─────────────────────────────────── */
+.agent-menu-wrap {
+  position: relative;
+}
+.agent-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  min-width: 180px;
+  display: flex;
+  flex-direction: column;
+  padding: 5px;
+  background: var(--tb-panel-glass);
+  backdrop-filter: blur(24px) saturate(180%);
+  border: 0.5px solid var(--tb-hairline);
+  border-radius: 12px;
+  box-shadow: var(--tb-shadow-card);
+  z-index: 40;
+}
+.agent-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-family: var(--tb-font-ui);
+  color: var(--tb-text);
+  background: none;
+  border: none;
+  border-radius: 7px;
+  padding: 7px 10px;
+  cursor: pointer;
+  text-align: left;
+}
+.agent-menu-item:hover {
+  background: rgba(10, 132, 255, 0.9);
+  color: #fff;
+}
+.agent-menu-item.manage {
+  color: var(--tb-muted);
+  border-top: 0.5px solid var(--tb-hairline);
+  border-radius: 0 0 7px 7px;
+  margin-top: 4px;
+}
+.toolbar-btn.accent {
+  background: rgba(10, 132, 255, 0.9);
+  color: #fff;
+}
+
 /* ── React Flow 组件玻璃化 ───────────────────────────── */
 .react-flow__minimap {
   background: var(--tb-panel-glass) !important;

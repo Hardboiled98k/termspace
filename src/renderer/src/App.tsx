@@ -14,14 +14,18 @@ import {
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import TerminalNode, { type TermNode } from './nodes/TerminalNode'
+import GroupNode, { type GroupNodeT } from './nodes/GroupNode'
 import { IdentityContext } from './identity-context'
 
-const nodeTypes = { terminal: TerminalNode }
+export type BoardNode = TermNode | GroupNodeT
+
+const nodeTypes = { terminal: TerminalNode, group: GroupNode }
 
 const statusColor: Record<string, string> = {
   running: '#0A84FF',
   attention: '#FF9F0A',
-  idle: '#48484A'
+  idle: '#48484A',
+  group: '#2C2C2E'
 }
 
 /* 磁盘上的工作区格式（只存布局，不存运行时状态） */
@@ -32,7 +36,11 @@ interface SavedNode {
   width: number
   height: number
   title: string
+  type?: 'terminal' | 'group'
+  parentId?: string
   identityId?: string
+  command?: string
+  provider?: string
 }
 interface Workspace {
   nodes: SavedNode[]
@@ -40,6 +48,10 @@ interface Workspace {
 }
 
 const DEFAULT_SIZE = { width: 580, height: 380 }
+/* 成组自动排列参数 */
+const GROUP_GAP = 16
+const GROUP_PAD = 20
+const GROUP_HEAD = 48
 
 /* ── 额度 HUD（数据源: ~/.claude/claude-usage.json，60s 轮询）── */
 interface QuotaPool {
@@ -72,6 +84,19 @@ function QuotaRow({ label, pool }: { label: string; pool: QuotaPool }): React.JS
       <span className="quota-pct">{pct}%</span>
       <span className="quota-reset">{resetIn(pool.resets_at)}</span>
     </div>
+  )
+}
+
+function QuotaHUD(): React.JSX.Element | null {
+  const [quota, setQuota] = useState<Quota | null>(null)
+  useEffect(() => window.termboard.onQuota(setQuota), [])
+  if (!quota?.five_hour && !quota?.seven_day) return null
+  return (
+    <Panel position="top-right" className="quota-hud">
+      <span className="quota-title">Claude</span>
+      {quota.five_hour && <QuotaRow label="5h" pool={quota.five_hour} />}
+      {quota.seven_day && <QuotaRow label="周" pool={quota.seven_day} />}
+    </Panel>
   )
 }
 
@@ -147,9 +172,7 @@ function IdentityPanel({
             />
             <select
               value={provider}
-              onChange={(e) =>
-                setProvider(e.currentTarget.value as IdentityMeta['provider'])
-              }
+              onChange={(e) => setProvider(e.currentTarget.value as IdentityMeta['provider'])}
             >
               <option value="claude">claude</option>
               <option value="codex">codex</option>
@@ -175,20 +198,116 @@ function IdentityPanel({
   )
 }
 
-function QuotaHUD(): React.JSX.Element | null {
-  const [quota, setQuota] = useState<Quota | null>(null)
-  useEffect(() => window.termboard.onQuota(setQuota), [])
-  if (!quota?.five_hour && !quota?.seven_day) return null
+/* ── Agent 预设面板（F6）── */
+function PresetPanel({
+  presets,
+  identities,
+  onChanged,
+  onClose
+}: {
+  presets: Preset[]
+  identities: IdentityMeta[]
+  onChanged: (list: Preset[]) => void
+  onClose: () => void
+}): React.JSX.Element {
+  const [name, setName] = useState('')
+  const [provider, setProvider] = useState<Preset['provider']>('claude')
+  const [command, setCommand] = useState('')
+  const [identityId, setIdentityId] = useState('')
+  const [error, setError] = useState('')
+
+  const save = async (): Promise<void> => {
+    if (!name.trim()) {
+      setError('名称必填')
+      return
+    }
+    onChanged(
+      await window.termboard.upsertPreset({
+        name,
+        provider,
+        command,
+        identityId: identityId || undefined
+      })
+    )
+    setName('')
+    setCommand('')
+    setIdentityId('')
+    setError('')
+  }
+
+  const identityName = (id?: string): string =>
+    identities.find((i) => i.id === id)?.name ?? ''
+
   return (
-    <Panel position="top-right" className="quota-hud">
-      <span className="quota-title">Claude</span>
-      {quota.five_hour && <QuotaRow label="5h" pool={quota.five_hour} />}
-      {quota.seven_day && <QuotaRow label="周" pool={quota.seven_day} />}
-    </Panel>
+    <div className="identity-overlay" onClick={onClose}>
+      <div className="identity-panel" onClick={(e) => e.stopPropagation()}>
+        <div className="identity-panel-head">
+          <span>Agent 节点预设</span>
+          <button className="term-node-close" onClick={onClose}>
+            ✕
+          </button>
+        </div>
+        <div className="identity-list">
+          {presets.map((p) => (
+            <div key={p.id} className="identity-row">
+              <span className={`identity-provider ${p.provider}`}>{p.provider}</span>
+              <span className="identity-name">{p.name}</span>
+              <span className="identity-keys">
+                {p.command || '(纯终端)'}
+                {p.identityId ? ` @ ${identityName(p.identityId)}` : ''}
+              </span>
+              <button
+                className="identity-del"
+                onClick={async () => onChanged(await window.termboard.deletePreset(p.id))}
+              >
+                删除
+              </button>
+            </div>
+          ))}
+        </div>
+        <div className="identity-form">
+          <div className="identity-form-row">
+            <input
+              placeholder="名称（如 Claude 主脑）"
+              value={name}
+              onChange={(e) => setName(e.currentTarget.value)}
+            />
+            <select
+              value={provider}
+              onChange={(e) => setProvider(e.currentTarget.value as Preset['provider'])}
+            >
+              <option value="claude">claude</option>
+              <option value="codex">codex</option>
+              <option value="gemini">gemini</option>
+              <option value="custom">custom</option>
+            </select>
+          </div>
+          <div className="identity-form-row">
+            <input
+              placeholder="启动命令（如 claude --model opus）"
+              value={command}
+              onChange={(e) => setCommand(e.currentTarget.value)}
+            />
+            <select value={identityId} onChange={(e) => setIdentityId(e.currentTarget.value)}>
+              <option value="">默认身份</option>
+              {identities.map((i) => (
+                <option key={i.id} value={i.id}>
+                  {i.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          {error && <div className="identity-error">{error}</div>}
+          <button className="toolbar-btn" onClick={() => void save()}>
+            保存预设
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }
 
-function seedNodes(): TermNode[] {
+function seedNodes(): BoardNode[] {
   return [
     {
       id: 't1',
@@ -200,51 +319,82 @@ function seedNodes(): TermNode[] {
   ]
 }
 
-function toTermNode(s: SavedNode): TermNode {
+function fromSaved(s: SavedNode): BoardNode {
+  if (s.type === 'group') {
+    return {
+      id: s.id,
+      type: 'group',
+      position: { x: s.x, y: s.y },
+      width: s.width,
+      height: s.height,
+      data: { title: s.title }
+    }
+  }
   return {
     id: s.id,
     type: 'terminal',
     position: { x: s.x, y: s.y },
     width: s.width || DEFAULT_SIZE.width,
     height: s.height || DEFAULT_SIZE.height,
-    data: { title: s.title || s.id, status: 'idle', identityId: s.identityId }
+    parentId: s.parentId,
+    extent: s.parentId ? ('parent' as const) : undefined,
+    data: {
+      title: s.title || s.id,
+      status: 'idle',
+      identityId: s.identityId,
+      command: s.command,
+      provider: s.provider
+    }
   }
 }
 
-function toSaved(n: TermNode): SavedNode {
-  return {
+function toSaved(n: BoardNode): SavedNode {
+  const base = {
     id: n.id,
     x: n.position.x,
     y: n.position.y,
     width: n.width ?? n.measured?.width ?? DEFAULT_SIZE.width,
     height: n.height ?? n.measured?.height ?? DEFAULT_SIZE.height,
     title: n.data.title,
-    identityId: n.data.identityId
+    type: n.type
+  }
+  if (n.type === 'group') return base
+  return {
+    ...base,
+    parentId: n.parentId,
+    identityId: n.data.identityId,
+    command: n.data.command,
+    provider: n.data.provider
   }
 }
 
-function nextId(nodes: TermNode[]): string {
+function nextId(nodes: BoardNode[], prefix: string): string {
   const max = nodes.reduce((m, n) => {
-    const num = parseInt(n.id.replace(/^t/, ''), 10)
+    if (!n.id.startsWith(prefix)) return m
+    const num = parseInt(n.id.slice(prefix.length), 10)
     return Number.isFinite(num) && num > m ? num : m
   }, 0)
-  return `t${max + 1}`
+  return `${prefix}${max + 1}`
 }
 
 function Board(): React.JSX.Element {
-  const [nodes, setNodes] = useState<TermNode[]>([])
+  const [nodes, setNodes] = useState<BoardNode[]>([])
   const [loaded, setLoaded] = useState(false)
   const [saveTick, setSaveTick] = useState(0)
   const [identities, setIdentities] = useState<IdentityMeta[]>([])
+  const [presets, setPresets] = useState<Preset[]>([])
   const [defaultIdentity, setDefaultIdentity] = useState('')
   const [showIdentities, setShowIdentities] = useState(false)
-
-  useEffect(() => {
-    void window.termboard.listIdentities().then(setIdentities)
-  }, [])
+  const [showPresetPanel, setShowPresetPanel] = useState(false)
+  const [showAgentMenu, setShowAgentMenu] = useState(false)
   const hadSaved = useRef(false)
   const viewportRef = useRef<Viewport | null>(null)
   const { setViewport, fitView } = useReactFlow()
+
+  useEffect(() => {
+    void window.termboard.listIdentities().then(setIdentities)
+    void window.termboard.listPresets().then(setPresets)
+  }, [])
 
   // 启动恢复：有存档用存档，没有播种默认节点
   useEffect(() => {
@@ -252,7 +402,7 @@ function Board(): React.JSX.Element {
       const ws = raw as Workspace | null
       if (ws?.nodes?.length) {
         hadSaved.current = true
-        setNodes(ws.nodes.map(toTermNode))
+        setNodes(ws.nodes.map(fromSaved))
         if (ws.viewport) {
           viewportRef.current = ws.viewport
           void setViewport(ws.viewport)
@@ -279,8 +429,7 @@ function Board(): React.JSX.Element {
   }, [nodes, saveTick, loaded])
 
   const onNodesChange = useCallback(
-    (changes: NodeChange<TermNode>[]) =>
-      setNodes((ns) => applyNodeChanges(changes, ns)),
+    (changes: NodeChange<BoardNode>[]) => setNodes((ns) => applyNodeChanges(changes, ns)),
     []
   )
 
@@ -292,7 +441,7 @@ function Board(): React.JSX.Element {
     const apply = (nodeId: string, status: TermNode['data']['status']): void => {
       setNodes((ns) =>
         ns.map((n) =>
-          n.id === nodeId && n.data.status !== status
+          n.id === nodeId && n.type === 'terminal' && n.data.status !== status
             ? { ...n, data: { ...n.data, status } }
             : n
         )
@@ -308,7 +457,6 @@ function Board(): React.JSX.Element {
       } else if (e.state === 'blocked' || e.state === 'waiting') {
         apply(e.nodeId, 'attention')
       } else {
-        // done / session(start|end reset)
         doneAt.set(e.nodeId, Date.now())
         apply(e.nodeId, 'idle')
       }
@@ -319,7 +467,7 @@ function Board(): React.JSX.Element {
       const now = Date.now()
       setNodes((ns) =>
         ns.map((n) => {
-          if (n.data.status === 'idle') return n
+          if (n.type !== 'terminal' || n.data.status === 'idle') return n
           const last = lastEventAt.get(n.id)
           return last && now - last > 30 * 60_000
             ? { ...n, data: { ...n.data, status: 'idle' as const } }
@@ -339,93 +487,194 @@ function Board(): React.JSX.Element {
     setSaveTick((t) => t + 1) // 走统一防抖保存
   }, [])
 
-  const addTerminal = useCallback(() => {
-    setNodes((ns) => {
-      const id = nextId(ns)
-      const n = ns.length
-      return [
-        ...ns,
-        {
-          id,
-          type: 'terminal' as const,
-          position: { x: 120 + (n % 5) * 160, y: 160 + (n % 3) * 140 },
-          ...DEFAULT_SIZE,
-          data: {
-            title: `zsh · ${id}`,
-            status: 'idle' as const,
-            identityId: defaultIdentity || undefined
+  const addTerminal = useCallback(
+    (preset?: Preset) => {
+      setShowAgentMenu(false)
+      setNodes((ns) => {
+        const id = nextId(ns, 't')
+        const n = ns.length
+        return [
+          ...ns,
+          {
+            id,
+            type: 'terminal' as const,
+            position: { x: 120 + (n % 5) * 160, y: 160 + (n % 3) * 140 },
+            ...DEFAULT_SIZE,
+            data: {
+              title: preset ? `${preset.name} · ${id}` : `zsh · ${id}`,
+              status: 'idle' as const,
+              identityId: preset?.identityId || defaultIdentity || undefined,
+              command: preset?.command || undefined,
+              provider: preset?.provider
+            }
           }
+        ]
+      })
+    },
+    [defaultIdentity]
+  )
+
+  // F1: 框选成组 + 自动网格排列（Shift+拖拽框选后点「成组」）
+  const groupSelected = useCallback(() => {
+    setNodes((ns) => {
+      const sel = ns.filter(
+        (n): n is TermNode => n.type === 'terminal' && !!n.selected && !n.parentId
+      )
+      if (sel.length < 2) return ns
+      const selIds = new Set(sel.map((n) => n.id))
+      const rest = ns.filter((n) => !selIds.has(n.id))
+      const gid = nextId(ns, 'g')
+      const cols = Math.ceil(Math.sqrt(sel.length))
+      const rows = Math.ceil(sel.length / cols)
+      const cellW = Math.max(...sel.map((n) => n.width ?? DEFAULT_SIZE.width))
+      const cellH = Math.max(...sel.map((n) => n.height ?? DEFAULT_SIZE.height))
+      const gw = GROUP_PAD * 2 + cols * cellW + (cols - 1) * GROUP_GAP
+      const gh = GROUP_HEAD + GROUP_PAD + rows * cellH + (rows - 1) * GROUP_GAP + GROUP_PAD
+      const minX = Math.min(...sel.map((n) => n.position.x))
+      const minY = Math.min(...sel.map((n) => n.position.y))
+      // 按视觉位置排序后填网格 = 整整齐齐
+      const sorted = [...sel].sort(
+        (a, b) => a.position.y - b.position.y || a.position.x - b.position.x
+      )
+      const group: GroupNodeT = {
+        id: gid,
+        type: 'group',
+        position: { x: minX - GROUP_PAD, y: minY - GROUP_HEAD - GROUP_PAD },
+        width: gw,
+        height: gh,
+        data: { title: `集群 ${gid.slice(1)}` }
+      }
+      const children = sorted.map((n, i) => ({
+        ...n,
+        parentId: gid,
+        extent: 'parent' as const,
+        selected: false,
+        width: cellW,
+        height: cellH,
+        position: {
+          x: GROUP_PAD + (i % cols) * (cellW + GROUP_GAP),
+          y: GROUP_HEAD + GROUP_PAD + Math.floor(i / cols) * (cellH + GROUP_GAP)
         }
-      ]
+      }))
+      // 父节点必须排在子节点前面（React Flow 要求）
+      return [...rest, group, ...children]
     })
-  }, [defaultIdentity])
+  }, [])
+
+  const selectedCount = nodes.filter(
+    (n) => n.type === 'terminal' && n.selected && !n.parentId
+  ).length
 
   return (
     <IdentityContext.Provider value={identities}>
-    <div className="h-screen w-screen">
-      {showIdentities && (
-        <IdentityPanel
-          identities={identities}
-          onChanged={setIdentities}
-          onClose={() => setShowIdentities(false)}
-        />
-      )}
-      <ReactFlow
-        nodes={nodes}
-        onNodesChange={onNodesChange}
-        onMoveEnd={onMoveEnd}
-        nodeTypes={nodeTypes}
-        colorMode="dark"
-        minZoom={0.15}
-        maxZoom={1.5} /* ponytail: WebGL canvas 放大是位图拉伸会糊，>1.5 不可接受；真·清晰放大需按 zoom 重设 fontSize，后续做 */
-        panOnScroll
-        zoomOnScroll={false}
-        deleteKeyCode={null}
-        proOptions={{ hideAttribution: true }}
-      >
-        <Background
-          variant={BackgroundVariant.Dots}
-          gap={24}
-          size={1.2}
-          color="rgba(255, 255, 255, 0.22)"
-          bgColor="transparent"
-        />
-        <Controls position="bottom-left" showInteractive={false} />
-        <MiniMap
-          pannable
-          zoomable
-          nodeColor={(n) => statusColor[(n.data as { status?: string }).status ?? 'idle']}
-          nodeStrokeWidth={3}
-        />
-        <QuotaHUD />
-        <Panel position="top-left" className="toolbar">
-          <span className="toolbar-title">TermBoard</span>
-          <span className="toolbar-sep" />
-          <button className="toolbar-btn" onClick={addTerminal}>
-            ＋ 终端
-          </button>
-          {identities.length > 0 && (
-            <select
-              className="identity-select"
-              value={defaultIdentity}
-              title="新终端使用的默认身份"
-              onChange={(e) => setDefaultIdentity(e.currentTarget.value)}
-            >
-              <option value="">默认身份</option>
-              {identities.map((i) => (
-                <option key={i.id} value={i.id}>
-                  {i.name}
-                </option>
-              ))}
-            </select>
-          )}
-          <button className="toolbar-btn" onClick={() => setShowIdentities(true)}>
-            凭证
-          </button>
-          <span className="toolbar-count">{nodes.length} 节点</span>
-        </Panel>
-      </ReactFlow>
-    </div>
+      <div className="h-screen w-screen">
+        {showIdentities && (
+          <IdentityPanel
+            identities={identities}
+            onChanged={setIdentities}
+            onClose={() => setShowIdentities(false)}
+          />
+        )}
+        {showPresetPanel && (
+          <PresetPanel
+            presets={presets}
+            identities={identities}
+            onChanged={setPresets}
+            onClose={() => setShowPresetPanel(false)}
+          />
+        )}
+        <ReactFlow
+          nodes={nodes}
+          onNodesChange={onNodesChange}
+          onMoveEnd={onMoveEnd}
+          nodeTypes={nodeTypes}
+          colorMode="dark"
+          minZoom={0.15}
+          maxZoom={1.5} /* ponytail: WebGL canvas 放大是位图拉伸会糊，>1.5 不可接受；真·清晰放大需按 zoom 重设 fontSize，后续做 */
+          panOnScroll
+          zoomOnScroll={false}
+          deleteKeyCode={null}
+          proOptions={{ hideAttribution: true }}
+        >
+          <Background
+            variant={BackgroundVariant.Dots}
+            gap={24}
+            size={1.2}
+            color="rgba(255, 255, 255, 0.22)"
+            bgColor="transparent"
+          />
+          <Controls position="bottom-left" showInteractive={false} />
+          <MiniMap
+            pannable
+            zoomable
+            nodeColor={(n) =>
+              n.type === 'group'
+                ? statusColor['group']
+                : statusColor[(n.data as { status?: string }).status ?? 'idle']
+            }
+            nodeStrokeWidth={3}
+          />
+          <QuotaHUD />
+          <Panel position="top-left" className="toolbar">
+            <span className="toolbar-title">TermBoard</span>
+            <span className="toolbar-sep" />
+            <button className="toolbar-btn" onClick={() => addTerminal()}>
+              ＋ 终端
+            </button>
+            <span className="agent-menu-wrap">
+              <button
+                className="toolbar-btn"
+                onClick={() => setShowAgentMenu((s) => !s)}
+              >
+                ＋ Agent ▾
+              </button>
+              {showAgentMenu && (
+                <div className="agent-menu">
+                  {presets.map((p) => (
+                    <button key={p.id} className="agent-menu-item" onClick={() => addTerminal(p)}>
+                      <span className={`identity-provider ${p.provider}`}>{p.provider}</span>
+                      {p.name}
+                    </button>
+                  ))}
+                  <button
+                    className="agent-menu-item manage"
+                    onClick={() => {
+                      setShowAgentMenu(false)
+                      setShowPresetPanel(true)
+                    }}
+                  >
+                    管理预设…
+                  </button>
+                </div>
+              )}
+            </span>
+            {selectedCount >= 2 && (
+              <button className="toolbar-btn accent" onClick={groupSelected}>
+                成组 ({selectedCount})
+              </button>
+            )}
+            {identities.length > 0 && (
+              <select
+                className="identity-select"
+                value={defaultIdentity}
+                title="新终端使用的默认身份"
+                onChange={(e) => setDefaultIdentity(e.currentTarget.value)}
+              >
+                <option value="">默认身份</option>
+                {identities.map((i) => (
+                  <option key={i.id} value={i.id}>
+                    {i.name}
+                  </option>
+                ))}
+              </select>
+            )}
+            <button className="toolbar-btn" onClick={() => setShowIdentities(true)}>
+              凭证
+            </button>
+            <span className="toolbar-count">{nodes.length} 节点</span>
+          </Panel>
+        </ReactFlow>
+      </div>
     </IdentityContext.Provider>
   )
 }
@@ -437,4 +686,3 @@ export default function App(): React.JSX.Element {
     </ReactFlowProvider>
   )
 }
-

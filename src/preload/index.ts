@@ -1,8 +1,12 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron'
 
 const api = {
-  spawn: (id: string, cols: number, rows: number, identityId?: string): Promise<void> =>
-    ipcRenderer.invoke('pty:spawn', id, cols, rows, identityId),
+  spawn: (
+    id: string,
+    cols: number,
+    rows: number,
+    opts?: { identityId?: string; command?: string; provider?: string }
+  ): Promise<void> => ipcRenderer.invoke('pty:spawn', id, cols, rows, opts),
   write: (id: string, data: string): void => {
     ipcRenderer.send('pty:write', id, data)
   },
@@ -47,6 +51,9 @@ const api = {
     ipcRenderer.on('agent:context', listener)
     return () => ipcRenderer.removeListener('agent:context', listener)
   },
+  listPresets: (): Promise<unknown> => ipcRenderer.invoke('preset:list'),
+  upsertPreset: (input: unknown): Promise<unknown> => ipcRenderer.invoke('preset:upsert', input),
+  deletePreset: (id: string): Promise<unknown> => ipcRenderer.invoke('preset:delete', id),
   listIdentities: (): Promise<unknown> => ipcRenderer.invoke('identity:list'),
   upsertIdentity: (input: unknown): Promise<unknown> =>
     ipcRenderer.invoke('identity:upsert', input),
