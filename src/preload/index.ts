@@ -5,7 +5,12 @@ const api = {
     id: string,
     cols: number,
     rows: number,
-    opts?: { identityId?: string; command?: string; provider?: string }
+    opts?: {
+      identityId?: string
+      command?: string
+      provider?: string
+      contextNodeIds?: string[]
+    }
   ): Promise<void> => ipcRenderer.invoke('pty:spawn', id, cols, rows, opts),
   write: (id: string, data: string): void => {
     ipcRenderer.send('pty:write', id, data)
@@ -29,8 +34,9 @@ const api = {
     ipcRenderer.on(`pty:exit:${id}`, listener)
     return () => ipcRenderer.removeListener(`pty:exit:${id}`, listener)
   },
-  loadContext: (): Promise<string> => ipcRenderer.invoke('context:load'),
-  saveContext: (text: string): Promise<void> => ipcRenderer.invoke('context:save', text),
+  loadContext: (nodeId: string): Promise<string> => ipcRenderer.invoke('context:load', nodeId),
+  saveContext: (nodeId: string, text: string): Promise<void> =>
+    ipcRenderer.invoke('context:save', nodeId, text),
   loadWorkspace: (): Promise<unknown> => ipcRenderer.invoke('workspace:load'),
   saveWorkspace: (data: unknown): Promise<void> => ipcRenderer.invoke('workspace:save', data),
   onAgentStatus: (

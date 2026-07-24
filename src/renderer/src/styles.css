@@ -79,8 +79,21 @@ body {
   pointer-events: none;
 }
 
-.term-node.selected {
-  border-color: var(--tb-hairline-strong);
+/* 选中态：发光描边 + 轻微抬起（替代四角圆点） */
+.term-node.selected,
+.context-node.selected {
+  border-color: rgba(10, 132, 255, 0.85);
+  box-shadow:
+    0 0 0 1px rgba(10, 132, 255, 0.55),
+    0 0 26px rgba(10, 132, 255, 0.22),
+    0 14px 34px rgba(0, 0, 0, 0.45);
+}
+.term-node,
+.context-node,
+.worker-node {
+  transition:
+    box-shadow 0.22s ease,
+    border-color 0.22s ease;
 }
 
 /* 状态语义 glow：柔和克制，只给运行/等待状态。
@@ -180,41 +193,21 @@ body {
   flex: 1;
 }
 
-/* 终端字号步进器 */
-.font-step {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  flex-shrink: 0;
-  opacity: 0;
-  transition: opacity 0.15s ease;
-}
-.term-node:hover .font-step,
-.term-node.selected .font-step {
-  opacity: 1;
-}
-.font-step button {
+/* 字号调节的瞬时提示（⌥滚轮 / 右键菜单） */
+.font-hint {
   font-size: 9.5px;
-  font-weight: 600;
-  font-family: var(--tb-font-ui);
-  color: var(--tb-muted);
-  background: rgba(255, 255, 255, 0.07);
-  border: none;
-  border-radius: 5px;
-  padding: 2px 5px;
-  cursor: pointer;
-  line-height: 1.2;
-}
-.font-step button:hover {
-  background: rgba(10, 132, 255, 0.9);
-  color: #fff;
-}
-.font-step-val {
-  font-size: 9px;
-  color: var(--tb-muted);
+  color: var(--tb-blue);
+  background: rgba(10, 132, 255, 0.14);
+  border-radius: 980px;
+  padding: 2px 7px;
   font-variant-numeric: tabular-nums;
-  min-width: 13px;
-  text-align: center;
+  flex-shrink: 0;
+  animation: fade-in 0.15s ease;
+}
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
 }
 
 .term-node-close {
@@ -610,23 +603,155 @@ body {
   background: var(--tb-hairline-strong);
 }
 .toolbar-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
   font-size: 12px;
   font-weight: 500;
   font-family: var(--tb-font-ui);
-  padding: 5px 14px;
+  padding: 0 11px;
   border-radius: var(--tb-radius-pill);
   border: none;
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.07);
   color: var(--tb-text);
   cursor: pointer;
-  transition: background 0.2s ease;
+  transition:
+    background 0.18s ease,
+    color 0.18s ease,
+    transform 0.1s ease;
+}
+.toolbar-btn svg {
+  opacity: 0.85;
+  flex-shrink: 0;
+}
+.toolbar-btn.icon-only {
+  padding: 0;
+  width: 26px;
+  justify-content: center;
 }
 .toolbar-btn:hover {
   background: rgba(10, 132, 255, 0.9);
   color: #fff;
 }
+.toolbar-btn:hover svg {
+  opacity: 1;
+}
 .toolbar-btn:active {
-  transform: scale(0.97);
+  transform: scale(0.96);
+}
+
+/* ── 连接柄（拉线串/并联）───────────────────────────── */
+.tb-handle {
+  width: 9px !important;
+  height: 9px !important;
+  border: 1.5px solid var(--tb-panel) !important;
+  border-radius: 50% !important;
+  opacity: 0;
+  transition:
+    opacity 0.18s ease,
+    transform 0.18s ease;
+}
+.tb-handle.in,
+.tb-handle.out {
+  background: var(--tb-blue) !important;
+}
+.tb-handle.ctx {
+  background: #bf5af2 !important;
+}
+.term-node:hover .tb-handle,
+.term-node.selected .tb-handle,
+.context-node:hover .tb-handle,
+.context-node.selected .tb-handle,
+.react-flow__node:hover .tb-handle {
+  opacity: 1;
+}
+.tb-handle:hover {
+  transform: scale(1.35);
+}
+/* 连线本体 */
+.react-flow__edge-path {
+  filter: drop-shadow(0 0 4px rgba(10, 132, 255, 0.35));
+}
+.react-flow__edge.selected .react-flow__edge-path {
+  stroke-width: 3 !important;
+}
+
+/* ── 右键菜单 ─────────────────────────────────────── */
+.ctx-menu {
+  position: fixed;
+  z-index: 60;
+  min-width: 176px;
+  display: flex;
+  flex-direction: column;
+  padding: 5px;
+  background: var(--tb-panel-glass);
+  backdrop-filter: blur(24px) saturate(180%);
+  border: 0.5px solid var(--tb-hairline);
+  border-radius: 11px;
+  box-shadow: var(--tb-shadow-card);
+  animation: menu-in 0.13s cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+@keyframes menu-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(-4px);
+  }
+}
+.ctx-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-family: var(--tb-font-ui);
+  color: var(--tb-text);
+  background: none;
+  border: none;
+  border-radius: 7px;
+  padding: 7px 9px;
+  cursor: pointer;
+  text-align: left;
+}
+.ctx-menu-item svg {
+  opacity: 0.8;
+}
+.ctx-menu-item:hover {
+  background: rgba(10, 132, 255, 0.9);
+  color: #fff;
+}
+.ctx-menu-item.danger:hover {
+  background: var(--tb-red);
+}
+.ctx-menu-hint {
+  margin-left: auto;
+  font-size: 10px;
+  opacity: 0.55;
+}
+.ctx-menu-sep {
+  height: 0.5px;
+  background: var(--tb-hairline);
+  margin: 4px 2px;
+}
+
+/* minimap 自动隐藏：移动时浮现，静止淡出 */
+.react-flow__minimap.map-hidden {
+  opacity: 0;
+  transform: translateY(6px) scale(0.98);
+  pointer-events: none;
+}
+.react-flow__minimap.map-visible {
+  opacity: 1;
+  transform: none;
+}
+.react-flow__minimap {
+  transition:
+    opacity 0.45s cubic-bezier(0.4, 0, 0.2, 1),
+    transform 0.45s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.react-flow__minimap:hover {
+  opacity: 1 !important;
+  transform: none !important;
+  pointer-events: all !important;
 }
 .toolbar-count {
   font-size: 11px;

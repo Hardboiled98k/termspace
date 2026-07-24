@@ -1,5 +1,12 @@
 import { memo, useEffect, useRef, useState } from 'react'
-import { NodeResizer, useReactFlow, type Node, type NodeProps } from '@xyflow/react'
+import {
+  Handle,
+  NodeResizer,
+  Position,
+  useReactFlow,
+  type Node,
+  type NodeProps
+} from '@xyflow/react'
 import { FarChip, FAR_ZOOM, useZoom } from './FarChip'
 
 /* F2：共享上下文 Hub — 编辑单一事实源文件（userData/board-context.md）
@@ -16,18 +23,18 @@ function ContextNodeImpl({ id, selected }: NodeProps<ContextNodeT>): React.JSX.E
   const timer = useRef(0)
 
   useEffect(() => {
-    void window.termboard.loadContext().then((t) => {
+    void window.termboard.loadContext(id).then((t) => {
       setText(t)
       setLoaded(true)
     })
-  }, [])
+  }, [id])
 
   const onChange = (v: string): void => {
     setText(v)
     setDirty(true)
     window.clearTimeout(timer.current)
     timer.current = window.setTimeout(() => {
-      void window.termboard.saveContext(v).then(() => setDirty(false))
+      void window.termboard.saveContext(id, v).then(() => setDirty(false))
     }, 800)
   }
 
@@ -46,7 +53,13 @@ function ContextNodeImpl({ id, selected }: NodeProps<ContextNodeT>): React.JSX.E
 
   return (
     <div className={`context-node${selected ? ' selected' : ''}`}>
-      <NodeResizer minWidth={320} minHeight={200} isVisible={selected} />
+      <NodeResizer
+        minWidth={320}
+        minHeight={200}
+        isVisible
+        handleStyle={{ opacity: 0, width: 16, height: 16, border: 'none' }}
+        lineStyle={{ opacity: 0, borderWidth: 8 }}
+      />
       <div className="term-node-header">
         <span className="context-node-icon">✦</span>
         <span className="term-node-title">共享上下文</span>
@@ -64,6 +77,8 @@ function ContextNodeImpl({ id, selected }: NodeProps<ContextNodeT>): React.JSX.E
           ✕
         </button>
       </div>
+      {/* 拉线到终端 = 把这份简报注入那个 agent（可连多个 = 并联） */}
+      <Handle type="source" position={Position.Right} className="tb-handle ctx" />
       <textarea
         className="context-node-body nodrag nowheel"
         placeholder={

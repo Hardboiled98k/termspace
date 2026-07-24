@@ -1,5 +1,5 @@
 import { app, BrowserWindow, ipcMain, nativeTheme } from 'electron'
-import { readFile, writeFile, rename } from 'node:fs/promises'
+import { readFile, writeFile, rename, mkdir } from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 import * as pty from 'node-pty'
@@ -83,6 +83,7 @@ interface SpawnOpts {
   identityId?: string
   command?: string // agent 预设启动命令，spawn 后写入 shell
   provider?: string
+  contextNodeIds?: string[] // 画布上连到本终端的简报节点
 }
 
 ipcMain.handle(
@@ -103,8 +104,9 @@ ipcMain.handle(
     env['TERMBOARD_NODE_ID'] = id
     env['TERMBOARD_AGENT_ID'] = opts?.provider ?? 'claude'
     if (hookSystem) env['TERMBOARD_HOOK_ENDPOINT'] = hookSystem.endpointFile
-    // F2 共享上下文：所有终端都能 cat 到；Claude 预设经 --append-system-prompt 注入
-    env['TERMBOARD_CONTEXT_FILE'] = contextFilePath()
+    // F2 上下文：只注入「连到本终端」的简报（不同 agent 可以不同上下文）
+    const merged = await buildMergedContext(id, opts?.contextNodeIds ?? [])
+    if (merged) env['TERMBOARD_CONTEXT_FILE'] = merged
     // identity env 包注入（多账号/多 key，密文存储主进程解密）
     const idEnv = await resolveIdentityEnv(opts?.identityId)
     if (idEnv) Object.assign(env, idEnv)
@@ -192,26 +194,56 @@ ipcMain.handle(
 )
 ipcMain.handle('identity:delete', (_e, id: string) => deleteIdentity(id))
 
-// ── F2 共享上下文（单一事实源文件，Hub 节点编辑）──
-const contextFilePath = (): string => path.join(app.getPath('userData'), 'board-context.md')
+// ── F2 上下文：每个简报节点一个文件，按画布连线决定注入给谁 ──
+const ctxDir = (): string => path.join(app.getPath('userData'), 'contexts')
+const ctxFile = (nodeId: string): string =>
+  path.join(ctxDir(), `${nodeId.replace(/[^a-zA-Z0-9_-]/g, '_')}.md`)
 
-ipcMain.handle('context:load', async () => {
+ipcMain.handle('context:load', async (_e, nodeId: string) => {
   try {
-    return await readFile(contextFilePath(), 'utf8')
+    return await readFile(ctxFile(nodeId), 'utf8')
   } catch {
+    // 迁移：早期单文件版本
+    if (nodeId === 'ctx-hub') {
+      try {
+        return await readFile(path.join(app.getPath('userData'), 'board-context.md'), 'utf8')
+      } catch {
+        return ''
+      }
+    }
     return ''
   }
 })
 
-ipcMain.handle('context:save', async (_e, text: string) => {
+ipcMain.handle('context:save', async (_e, nodeId: string, text: string) => {
   try {
-    const tmp = `${contextFilePath()}.tmp`
-    await writeFile(tmp, String(text))
-    await rename(tmp, contextFilePath())
+    await mkdir(ctxDir(), { recursive: true })
+    const f = ctxFile(nodeId)
+    await writeFile(`${f}.tmp`, String(text))
+    await rename(`${f}.tmp`, f)
   } catch (err) {
     console.error('context save failed:', err)
   }
 })
+
+/** 把连到该终端的所有简报节点合并成一个文件，返回路径（无连线则返回空串） */
+async function buildMergedContext(termId: string, ctxIds: string[]): Promise<string> {
+  if (!ctxIds.length) return ''
+  const parts: string[] = []
+  for (const cid of ctxIds) {
+    try {
+      const t = (await readFile(ctxFile(cid), 'utf8')).trim()
+      if (t) parts.push(t)
+    } catch {
+      // 该简报还没存过内容
+    }
+  }
+  if (!parts.length) return ''
+  await mkdir(ctxDir(), { recursive: true })
+  const out = path.join(ctxDir(), `merged-${termId.replace(/[^a-zA-Z0-9_-]/g, '_')}.md`)
+  await writeFile(out, parts.join('\n\n---\n\n'))
+  return out
+}
 
 // ── 工作区持久化（JSON，M1 简版；多项目/tmux 续存后续做）──
 const workspacePath = (): string => path.join(app.getPath('userData'), 'workspace.json')

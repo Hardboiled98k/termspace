@@ -20,7 +20,12 @@ interface TermboardApi {
     id: string,
     cols: number,
     rows: number,
-    opts?: { identityId?: string; command?: string; provider?: string }
+    opts?: {
+      identityId?: string
+      command?: string
+      provider?: string
+      contextNodeIds?: string[]
+    }
   ) => Promise<void>
   write: (id: string, data: string) => void
   resize: (id: string, cols: number, rows: number) => void
@@ -28,8 +33,8 @@ interface TermboardApi {
   destroy: (id: string) => void
   onData: (id: string, cb: (data: string) => void) => () => void
   onExit: (id: string, cb: (code: number) => void) => () => void
-  loadContext: () => Promise<string>
-  saveContext: (text: string) => Promise<void>
+  loadContext: (nodeId: string) => Promise<string>
+  saveContext: (nodeId: string, text: string) => Promise<void>
   loadWorkspace: () => Promise<unknown>
   saveWorkspace: (data: unknown) => Promise<void>
   onAgentStatus: (

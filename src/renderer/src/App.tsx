@@ -8,7 +8,12 @@ import {
   MiniMap,
   Panel,
   applyNodeChanges,
+  applyEdgeChanges,
+  addEdge,
   useReactFlow,
+  type Connection,
+  type Edge,
+  type EdgeChange,
   type NodeChange,
   type Viewport
 } from '@xyflow/react'
@@ -18,6 +23,16 @@ import GroupNode, { type GroupNodeT } from './nodes/GroupNode'
 import WorkerNode, { type WorkerNodeT } from './nodes/WorkerNode'
 import ContextNode, { type ContextNodeT } from './nodes/ContextNode'
 import { IdentityContext } from './identity-context'
+import {
+  IconTerminal,
+  IconAgent,
+  IconBrief,
+  IconFit,
+  IconKey,
+  IconSettings,
+  IconGroup,
+  IconChevron
+} from './Icons'
 
 export type BoardNode = TermNode | GroupNodeT | WorkerNodeT | ContextNodeT
 
@@ -50,9 +65,31 @@ interface SavedNode {
   provider?: string
   fontSize?: number
 }
+interface SavedEdge {
+  id: string
+  source: string
+  target: string
+  kind: 'context' | 'delegate'
+}
 interface Workspace {
   nodes: SavedNode[]
+  edges?: SavedEdge[]
   viewport?: Viewport
+}
+
+/* 连线语义：简报→终端 = 注入上下文；终端→终端 = 派活通道（M5-p3 接 MCP） */
+function edgeStyle(kind: 'context' | 'delegate'): Partial<Edge> {
+  return kind === 'context'
+    ? {
+        animated: false,
+        style: { stroke: '#BF5AF2', strokeWidth: 1.6, strokeDasharray: '5 4' },
+        data: { kind }
+      }
+    : {
+        animated: true,
+        style: { stroke: '#0A84FF', strokeWidth: 1.8 },
+        data: { kind }
+      }
 }
 
 const DEFAULT_SIZE = { width: 580, height: 380 }
@@ -509,6 +546,7 @@ function nextId(nodes: BoardNode[], prefix: string): string {
 
 function Board(): React.JSX.Element {
   const [nodes, setNodes] = useState<BoardNode[]>([])
+  const [edges, setEdges] = useState<Edge[]>([])
   const [loaded, setLoaded] = useState(false)
   const [saveTick, setSaveTick] = useState(0)
   const [identities, setIdentities] = useState<IdentityMeta[]>([])
@@ -517,6 +555,9 @@ function Board(): React.JSX.Element {
   const [showIdentities, setShowIdentities] = useState(false)
   const [showPresetPanel, setShowPresetPanel] = useState(false)
   const [showAgentMenu, setShowAgentMenu] = useState(false)
+  const [menu, setMenu] = useState<{ x: number; y: number; nodeId?: string } | null>(null)
+  const [mapActive, setMapActive] = useState(false)
+  const mapTimer = useRef(0)
   const [ctxMap, setCtxMap] = useState<Record<string, NodeCtx>>({})
   const hadSaved = useRef(false)
   const viewportRef = useRef<Viewport | null>(null)
@@ -592,6 +633,14 @@ function Board(): React.JSX.Element {
       if (ws?.nodes?.length) {
         hadSaved.current = true
         setNodes(ws.nodes.map(fromSaved))
+        setEdges(
+          (ws.edges ?? []).map((e) => ({
+            id: e.id,
+            source: e.source,
+            target: e.target,
+            ...edgeStyle(e.kind)
+          }))
+        )
         if (ws.viewport) {
           viewportRef.current = ws.viewport
           void setViewport(ws.viewport)
@@ -614,11 +663,37 @@ function Board(): React.JSX.Element {
         nodes: nodes
           .filter((n): n is Exclude<BoardNode, WorkerNodeT> => n.type !== 'worker')
           .map(toSaved),
+        edges: edges.map((e) => ({
+          id: e.id,
+          source: e.source,
+          target: e.target,
+          kind: (e.data?.kind as 'context' | 'delegate') ?? 'delegate'
+        })),
         viewport: viewportRef.current ?? undefined
       })
     }, 500)
     return () => clearTimeout(t)
-  }, [nodes, saveTick, loaded])
+  }, [nodes, edges, saveTick, loaded])
+
+  const onEdgesChange = useCallback(
+    (changes: EdgeChange[]) => setEdges((es) => applyEdgeChanges(changes, es)),
+    []
+  )
+
+  // 连线规则：简报→终端=上下文注入；终端→终端=派活通道；其余拒绝
+  const onConnect = useCallback(
+    (c: Connection) => {
+      const src = nodes.find((n) => n.id === c.source)
+      const tgt = nodes.find((n) => n.id === c.target)
+      if (!src || !tgt || src.id === tgt.id) return
+      let kind: 'context' | 'delegate' | null = null
+      if (src.type === 'context' && tgt.type === 'terminal') kind = 'context'
+      else if (src.type === 'terminal' && tgt.type === 'terminal') kind = 'delegate'
+      if (!kind) return
+      setEdges((es) => addEdge({ ...c, ...edgeStyle(kind) }, es))
+    },
+    [nodes]
+  )
 
   const onNodesChange = useCallback(
     (changes: NodeChange<BoardNode>[]) => setNodes((ns) => applyNodeChanges(changes, ns)),
@@ -677,6 +752,13 @@ function Board(): React.JSX.Element {
   const onMoveEnd = useCallback((_: unknown, vp: Viewport) => {
     viewportRef.current = vp
     setSaveTick((t) => t + 1) // 走统一防抖保存
+  }, [])
+
+  // minimap：平移/缩放时浮现，静止 1.6s 后淡出
+  const onMove = useCallback(() => {
+    setMapActive(true)
+    window.clearTimeout(mapTimer.current)
+    mapTimer.current = window.setTimeout(() => setMapActive(false), 1600)
   }, [])
 
   const addTerminal = useCallback(
@@ -780,6 +862,35 @@ function Board(): React.JSX.Element {
     window.termboard.ready()
   }, [])
 
+  // 右键菜单动作
+  const menuNode = menu?.nodeId ? nodes.find((n) => n.id === menu.nodeId) : undefined
+  const bumpFont = useCallback(
+    (delta: number) => {
+      if (!menu?.nodeId) return
+      setNodes((ns) =>
+        ns.map((n) => {
+          if (n.id !== menu.nodeId || n.type !== 'terminal') return n
+          const cur = n.data.fontSize ?? 13
+          return { ...n, data: { ...n.data, fontSize: Math.min(24, Math.max(8, cur + delta)) } }
+        })
+      )
+    },
+    [menu]
+  )
+  const deleteMenuNode = useCallback(() => {
+    if (!menuNode) return
+    if (menuNode.type === 'terminal') window.termboard.destroy(menuNode.id)
+    if (menuNode.type === 'group') {
+      const kids = nodes.filter((n) => n.parentId === menuNode.id)
+      for (const k of kids) window.termboard.destroy(k.id)
+      setNodes((ns) => ns.filter((n) => n.id !== menuNode.id && n.parentId !== menuNode.id))
+      setMenu(null)
+      return
+    }
+    setNodes((ns) => ns.filter((n) => n.id !== menuNode.id))
+    setMenu(null)
+  }, [menuNode, nodes])
+
   const selectedCount = nodes.filter(
     (n) => n.type === 'terminal' && n.selected && !n.parentId
   ).length
@@ -804,8 +915,21 @@ function Board(): React.JSX.Element {
         )}
         <ReactFlow
           nodes={nodes}
+          edges={edges}
           onNodesChange={onNodesChange}
+          onEdgesChange={onEdgesChange}
+          onConnect={onConnect}
           onMoveEnd={onMoveEnd}
+          onMove={onMove}
+          onPaneClick={() => setMenu(null)}
+          onPaneContextMenu={(e) => {
+            e.preventDefault()
+            setMenu({ x: e.clientX, y: e.clientY })
+          }}
+          onNodeContextMenu={(e, n) => {
+            e.preventDefault()
+            setMenu({ x: e.clientX, y: e.clientY, nodeId: n.id })
+          }}
           nodeTypes={nodeTypes}
           colorMode="dark"
           minZoom={0.02} /* 真·无限：能缩到极远看全局分布 */
@@ -821,6 +945,8 @@ function Board(): React.JSX.Element {
           panOnScroll
           zoomOnScroll={false}
           deleteKeyCode={null}
+          edgesReconnectable={false}
+          connectionLineStyle={{ stroke: '#0A84FF', strokeWidth: 2 }}
           proOptions={{ hideAttribution: true }}
         >
           <Background
@@ -832,6 +958,7 @@ function Board(): React.JSX.Element {
           />
           <Controls position="bottom-left" showInteractive={false} />
           <MiniMap
+            className={mapActive ? 'map-visible' : 'map-hidden'}
             pannable
             zoomable
             nodeColor={(n) => {
@@ -851,15 +978,19 @@ function Board(): React.JSX.Element {
           <Panel position="top-left" className="toolbar">
             <span className="toolbar-title">TermBoard</span>
             <span className="toolbar-sep" />
-            <button className="toolbar-btn" onClick={() => addTerminal()}>
-              ＋ 终端
+            <button className="toolbar-btn" title="新建终端" onClick={() => addTerminal()}>
+              <IconTerminal />
+              <span>终端</span>
             </button>
             <span className="agent-menu-wrap">
               <button
                 className="toolbar-btn"
+                title="按预设新建 agent 终端（自动启动 claude/codex/gemini）"
                 onClick={() => setShowAgentMenu((s) => !s)}
               >
-                ＋ Agent ▾
+                <IconAgent />
+                <span>Agent</span>
+                <IconChevron />
               </button>
               {showAgentMenu && (
                 <div className="agent-menu">
@@ -883,7 +1014,8 @@ function Board(): React.JSX.Element {
             </span>
             {selectedCount >= 2 && (
               <button className="toolbar-btn accent" onClick={groupSelected}>
-                成组 ({selectedCount})
+                <IconGroup />
+                <span>成组 {selectedCount}</span>
               </button>
             )}
             {identities.length > 0 && (
@@ -901,21 +1033,124 @@ function Board(): React.JSX.Element {
                 ))}
               </select>
             )}
-            <button className="toolbar-btn" onClick={openContextHub}>
-              ✦ 上下文
+            <button className="toolbar-btn" title="项目简报（共享上下文）" onClick={openContextHub}>
+              <IconBrief />
+              <span>简报</span>
             </button>
             <button
-              className="toolbar-btn"
+              className="toolbar-btn icon-only"
               title="缩放到全部节点"
               onClick={() => void fitView({ padding: 0.2, duration: 300 })}
             >
-              适应
+              <IconFit />
             </button>
-            <button className="toolbar-btn" onClick={() => setShowIdentities(true)}>
-              凭证
+            <button
+              className="toolbar-btn icon-only"
+              title="凭证管理"
+              onClick={() => setShowIdentities(true)}
+            >
+              <IconKey />
             </button>
-            <span className="toolbar-count">{nodes.length} 节点</span>
+            <button
+              className="toolbar-btn icon-only"
+              title="设置"
+              onClick={() => setShowPresetPanel(true)}
+            >
+              <IconSettings />
+            </button>
+            <span className="toolbar-count">{nodes.length}</span>
           </Panel>
+          {menu && (
+            <div
+              className="ctx-menu"
+              style={{ left: menu.x, top: menu.y }}
+              onMouseLeave={() => setMenu(null)}
+            >
+              {!menu.nodeId && (
+                <>
+                  <button
+                    className="ctx-menu-item"
+                    onClick={() => {
+                      addTerminal()
+                      setMenu(null)
+                    }}
+                  >
+                    <IconTerminal />
+                    新建终端
+                  </button>
+                  {presets.map((p) => (
+                    <button
+                      key={p.id}
+                      className="ctx-menu-item"
+                      onClick={() => {
+                        addTerminal(p)
+                        setMenu(null)
+                      }}
+                    >
+                      <IconAgent />
+                      新建 {p.name}
+                    </button>
+                  ))}
+                  <div className="ctx-menu-sep" />
+                  <button
+                    className="ctx-menu-item"
+                    onClick={() => {
+                      openContextHub()
+                      setMenu(null)
+                    }}
+                  >
+                    <IconBrief />
+                    项目简报
+                  </button>
+                  <button
+                    className="ctx-menu-item"
+                    onClick={() => {
+                      void fitView({ padding: 0.2, duration: 300 })
+                      setMenu(null)
+                    }}
+                  >
+                    <IconFit />
+                    适应全部
+                  </button>
+                </>
+              )}
+              {menu.nodeId && (
+                <>
+                  {menuNode?.type === 'terminal' && (
+                    <>
+                      <button className="ctx-menu-item" onClick={() => bumpFont(1)}>
+                        字号放大
+                        <span className="ctx-menu-hint">⌥滚轮</span>
+                      </button>
+                      <button className="ctx-menu-item" onClick={() => bumpFont(-1)}>
+                        字号缩小
+                        <span className="ctx-menu-hint">⌥滚轮</span>
+                      </button>
+                      <div className="ctx-menu-sep" />
+                    </>
+                  )}
+                  {selectedCount >= 2 && (
+                    <button
+                      className="ctx-menu-item"
+                      onClick={() => {
+                        groupSelected()
+                        setMenu(null)
+                      }}
+                    >
+                      <IconGroup />
+                      成组（{selectedCount}）
+                    </button>
+                  )}
+                  <button className="ctx-menu-item danger" onClick={deleteMenuNode}>
+                    删除
+                    {menuNode?.type === 'terminal' && (
+                      <span className="ctx-menu-hint">结束会话</span>
+                    )}
+                  </button>
+                </>
+              )}
+            </div>
+          )}
         </ReactFlow>
       </div>
     </IdentityContext.Provider>

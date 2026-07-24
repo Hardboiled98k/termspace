@@ -2,7 +2,9 @@ import { memo, useContext, useEffect, useRef, useState } from 'react'
 import { IdentityContext } from '../identity-context'
 import { FarChip, FAR_ZOOM } from './FarChip'
 import {
+  Handle,
   NodeResizer,
+  Position,
   useReactFlow,
   useStore,
   type Node,
@@ -71,10 +73,19 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
   const zoom = useStore((s) => s.transform[2])
   const lod = zoom < LOD_ZOOM
   const far = zoom < FAR_ZOOM
+  // 连到本终端的简报节点（画布连线决定注入哪份上下文）
+  const ctxIds = useStore((s) =>
+    s.edges
+      .filter((e) => e.target === id && e.data?.kind === 'context')
+      .map((e) => e.source)
+      .sort()
+      .join(',')
+  )
   const { deleteElements, updateNodeData } = useReactFlow()
   const identities = useContext(IdentityContext)
   const [editing, setEditing] = useState(false)
   const [ctxPct, setCtxPct] = useState<number | null>(null)
+  const [fontHint, setFontHint] = useState(false)
 
   // per-node 订阅，避免高频 usage 更新走 setNodes 触发全画布 rerender
   useEffect(
@@ -121,7 +132,8 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
     void window.termboard.spawn(id, term.cols, term.rows, {
       identityId: data.identityId,
       command: data.command,
-      provider: data.provider
+      provider: data.provider,
+      contextNodeIds: ctxIds ? ctxIds.split(',') : []
     })
     const inputSub = term.onData((d) => window.termboard.write(id, d))
 
@@ -148,8 +160,9 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
       term.dispose()
     }
     // identityId/command 变更 = 重生成会话（cleanup kill → respawn）
+    // ctxIds 变更也重生成：上下文是启动时注入的
     // fontSize 故意不在依赖里：改字号只重排，不重开会话
-  }, [id, data.identityId, data.command])
+  }, [id, data.identityId, data.command, ctxIds])
 
   // 字号变更：改渲染 + refit + 通知 pty 新 cols/rows（会话不动）
   useEffect(() => {
@@ -161,9 +174,14 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
     window.termboard.resize(id, term.cols, term.rows)
   }, [id, data.fontSize])
 
+  // 字号改动时头部短暂提示当前值（⌥滚轮 / 右键菜单调节）
+  const hintTimer = useRef(0)
   const stepFont = (delta: number): void => {
     const next = Math.min(FONT_MAX, Math.max(FONT_MIN, (data.fontSize ?? FONT_DEFAULT) + delta))
     updateNodeData(id, { fontSize: next })
+    setFontHint(true)
+    window.clearTimeout(hintTimer.current)
+    hintTimer.current = window.setTimeout(() => setFontHint(false), 1200)
   }
 
   return (
@@ -172,7 +190,17 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
         far ? ` far far-${data.status}` : ''
       }`}
     >
-      <NodeResizer minWidth={360} minHeight={220} isVisible={selected} />
+      {/* 手柄透明：拖节点边角即可缩放，不用四个丑圆点；选中态改用发光边框表达 */}
+      <NodeResizer
+        minWidth={360}
+        minHeight={220}
+        isVisible
+        handleStyle={{ opacity: 0, width: 16, height: 16, border: 'none' }}
+        lineStyle={{ opacity: 0, borderWidth: 8 }}
+      />
+      {/* 左：接收（简报注入 / 被上游派活）；右：派活给下游 agent */}
+      <Handle type="target" position={Position.Left} className="tb-handle in" />
+      <Handle type="source" position={Position.Right} className="tb-handle out" />
       <div className="term-node-header">
         <span className={`status-dot ${data.status}`} />
         {editing ? (
@@ -215,11 +243,7 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
             ))}
           </select>
         )}
-        <span className="font-step nodrag" title="终端字号（⌥+滚轮亦可）">
-          <button onClick={() => stepFont(-1)}>A−</button>
-          <span className="font-step-val">{data.fontSize ?? FONT_DEFAULT}</span>
-          <button onClick={() => stepFont(1)}>A+</button>
-        </span>
+        {fontHint && <span className="font-hint">{data.fontSize ?? FONT_DEFAULT} px</span>}
         {ctxPct !== null && (
           <span
             className={`ctx-meter ${ctxPct > 80 ? 'hot' : ctxPct > 60 ? 'warm' : ''}`}
