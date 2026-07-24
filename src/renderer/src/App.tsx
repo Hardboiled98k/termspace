@@ -22,7 +22,7 @@ import TerminalNode, { type TermNode } from './nodes/TerminalNode'
 import GroupNode, { type GroupNodeT } from './nodes/GroupNode'
 import WorkerNode, { type WorkerNodeT } from './nodes/WorkerNode'
 import ContextNode, { type ContextNodeT } from './nodes/ContextNode'
-import BrowserNode, { type BrowserNodeT } from './nodes/BrowserNode'
+import BrowserNode, { type BrowserNodeT, browserViews } from './nodes/BrowserNode'
 import { IdentityContext } from './identity-context'
 import { SettingsPanel, type SettingsSection } from './SettingsPanel'
 import {
@@ -999,6 +999,46 @@ function Board(): React.JSX.Element {
   useEffect(() => {
     window.termboard.ready()
   }, [])
+
+  // tb browser 驱动：主进程转发指令 → 操作对应 webview → 回结果
+  useEffect(
+    () =>
+      window.termboard.onBrowserCmd(async (req) => {
+        const { reqId, nodeId, action, arg } = req
+        const done = (ok: boolean, result: string): void =>
+          window.termboard.browserResult({ reqId, ok, result })
+        // nodeId 为空时取第一个浏览器节点（agent 常只开一个）
+        const wv =
+          (nodeId && browserViews.get(nodeId)) ||
+          (browserViews.size ? [...browserViews.values()][0] : null)
+        if (action === 'list') {
+          return done(true, [...browserViews.keys()].join('\n') || '(画布上没有浏览器节点)')
+        }
+        if (action === 'open') {
+          addBrowser(arg)
+          return done(true, `已打开浏览器：${arg}`)
+        }
+        if (!wv) return done(false, '画布上没有浏览器节点，先 tb browser open <url>')
+        try {
+          if (action === 'goto') {
+            await wv.loadURL(arg)
+            return done(true, `已导航到 ${arg}`)
+          }
+          if (action === 'text') {
+            const t = await wv.executeJavaScript('document.body.innerText')
+            return done(true, String(t).slice(0, 8000))
+          }
+          if (action === 'js') {
+            const r = await wv.executeJavaScript(arg)
+            return done(true, typeof r === 'string' ? r : JSON.stringify(r ?? null))
+          }
+          return done(false, `未知动作 ${action}`)
+        } catch (e) {
+          return done(false, `执行失败：${String(e)}`)
+        }
+      }),
+    [addBrowser]
+  )
 
   // 把画布 agent 摘要同步给主进程（tb agents / 派活要用）
   useEffect(() => {

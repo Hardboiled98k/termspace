@@ -16,6 +16,14 @@ export type BrowserNodeT = Node<{ url: string; title?: string }, 'browser'>
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const Webview = 'webview' as any
 
+// 每个浏览器节点把自己的 webview 注册到全局表，供 tb browser 驱动
+type WvExtra = WebviewEl & {
+  executeJavaScript: (code: string) => Promise<unknown>
+  capturePage: () => Promise<{ toDataURL: () => string }>
+  loadURL: (url: string) => Promise<void>
+}
+export const browserViews = new Map<string, WvExtra>()
+
 function normalizeUrl(input: string): string {
   const t = input.trim()
   if (!t) return 'about:blank'
@@ -47,6 +55,7 @@ function BrowserNodeImpl({ id, data, selected }: NodeProps<BrowserNodeT>): React
   useEffect(() => {
     const wv = wvRef.current
     if (!wv) return
+    browserViews.set(id, wv as WvExtra)
     const onStart = (): void => setLoading(true)
     const onStop = (): void => {
       setLoading(false)
@@ -57,6 +66,7 @@ function BrowserNodeImpl({ id, data, selected }: NodeProps<BrowserNodeT>): React
     wv.addEventListener('did-start-loading', onStart)
     wv.addEventListener('did-stop-loading', onStop)
     return () => {
+      browserViews.delete(id)
       wv.removeEventListener('did-start-loading', onStart)
       wv.removeEventListener('did-stop-loading', onStop)
     }

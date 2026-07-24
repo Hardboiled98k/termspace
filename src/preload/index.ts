@@ -21,6 +21,16 @@ const api = {
   reportAgents: (list: unknown): void => {
     ipcRenderer.send('board:agents', list)
   },
+  onBrowserCmd: (
+    cb: (req: { reqId: string; nodeId: string; action: string; arg: string }) => void
+  ): (() => void) => {
+    const listener = (_e: IpcRendererEvent, req: Parameters<typeof cb>[0]): void => cb(req)
+    ipcRenderer.on('browser:cmd', listener)
+    return () => ipcRenderer.removeListener('browser:cmd', listener)
+  },
+  browserResult: (r: { reqId: string; ok: boolean; result: string }): void => {
+    ipcRenderer.send('browser:result', r)
+  },
   write: (id: string, data: string): void => {
     ipcRenderer.send('pty:write', id, data)
   },

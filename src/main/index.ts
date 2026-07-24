@@ -33,6 +33,29 @@ ipcMain.on('board:agents', (_e, list: typeof boardAgents) => {
   boardAgents = Array.isArray(list) ? list : []
 })
 
+// tb browser：主进程 ↔ renderer 往返（renderer 持有 webview）
+const browserPending = new Map<string, (r: { ok: boolean; result: string }) => void>()
+let browserReqSeq = 0
+function browserCommand(action: string, arg: string, nodeId: string): Promise<string> {
+  return new Promise((resolve) => {
+    if (!mainWin || mainWin.isDestroyed()) return resolve('窗口不可用')
+    const reqId = `br${++browserReqSeq}`
+    const timer = setTimeout(() => {
+      browserPending.delete(reqId)
+      resolve('浏览器指令超时')
+    }, 35_000)
+    browserPending.set(reqId, (r) => {
+      clearTimeout(timer)
+      resolve(r.ok ? r.result : `失败：${r.result}`)
+    })
+    mainWin.webContents.send('browser:cmd', { reqId, nodeId, action, arg })
+  })
+}
+ipcMain.on('browser:result', (_e, r: { reqId: string; ok: boolean; result: string }) => {
+  browserPending.get(r.reqId)?.(r)
+  browserPending.delete(r.reqId)
+})
+
 function sendToWin(channel: string, data: unknown): void {
   if (mainWin && !mainWin.isDestroyed()) mainWin.webContents.send(channel, data)
 }
@@ -278,9 +301,10 @@ ipcMain.handle('context:save', async (_e, nodeId: string, text: string) => {
    没有它模型不会主动去 tb 查，整个渐进式披露就白设计了。 */
 const TOOL_ROUTING_HINT = `## TermBoard 工具中枢
 本终端可用 \`tb\` 命令按需取用共享工具（不要凭记忆猜工具用法）：
-- 遇到需要专门方法的任务（设计/浏览器/出图/部署/数据/视频/文档等）先跑 \`tb skills <关键词>\`
+- 遇到需要专门方法的任务（设计/出图/部署/数据/视频/文档等）先跑 \`tb skills <关键词>\`
 - 命中后用 \`tb load <名称>\` 取全文再照做
-- \`tb agents\` 可看本画布其他 agent 终端`
+- \`tb agents\` 看本画布其他 agent 终端，\`tb ask <id> <任务>\` 派活给它们
+- 需要测网页时用 \`tb browser open <url>\`，再 \`tb browser text\` / \`tb browser js <代码>\` 检查——直接开在画布上，用户能实时看到`
 
 /** 把连到该终端的所有简报节点合并成一个文件，返回路径（无连线则返回空串） */
 async function buildMergedContext(termId: string, ctxIds: string[]): Promise<string> {
@@ -361,7 +385,8 @@ app.whenReady().then(async () => {
             },
             target,
             task
-          )
+          ),
+        browser: (action, arg, nodeId) => browserCommand(action, arg, nodeId)
       }
     )
   } catch (err) {

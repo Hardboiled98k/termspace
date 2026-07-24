@@ -44,6 +44,15 @@ interface TermboardApi {
   reportAgents: (
     list: { id: string; title: string; provider?: string; status: string }[]
   ) => void
+  onBrowserCmd: (
+    cb: (req: {
+      reqId: string
+      nodeId: string
+      action: string
+      arg: string
+    }) => void | Promise<void>
+  ) => () => void
+  browserResult: (r: { reqId: string; ok: boolean; result: string }) => void
   write: (id: string, data: string) => void
   resize: (id: string, cols: number, rows: number) => void
   kill: (id: string) => void

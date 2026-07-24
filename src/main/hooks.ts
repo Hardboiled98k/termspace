@@ -161,6 +161,14 @@ case "$cmd" in
     # 派活是同步等待（可能几分钟），拉长超时
     curl -s -m 300 -H "$H" --get \
       --data-urlencode "target=$target" --data-urlencode "task=$*" "$BASE/tb/ask" ;;
+  browser|web)
+    action="$1"; shift 2>/dev/null
+    node=""
+    # 可选 --node <id> 指定目标浏览器节点
+    if [ "$1" = "--node" ]; then node="$2"; shift 2; fi
+    curl -s -m 40 -H "$H" --get \
+      --data-urlencode "action=$action" --data-urlencode "arg=$*" \
+      --data-urlencode "node=$node" "$BASE/tb/browser" ;;
   ""|help|-h|--help)
     cat <<'EOF'
 tb — TermBoard 工具中枢
@@ -169,6 +177,11 @@ tb — TermBoard 工具中枢
   tb load <名称>           取出该 skill 全文，按其指示执行
   tb agents                列出本画布上的其他 agent 终端
   tb ask <节点id> <任务>   把任务派给另一个终端里的 agent，等它做完返回结果
+  tb browser open <url>    在画布上打开浏览器测试目标网页
+  tb browser goto <url>    让画布浏览器导航到某地址
+  tb browser text          抓取当前页面可见文本
+  tb browser js <代码>     在页面里执行 JS 并返回结果（如 document.title）
+  tb browser list          列出画布上的浏览器节点
 
 用法：先 skills 找、load 取全文，不要凭记忆猜 skill。
 派活前先 tb agents 看有哪些节点，再 tb ask <id> "任务描述"。
@@ -184,6 +197,7 @@ export interface TbHandlers {
   load: (name: string) => Promise<string>
   agents: () => Promise<string>
   ask: (target: string, task: string) => Promise<string>
+  browser: (action: string, arg: string, nodeId: string) => Promise<string>
 }
 
 export async function startHookSystem(
@@ -236,7 +250,13 @@ export async function startHookSystem(
               ? tb.agents()
               : route === 'ask'
                 ? tb.ask(u.searchParams.get('target') ?? '', u.searchParams.get('task') ?? '')
-                : Promise.resolve('unknown route')
+                : route === 'browser'
+                  ? tb.browser(
+                      u.searchParams.get('action') ?? '',
+                      u.searchParams.get('arg') ?? '',
+                      u.searchParams.get('node') ?? ''
+                    )
+                  : Promise.resolve('unknown route')
       void run.then(reply).catch(() => reply('内部错误'))
       return
     }
