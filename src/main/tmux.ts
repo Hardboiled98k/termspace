@@ -13,10 +13,10 @@ import path from 'node:path'
 
 const SOCKET = 'termboard'
 
-const CONF = `# TermBoard 托管 tmux 配置（自动生成，勿手改）
+const conf = (scrollback: number): string => `# TermBoard 托管 tmux 配置（自动生成，勿手改）
 set -g status off
 set -g mouse on
-set -g history-limit 8000
+set -g history-limit ${Math.max(500, scrollback)}
 set -g default-terminal "xterm-256color"
 set -sg escape-time 10
 set -g destroy-unattached off
@@ -26,19 +26,20 @@ set -as terminal-features ",*:clipboard"
 `
 
 let tmuxPath: string | null | undefined // undefined=未探测 null=没有
-let confReady = false
+let confWritten = -1 // 已写入 conf 的 scrollback 值（变了要重写）
 
 function confPath(): string {
   return path.join(app.getPath('userData'), 'tmux.conf')
 }
 
-export async function ensureTmux(): Promise<string | null> {
+export async function ensureTmux(scrollback = 8000): Promise<string | null> {
   if (tmuxPath === undefined) {
-    tmuxPath = ['/opt/homebrew/bin/tmux', '/usr/local/bin/tmux', '/usr/bin/tmux'].find(existsSync) ?? null
+    tmuxPath =
+      ['/opt/homebrew/bin/tmux', '/usr/local/bin/tmux', '/usr/bin/tmux'].find(existsSync) ?? null
   }
-  if (tmuxPath && !confReady) {
-    await writeFile(confPath(), CONF)
-    confReady = true
+  if (tmuxPath && confWritten !== scrollback) {
+    await writeFile(confPath(), conf(scrollback))
+    confWritten = scrollback
   }
   return tmuxPath
 }

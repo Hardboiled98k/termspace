@@ -14,6 +14,7 @@ import {
 } from './identity-store'
 import { listPresets, upsertPreset, deletePreset } from './preset-store'
 import { startWorkerWatch, workerAction, type WorkerWatch } from './worker-watch'
+import { getSettings, setSettings, type Settings } from './settings-store'
 import { ensureTmux, hasSession, killSession, buildSpawnArgs } from './tmux'
 
 // dev 下 app 名默认是 "Electron"，userData 会指向共享目录 → 显式隔离
@@ -73,7 +74,9 @@ function createWindow(): BrowserWindow {
   })
 
   if (process.env['ELECTRON_RENDERER_URL']) {
-    void win.loadURL(process.env['ELECTRON_RENDERER_URL'])
+    // TERMBOARD_PANEL=general 等：自检截图时直接展开设置面板
+    const q = process.env['TERMBOARD_PANEL'] ? `?panel=${process.env['TERMBOARD_PANEL']}` : ''
+    void win.loadURL(process.env['ELECTRON_RENDERER_URL'] + q)
   } else {
     void win.loadFile(path.join(__dirname, '../renderer/index.html'))
   }
@@ -92,7 +95,11 @@ ipcMain.handle(
   'pty:spawn',
   async (e, id: string, cols: number, rows: number, opts?: SpawnOpts) => {
     releasePty(id) // 只释放客户端；有 tmux 会话则下面 -A 接回
-    const shell = process.env['SHELL'] || '/bin/zsh'
+    const settings = await getSettings()
+    const shell =
+      (settings.defaultShell && existsSync(settings.defaultShell) ? settings.defaultShell : '') ||
+      process.env['SHELL'] ||
+      '/bin/zsh'
     const env: Record<string, string> = {}
     for (const [k, v] of Object.entries(process.env)) {
       if (v !== undefined) env[k] = v
@@ -113,7 +120,7 @@ ipcMain.handle(
     const idEnv = await resolveIdentityEnv(opts?.identityId)
     if (idEnv) Object.assign(env, idEnv)
 
-  const tmux = await ensureTmux()
+  const tmux = settings.tmuxEnabled ? await ensureTmux(settings.scrollback) : null
   // fresh 判定：无可接会话 = 冷启动，才写入预设启动命令（重接不能重复敲）
   const fresh = tmux ? !(await hasSession(id)) : true
   const cwd = opts?.cwd && existsSync(opts.cwd) ? opts.cwd : os.homedir()
@@ -181,6 +188,15 @@ ipcMain.handle(
     return r
   }
 )
+
+// ── 设置 IPC ──
+ipcMain.handle('settings:get', () => getSettings())
+ipcMain.handle('settings:set', (_e, patch: Partial<Settings>) => setSettings(patch))
+ipcMain.handle('hooks:status', () => ({
+  installed: !!hookSystem,
+  endpoint: hookSystem?.endpointFile ?? '',
+  settingsPath: path.join(os.homedir(), '.claude', 'settings.json')
+}))
 
 // ── 选择项目文件夹 ──
 ipcMain.handle('dialog:pickFolder', async () => {

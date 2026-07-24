@@ -14,6 +14,9 @@ const api = {
     }
   ): Promise<void> => ipcRenderer.invoke('pty:spawn', id, cols, rows, opts),
   pickFolder: (): Promise<string | null> => ipcRenderer.invoke('dialog:pickFolder'),
+  getSettings: (): Promise<unknown> => ipcRenderer.invoke('settings:get'),
+  setSettings: (patch: unknown): Promise<unknown> => ipcRenderer.invoke('settings:set', patch),
+  hooksStatus: (): Promise<unknown> => ipcRenderer.invoke('hooks:status'),
   write: (id: string, data: string): void => {
     ipcRenderer.send('pty:write', id, data)
   },

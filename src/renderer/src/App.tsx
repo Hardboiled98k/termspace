@@ -23,6 +23,7 @@ import GroupNode, { type GroupNodeT } from './nodes/GroupNode'
 import WorkerNode, { type WorkerNodeT } from './nodes/WorkerNode'
 import ContextNode, { type ContextNodeT } from './nodes/ContextNode'
 import { IdentityContext } from './identity-context'
+import { SettingsPanel, type SettingsSection } from './SettingsPanel'
 import {
   IconTerminal,
   IconAgent,
@@ -278,12 +279,10 @@ function BoardHUD({
 /* ── Identity 管理面板 ── */
 function IdentityPanel({
   identities,
-  onChanged,
-  onClose
+  onChanged
 }: {
   identities: IdentityMeta[]
   onChanged: (list: IdentityMeta[]) => void
-  onClose: () => void
 }): React.JSX.Element {
   const [name, setName] = useState('')
   const [provider, setProvider] = useState<IdentityMeta['provider']>('claude')
@@ -314,14 +313,8 @@ function IdentityPanel({
   }
 
   return (
-    <div className="identity-overlay" onClick={onClose}>
-      <div className="identity-panel" onClick={(e) => e.stopPropagation()}>
-        <div className="identity-panel-head">
-          <span>凭证管理</span>
-          <button className="term-node-close" onClick={onClose}>
-            ✕
-          </button>
-        </div>
+    <div className="settings-section">
+        <h3 className="settings-h">凭证管理</h3>
         <div className="identity-list">
           {identities.length === 0 && <div className="identity-empty">还没有凭证</div>}
           {identities.map((i) => (
@@ -368,7 +361,6 @@ function IdentityPanel({
             保存凭证（Keychain 加密）
           </button>
         </div>
-      </div>
     </div>
   )
 }
@@ -377,13 +369,11 @@ function IdentityPanel({
 function PresetPanel({
   presets,
   identities,
-  onChanged,
-  onClose
+  onChanged
 }: {
   presets: Preset[]
   identities: IdentityMeta[]
   onChanged: (list: Preset[]) => void
-  onClose: () => void
 }): React.JSX.Element {
   const [name, setName] = useState('')
   const [provider, setProvider] = useState<Preset['provider']>('claude')
@@ -414,14 +404,11 @@ function PresetPanel({
     identities.find((i) => i.id === id)?.name ?? ''
 
   return (
-    <div className="identity-overlay" onClick={onClose}>
-      <div className="identity-panel" onClick={(e) => e.stopPropagation()}>
-        <div className="identity-panel-head">
-          <span>Agent 节点预设</span>
-          <button className="term-node-close" onClick={onClose}>
-            ✕
-          </button>
-        </div>
+    <div className="settings-section">
+        <h3 className="settings-h">Agent 节点预设</h3>
+        <p className="settings-note">
+          预设 = 启动命令 + 身份。工具栏「Agent」按预设一键起节点，终端落在当前项目目录。
+        </p>
         <div className="identity-list">
           {presets.map((p) => (
             <div key={p.id} className="identity-row">
@@ -477,7 +464,6 @@ function PresetPanel({
             保存预设
           </button>
         </div>
-      </div>
     </div>
   )
 }
@@ -581,8 +567,10 @@ function Board(): React.JSX.Element {
   const [identities, setIdentities] = useState<IdentityMeta[]>([])
   const [presets, setPresets] = useState<Preset[]>([])
   const [defaultIdentity, setDefaultIdentity] = useState('')
-  const [showIdentities, setShowIdentities] = useState(false)
-  const [showPresetPanel, setShowPresetPanel] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState<SettingsSection | null>(
+    // 自检截图模式下直接展开设置面板
+    new URLSearchParams(location.search).get('panel') as SettingsSection | null
+  )
   const [showAgentMenu, setShowAgentMenu] = useState(false)
   const [menu, setMenu] = useState<{ x: number; y: number; nodeId?: string } | null>(null)
   const [mapActive, setMapActive] = useState(false)
@@ -1012,19 +1000,16 @@ function Board(): React.JSX.Element {
   return (
     <IdentityContext.Provider value={identities}>
       <div className="h-screen w-screen">
-        {showIdentities && (
-          <IdentityPanel
-            identities={identities}
-            onChanged={setIdentities}
-            onClose={() => setShowIdentities(false)}
-          />
-        )}
-        {showPresetPanel && (
-          <PresetPanel
-            presets={presets}
-            identities={identities}
-            onChanged={setPresets}
-            onClose={() => setShowPresetPanel(false)}
+        {settingsOpen && (
+          <SettingsPanel
+            initial={settingsOpen}
+            onClose={() => setSettingsOpen(null)}
+            renderPresets={() => (
+              <PresetPanel presets={presets} identities={identities} onChanged={setPresets} />
+            )}
+            renderIdentities={() => (
+              <IdentityPanel identities={identities} onChanged={setIdentities} />
+            )}
           />
         )}
         <ReactFlow
@@ -1144,7 +1129,7 @@ function Board(): React.JSX.Element {
                     className="agent-menu-item manage"
                     onClick={() => {
                       setShowAgentMenu(false)
-                      setShowPresetPanel(true)
+                      setSettingsOpen('presets')
                     }}
                   >
                     管理预设…
@@ -1187,14 +1172,14 @@ function Board(): React.JSX.Element {
             <button
               className="toolbar-btn icon-only"
               title="凭证管理"
-              onClick={() => setShowIdentities(true)}
+              onClick={() => setSettingsOpen('identities')}
             >
               <IconKey />
             </button>
             <button
               className="toolbar-btn icon-only"
               title="设置"
-              onClick={() => setShowPresetPanel(true)}
+              onClick={() => setSettingsOpen('general')}
             >
               <IconSettings />
             </button>

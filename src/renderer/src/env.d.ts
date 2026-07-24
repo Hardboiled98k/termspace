@@ -1,5 +1,13 @@
 /// <reference types="vite/client" />
 
+interface AppSettings {
+  defaultFontSize: number
+  defaultShell: string
+  tmuxEnabled: boolean
+  scrollback: number
+  skillDirs: string[]
+}
+
 interface IdentityMeta {
   id: string
   name: string
@@ -29,6 +37,9 @@ interface TermboardApi {
     }
   ) => Promise<void>
   pickFolder: () => Promise<string | null>
+  getSettings: () => Promise<AppSettings>
+  setSettings: (patch: Partial<AppSettings>) => Promise<AppSettings>
+  hooksStatus: () => Promise<{ installed: boolean; endpoint: string; settingsPath: string }>
   write: (id: string, data: string) => void
   resize: (id: string, cols: number, rows: number) => void
   kill: (id: string) => void
