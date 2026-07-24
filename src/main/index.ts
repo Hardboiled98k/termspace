@@ -12,6 +12,7 @@ import {
   resolveIdentityEnv
 } from './identity-store'
 import { listPresets, upsertPreset, deletePreset } from './preset-store'
+import { startWorkerWatch, type WorkerWatch } from './worker-watch'
 
 // dev 下 app 名默认是 "Electron"，userData 会指向共享目录 → 显式隔离
 app.setPath('userData', path.join(app.getPath('appData'), 'termboard'))
@@ -19,6 +20,7 @@ app.setPath('userData', path.join(app.getPath('appData'), 'termboard'))
 const ptys = new Map<string, pty.IPty>()
 let hookSystem: HookSystem | null = null
 let contextTail: ContextTail | null = null
+let workerWatch: WorkerWatch | null = null
 let mainWin: BrowserWindow | null = null
 
 function sendToWin(channel: string, data: unknown): void {
@@ -190,6 +192,9 @@ app.whenReady().then(async () => {
     console.error('hook system failed to start:', err)
   }
 
+  // F7 worker 卡片：轮询 cdx list（franke_skills 引擎）
+  workerWatch = startWorkerWatch((rows) => sendToWin('workers:update', rows))
+
   // 额度 HUD：读官方真值文件（statusline 同源），60s 轮询
   const quotaFile = path.join(os.homedir(), '.claude', 'claude-usage.json')
   const pushQuota = async (): Promise<void> => {
@@ -205,8 +210,12 @@ app.whenReady().then(async () => {
 
   const win = createWindow()
   mainWin = win
-  // 渲染层就绪后立即推一次（reload 后也会重推）
-  win.webContents.on('did-finish-load', () => void pushQuota())
+  // 渲染层 React mount 后主动握手 → 重推全部状态
+  // （did-finish-load 早于 React 订阅注册，直接推会竞态丢失）
+  ipcMain.on('renderer:ready', () => {
+    void pushQuota()
+    workerWatch?.refresh()
+  })
 
   // 自检模式：TERMBOARD_SHOT=/path/x.png 启动 → 6 秒后截图退出
   const shotPath = process.env['TERMBOARD_SHOT']
@@ -229,5 +238,7 @@ app.whenReady().then(async () => {
 app.on('window-all-closed', () => {
   for (const id of [...ptys.keys()]) killPty(id)
   hookSystem?.dispose()
+  workerWatch?.dispose()
+  contextTail?.dispose()
   app.quit()
 })

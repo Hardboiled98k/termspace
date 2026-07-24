@@ -47,6 +47,20 @@ interface TermboardApi {
       seven_day?: { used_percentage: number; resets_at: number }
     }) => void
   ) => () => void
+  ready: () => void
+  onWorkers: (
+    cb: (
+      rows: {
+        task: string
+        backend: string
+        model?: string
+        state: string
+        repo?: string
+        age_s?: number
+        question?: string | null
+      }[]
+    ) => void
+  ) => () => void
   listPresets: () => Promise<Preset[]>
   upsertPreset: (input: Omit<Preset, 'id'> & { id?: string }) => Promise<Preset[]>
   deletePreset: (id: string) => Promise<Preset[]>

@@ -15,11 +15,12 @@ import {
 import '@xyflow/react/dist/style.css'
 import TerminalNode, { type TermNode } from './nodes/TerminalNode'
 import GroupNode, { type GroupNodeT } from './nodes/GroupNode'
+import WorkerNode, { type WorkerNodeT } from './nodes/WorkerNode'
 import { IdentityContext } from './identity-context'
 
-export type BoardNode = TermNode | GroupNodeT
+export type BoardNode = TermNode | GroupNodeT | WorkerNodeT
 
-const nodeTypes = { terminal: TerminalNode, group: GroupNode }
+const nodeTypes = { terminal: TerminalNode, group: GroupNode, worker: WorkerNode }
 
 const statusColor: Record<string, string> = {
   running: '#0A84FF',
@@ -421,7 +422,7 @@ function fromSaved(s: SavedNode): BoardNode {
   }
 }
 
-function toSaved(n: BoardNode): SavedNode {
+function toSaved(n: Exclude<BoardNode, WorkerNodeT>): SavedNode {
   const base = {
     id: n.id,
     x: n.position.x,
@@ -481,6 +482,49 @@ function Board(): React.JSX.Element {
     [fitView]
   )
 
+  // F7：cdx worker 状态 → 卡片节点（upsert 保留用户拖过的位置；不持久化）
+  useEffect(
+    () =>
+      window.termboard.onWorkers((rows) => {
+        setNodes((ns) => {
+          const existing = new Map(
+            ns.filter((n) => n.type === 'worker').map((n) => [n.id, n])
+          )
+          const others = ns.filter((n) => n.type !== 'worker')
+          // 新卡片放到现有内容右侧一列
+          const baseX =
+            others.length > 0
+              ? Math.max(...others.map((n) => n.position.x + (n.width ?? 580))) + 80
+              : 80
+          let placed = 0
+          const workers: BoardNode[] = rows.map((r) => {
+            const id = `w:${r.task}`
+            const prev = existing.get(id)
+            const data = {
+              task: r.task,
+              backend: r.backend,
+              model: r.model,
+              state: r.state,
+              repo: r.repo,
+              question: r.question,
+              ageS: r.age_s
+            }
+            if (prev) return { ...prev, data } as BoardNode
+            return {
+              id,
+              type: 'worker' as const,
+              position: { x: baseX, y: 80 + placed++ * 150 },
+              width: 260,
+              height: 130,
+              data
+            }
+          })
+          return [...others, ...workers]
+        })
+      }),
+    []
+  )
+
   useEffect(() => {
     void window.termboard.listIdentities().then(setIdentities)
     void window.termboard.listPresets().then(setPresets)
@@ -511,7 +555,10 @@ function Board(): React.JSX.Element {
     if (!loaded) return
     const t = setTimeout(() => {
       void window.termboard.saveWorkspace({
-        nodes: nodes.map(toSaved),
+        // worker 卡片是运行时投影（cdx 状态），不持久化
+        nodes: nodes
+          .filter((n): n is Exclude<BoardNode, WorkerNodeT> => n.type !== 'worker')
+          .map(toSaved),
         viewport: viewportRef.current ?? undefined
       })
     }, 500)
@@ -651,6 +698,11 @@ function Board(): React.JSX.Element {
     })
   }, [])
 
+  // 所有订阅 effect 注册完之后握手：主进程收到才重推 quota/workers（防启动竞态）
+  useEffect(() => {
+    window.termboard.ready()
+  }, [])
+
   const selectedCount = nodes.filter(
     (n) => n.type === 'terminal' && n.selected && !n.parentId
   ).length
@@ -697,11 +749,16 @@ function Board(): React.JSX.Element {
           <MiniMap
             pannable
             zoomable
-            nodeColor={(n) =>
-              n.type === 'group'
-                ? statusColor['group']
-                : statusColor[(n.data as { status?: string }).status ?? 'idle']
-            }
+            nodeColor={(n) => {
+              if (n.type === 'group') return statusColor['group']
+              if (n.type === 'worker') {
+                const st = (n.data as { state?: string }).state
+                if (st === 'working') return statusColor['running']
+                if (st === 'awaiting_reply' || st === 'stalled') return statusColor['attention']
+                return statusColor['idle']
+              }
+              return statusColor[(n.data as { status?: string }).status ?? 'idle']
+            }}
             nodeStrokeWidth={3}
           />
           <BoardHUD nodes={nodes} ctxMap={ctxMap} onFocus={focusNode} />

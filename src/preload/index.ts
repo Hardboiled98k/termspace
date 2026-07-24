@@ -51,6 +51,14 @@ const api = {
     ipcRenderer.on('agent:context', listener)
     return () => ipcRenderer.removeListener('agent:context', listener)
   },
+  ready: (): void => {
+    ipcRenderer.send('renderer:ready')
+  },
+  onWorkers: (cb: (rows: unknown[]) => void): (() => void) => {
+    const listener = (_e: IpcRendererEvent, rows: unknown[]): void => cb(rows)
+    ipcRenderer.on('workers:update', listener)
+    return () => ipcRenderer.removeListener('workers:update', listener)
+  },
   listPresets: (): Promise<unknown> => ipcRenderer.invoke('preset:list'),
   upsertPreset: (input: unknown): Promise<unknown> => ipcRenderer.invoke('preset:upsert', input),
   deletePreset: (id: string): Promise<unknown> => ipcRenderer.invoke('preset:delete', id),
