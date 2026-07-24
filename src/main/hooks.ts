@@ -181,6 +181,7 @@ tb — TermBoard 工具中枢
   tb browser goto <url>    让画布浏览器导航到某地址
   tb browser text          抓取当前页面可见文本
   tb browser js <代码>     在页面里执行 JS 并返回结果（如 document.title）
+  tb browser shot          截图当前页面，返回图片路径（可用读图能力查看）
   tb browser list          列出画布上的浏览器节点
 
 用法：先 skills 找、load 取全文，不要凭记忆猜 skill。

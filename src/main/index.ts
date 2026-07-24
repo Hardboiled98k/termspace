@@ -17,7 +17,14 @@ import { startWorkerWatch, workerAction, type WorkerWatch } from './worker-watch
 import { getSettings, setSettings, type Settings } from './settings-store'
 import { searchSkills, loadSkill, listSkills } from './skill-index'
 import { delegate, noteTranscript, noteStatus, dropNode } from './delegate'
-import { ensureTmux, hasSession, killSession, buildSpawnArgs } from './tmux'
+import {
+  ensureTmux,
+  hasSession,
+  killSession,
+  buildSpawnArgs,
+  reapOrphanSessions,
+  capturePane
+} from './tmux'
 
 // dev 下 app 名默认是 "Electron"，userData 会指向共享目录 → 显式隔离
 app.setPath('userData', path.join(app.getPath('appData'), 'termboard'))
@@ -31,6 +38,12 @@ let mainWin: BrowserWindow | null = null
 let boardAgents: { id: string; title: string; provider?: string; status: string }[] = []
 ipcMain.on('board:agents', (_e, list: typeof boardAgents) => {
   boardAgents = Array.isArray(list) ? list : []
+})
+
+// 全工作区已知节点 id（跨所有项目）→ 清理不在其中的孤儿 tmux 会话
+ipcMain.handle('sessions:reap', async (_e, knownIds: string[]) => {
+  const keep = new Set([...(Array.isArray(knownIds) ? knownIds : []), ...ptys.keys()])
+  return reapOrphanSessions(keep)
 })
 
 // tb browser：主进程 ↔ renderer 往返（renderer 持有 webview）
@@ -60,11 +73,28 @@ function sendToWin(channel: string, data: unknown): void {
   if (mainWin && !mainWin.isDestroyed()) mainWin.webContents.send(channel, data)
 }
 
+/** cold-restore 快照路径：release/退出前抓屏落盘，机器重启后 tmux 死了也能回灌 */
+const scrollbackFile = (id: string): string =>
+  path.join(app.getPath('userData'), 'scrollback', `${id.replace(/[^a-zA-Z0-9_-]/g, '_')}.txt`)
+
+async function snapshotScrollback(id: string): Promise<void> {
+  try {
+    const content = await capturePane(id)
+    if (!content) return
+    const f = scrollbackFile(id)
+    await mkdir(path.dirname(f), { recursive: true })
+    await writeFile(f, content)
+  } catch {
+    // 抓屏失败不影响主流程
+  }
+}
+
 /** 只杀客户端，tmux 会话存活（reload / app 退出 / 重挂载）— 续存的关键 */
 function releasePty(id: string): void {
   const p = ptys.get(id)
   if (!p) return
   ptys.delete(id)
+  void snapshotScrollback(id) // 先抓屏落盘（机器重启后 cold-restore 用）
   try {
     p.kill()
   } catch {
@@ -158,6 +188,15 @@ ipcMain.handle(
   const tmux = settings.tmuxEnabled ? await ensureTmux(settings.scrollback) : null
   // fresh 判定：无可接会话 = 冷启动，才写入预设启动命令（重接不能重复敲）
   const fresh = tmux ? !(await hasSession(id)) : true
+  // cold-restore：冷启动且有旧快照 → 先把上次画面回灌进 xterm（机器重启后恢复历史）
+  let coldSnapshot = ''
+  if (fresh) {
+    try {
+      coldSnapshot = await readFile(scrollbackFile(id), 'utf8')
+    } catch {
+      // 无快照
+    }
+  }
   const cwd = opts?.cwd && existsSync(opts.cwd) ? opts.cwd : os.homedir()
   const { file, args } = buildSpawnArgs(tmux, id, shell, cwd, env)
   const p = pty.spawn(file, args, {
@@ -178,6 +217,13 @@ ipcMain.handle(
   }
 
   const wc = e.sender
+  // 先把冷启动快照推给 xterm（灰显 + 分隔线），再让实时输出接上
+  if (coldSnapshot && !wc.isDestroyed()) {
+    wc.send(
+      `pty:data:${id}`,
+      `${coldSnapshot}\r\n\x1b[38;5;244m── 会话已恢复（上次画面）──\x1b[0m\r\n`
+    )
+  }
   p.onData((data) => {
     if (!wc.isDestroyed()) wc.send(`pty:data:${id}`, data)
   })
@@ -386,7 +432,23 @@ app.whenReady().then(async () => {
             target,
             task
           ),
-        browser: (action, arg, nodeId) => browserCommand(action, arg, nodeId)
+        browser: async (action, arg, nodeId) => {
+          const r = await browserCommand(action, arg, nodeId)
+          // 截图：把 data URL 落盘成 png，返回路径给 agent 读图
+          if (action === 'shot' && r.startsWith('data:image')) {
+            try {
+              const b64 = r.split(',')[1] ?? ''
+              const dir = path.join(app.getPath('userData'), 'shots')
+              await mkdir(dir, { recursive: true })
+              const f = path.join(dir, `shot-${Date.now().toString(36)}.png`)
+              await writeFile(f, Buffer.from(b64, 'base64'))
+              return `截图已存：${f}\n（用你的读图能力打开此文件查看页面）`
+            } catch (err) {
+              return `截图保存失败：${String(err)}`
+            }
+          }
+          return r
+        }
       }
     )
   } catch (err) {

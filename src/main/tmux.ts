@@ -63,6 +63,54 @@ export function killSession(nodeId: string): Promise<boolean> {
   return run(['kill-session', '-t', sessionName(nodeId)])
 }
 
+/** 列出所有 tb- 会话名（用于孤儿清理） */
+export function listSessions(): Promise<string[]> {
+  return new Promise((resolve) => {
+    if (!tmuxPath) return resolve([])
+    execFile(
+      tmuxPath,
+      ['-L', SOCKET, 'list-sessions', '-F', '#{session_name}'],
+      { timeout: 5000 },
+      (err, stdout) => {
+        if (err) return resolve([]) // 无 server = 无会话
+        resolve(
+          stdout
+            .split('\n')
+            .map((s) => s.trim())
+            .filter((s) => s.startsWith('tb-'))
+        )
+      }
+    )
+  })
+}
+
+/** 杀掉不在存活节点集合里的孤儿会话，返回清理数量 */
+export async function reapOrphanSessions(liveNodeIds: Set<string>): Promise<number> {
+  const live = new Set([...liveNodeIds].map(sessionName))
+  const sessions = await listSessions()
+  let n = 0
+  for (const s of sessions) {
+    if (!live.has(s)) {
+      await run(['kill-session', '-t', s])
+      n++
+    }
+  }
+  return n
+}
+
+/** cold-restore：抓某会话当前屏内容（机器重启后 tmux server 已死则返回空） */
+export function capturePane(nodeId: string): Promise<string> {
+  return new Promise((resolve) => {
+    if (!tmuxPath) return resolve('')
+    execFile(
+      tmuxPath,
+      ['-L', SOCKET, 'capture-pane', '-p', '-e', '-t', sessionName(nodeId), '-S', '-800'],
+      { timeout: 5000, maxBuffer: 4 * 1024 * 1024 },
+      (err, stdout) => resolve(err ? '' : stdout)
+    )
+  })
+}
+
 /** 组装 PTY 程序与参数：tmux 可用 → tmux 客户端；否则纯 shell */
 export function buildSpawnArgs(
   tmux: string | null,

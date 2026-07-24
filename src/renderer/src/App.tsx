@@ -712,6 +712,10 @@ function Board(): React.JSX.Element {
       setActiveProject(act)
       applyBoard(boardsRef.current[act])
       setLoaded(true)
+      // 清理孤儿 tmux 会话：全工作区所有项目的节点 id 都保留，其余杀掉
+      const known = Object.values(boardsRef.current).flatMap((b) => b.nodes.map((n) => n.id))
+      // 延迟 5s，等活跃画布节点 spawn 完（它们也在 ptys 里被保护）
+      setTimeout(() => void window.termboard.reapSessions(known), 5000)
     })
   }, [applyBoard])
 
@@ -1031,6 +1035,11 @@ function Board(): React.JSX.Element {
           if (action === 'js') {
             const r = await wv.executeJavaScript(arg)
             return done(true, typeof r === 'string' ? r : JSON.stringify(r ?? null))
+          }
+          if (action === 'shot') {
+            const img = await wv.capturePage()
+            // arg 为落盘路径（主进程给），data URL 转 base64 回传由主进程存文件
+            return done(true, img.toDataURL())
           }
           return done(false, `未知动作 ${action}`)
         } catch (e) {
