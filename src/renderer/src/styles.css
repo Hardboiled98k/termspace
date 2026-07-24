@@ -1,0 +1,342 @@
+@import 'tailwindcss';
+
+/* ── 设计 token · Apple 系统深色规范（与 DESIGN.md 同步）──
+   参考: apple-design-skill tokens + macOS 深色系统色 */
+:root {
+  --tb-bg: #0f0f10; /* vibrancy 失效时的兜底底色 */
+  --tb-panel: #1c1c1e; /* 卡片 · systemGray6 dark */
+  --tb-panel-glass: rgba(28, 28, 30, 0.72);
+  --tb-terminal: #131315; /* 终端内部 */
+  --tb-hairline: rgba(255, 255, 255, 0.09); /* 发丝线 */
+  --tb-hairline-strong: rgba(255, 255, 255, 0.16);
+  --tb-text: #f5f5f7;
+  --tb-muted: #98989f; /* secondaryLabel dark */
+  --tb-blue: #0a84ff; /* running · systemBlue dark */
+  --tb-orange: #ff9f0a; /* needs-you · systemOrange dark */
+  --tb-red: #ff453a;
+  --tb-green: #30d158;
+  --tb-idle: #48484a;
+  --tb-radius: 12px;
+  --tb-radius-pill: 980px;
+  --tb-font-mono: ui-monospace, 'SF Mono', Menlo, monospace;
+  --tb-font-ui:
+    -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', sans-serif;
+  /* 多层阴影：贴地 + 环境光（apple-design-skill 风格） */
+  --tb-shadow-card:
+    0 0 0 0.5px rgba(0, 0, 0, 0.4),
+    0 2px 8px rgba(0, 0, 0, 0.24),
+    0 16px 40px rgba(0, 0, 0, 0.4);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  /* 深色半透明底压住 vibrancy（under-window 透壁纸，浅色壁纸会翻白）——
+     保留 ~18% 透出率维持玻璃感，整体始终深色 */
+  background: rgba(16, 16, 18, 0.82);
+  color: var(--tb-text);
+  font-family: var(--tb-font-ui);
+  letter-spacing: -0.01em;
+  user-select: none;
+  overflow: hidden;
+}
+
+/* 画布：透明底 + 细点阵，玻璃感来自窗口 vibrancy */
+.react-flow,
+.react-flow__pane {
+  background: transparent !important;
+}
+.react-flow__background {
+  opacity: 0.55;
+}
+
+/* ── 终端节点 · macOS 窗口质感 ───────────────────────── */
+.term-node {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  background: var(--tb-panel);
+  border-radius: var(--tb-radius);
+  /* 不设 overflow:hidden —— 会把 NodeResizer 骑边手柄裁到没法点；
+     圆角裁剪由 header/body/lod 各自承担 */
+  box-shadow: var(--tb-shadow-card);
+  /* 发丝线 + 顶部内高光（Apple 卡片细节） */
+  border: 0.5px solid var(--tb-hairline);
+}
+.term-node::after {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.07), transparent);
+  pointer-events: none;
+}
+
+.term-node.selected {
+  border-color: var(--tb-hairline-strong);
+}
+
+/* 状态语义 glow：柔和克制，只给运行/等待状态。
+   呼吸动画只动 ::before 的 opacity（合成器加速）——
+   直接对 box-shadow 做 keyframes 会让主线程每帧 repaint */
+.term-node.status-running {
+  border-color: rgba(10, 132, 255, 0.45);
+  box-shadow:
+    0 0 0 1px rgba(10, 132, 255, 0.22),
+    0 0 16px rgba(10, 132, 255, 0.1),
+    var(--tb-shadow-card);
+}
+.term-node.status-running::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  box-shadow:
+    0 0 0 1px rgba(10, 132, 255, 0.3),
+    0 0 28px rgba(10, 132, 255, 0.22);
+  opacity: 0;
+  animation: tb-breathe 3.6s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes tb-breathe {
+  50% {
+    opacity: 1;
+  }
+}
+
+.term-node.status-attention {
+  border-color: rgba(255, 159, 10, 0.5);
+  box-shadow:
+    0 0 0 1px rgba(255, 159, 10, 0.28),
+    0 0 20px rgba(255, 159, 10, 0.16),
+    var(--tb-shadow-card);
+}
+
+/* 头部：毛玻璃标题栏 */
+.term-node-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  background: rgba(38, 38, 41, 0.6);
+  backdrop-filter: blur(20px) saturate(180%);
+  border-bottom: 0.5px solid var(--tb-hairline);
+  border-radius: calc(var(--tb-radius) - 0.5px) calc(var(--tb-radius) - 0.5px) 0 0;
+  cursor: grab;
+  flex-shrink: 0;
+}
+
+.term-node-title {
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  color: var(--tb-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 状态胶囊：一眼可读（功能点 3） */
+.status-chip {
+  margin-left: auto;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  padding: 2.5px 9px;
+  border-radius: var(--tb-radius-pill);
+  flex-shrink: 0;
+}
+.status-chip.running {
+  color: var(--tb-blue);
+  background: rgba(10, 132, 255, 0.14);
+}
+.status-chip.attention {
+  color: var(--tb-orange);
+  background: rgba(255, 159, 10, 0.14);
+}
+.status-chip.idle {
+  color: var(--tb-muted);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.term-node-title-input {
+  font-size: 12px;
+  font-weight: 500;
+  font-family: var(--tb-font-ui);
+  color: var(--tb-text);
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(10, 132, 255, 0.5);
+  border-radius: 5px;
+  padding: 2px 6px;
+  outline: none;
+  min-width: 0;
+  flex: 1;
+}
+
+.term-node-close {
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--tb-muted);
+  font-size: 10px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
+}
+.term-node-close:hover {
+  background: var(--tb-red);
+  color: #fff;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--tb-idle);
+  flex-shrink: 0;
+}
+.status-dot.running {
+  background: var(--tb-blue);
+  box-shadow: 0 0 6px rgba(10, 132, 255, 0.7);
+}
+.status-dot.attention {
+  background: var(--tb-orange);
+  box-shadow: 0 0 6px rgba(255, 159, 10, 0.7);
+}
+.status-dot.big {
+  width: 18px;
+  height: 18px;
+}
+
+.term-node-body {
+  flex: 1;
+  min-height: 0;
+  background: var(--tb-terminal);
+  padding: 10px 6px 10px 12px;
+  border-radius: 0 0 calc(var(--tb-radius) - 0.5px) calc(var(--tb-radius) - 0.5px);
+  overflow: hidden;
+}
+.term-node-body .xterm {
+  height: 100%;
+}
+
+/* LOD 占位（缩小视图） */
+.term-node-lod {
+  position: absolute;
+  inset: 40px 0 0 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  background: var(--tb-terminal);
+  border-radius: 0 0 calc(var(--tb-radius) - 0.5px) calc(var(--tb-radius) - 0.5px);
+}
+.term-node-lod-title {
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  color: var(--tb-muted);
+}
+
+/* ── 工具栏 · 悬浮玻璃胶囊 ───────────────────────────── */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 7px 8px 7px 16px;
+  background: var(--tb-panel-glass);
+  backdrop-filter: blur(24px) saturate(180%);
+  border: 0.5px solid var(--tb-hairline);
+  border-radius: var(--tb-radius-pill);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  margin-top: 34px; /* 让开 traffic lights */
+}
+.toolbar-title {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.toolbar-sep {
+  width: 0.5px;
+  height: 16px;
+  background: var(--tb-hairline-strong);
+}
+.toolbar-btn {
+  font-size: 12px;
+  font-weight: 500;
+  font-family: var(--tb-font-ui);
+  padding: 5px 14px;
+  border-radius: var(--tb-radius-pill);
+  border: none;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--tb-text);
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+.toolbar-btn:hover {
+  background: rgba(10, 132, 255, 0.9);
+  color: #fff;
+}
+.toolbar-btn:active {
+  transform: scale(0.97);
+}
+.toolbar-count {
+  font-size: 11px;
+  color: var(--tb-muted);
+  font-variant-numeric: tabular-nums;
+  padding-right: 6px;
+}
+
+/* ── React Flow 组件玻璃化 ───────────────────────────── */
+.react-flow__minimap {
+  background: var(--tb-panel-glass) !important;
+  backdrop-filter: blur(24px) saturate(180%);
+  border: 0.5px solid var(--tb-hairline);
+  border-radius: var(--tb-radius);
+  overflow: hidden;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+}
+.react-flow__minimap-mask {
+  fill: rgba(255, 255, 255, 0.06);
+}
+.react-flow__controls {
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  border: 0.5px solid var(--tb-hairline);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.react-flow__controls button {
+  background: var(--tb-panel-glass);
+  backdrop-filter: blur(24px);
+  border-bottom: 0.5px solid var(--tb-hairline);
+  color: var(--tb-muted);
+  transition: color 0.15s ease;
+}
+.react-flow__controls button:hover {
+  background: rgba(44, 44, 46, 0.8);
+  color: var(--tb-text);
+}
+.react-flow__resize-control.handle {
+  background: var(--tb-blue);
+  border: 1.5px solid #fff;
+  border-radius: 50%;
+  width: 9px;
+  height: 9px;
+}
+.react-flow__resize-control.line {
+  border-color: rgba(10, 132, 255, 0.35);
+}
