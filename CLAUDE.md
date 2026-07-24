@@ -36,8 +36,9 @@ TERMBOARD_SHOT=/tmp/shot.png npm run dev  # 自检：6 秒后截图退出
 - **不用 React StrictMode** — dev 双跑 effect 会 spawn+kill pty 两次
 - 终端区域必须 `nodrag nowheel` class，否则 React Flow 抢拖拽/滚轮
 - LOD 阈值 zoom 0.35，占位层挂在 `.term-node-lod`
-- pty 会话目前不持久（关节点即杀进程）；tmux 续存是 Week-2 任务
-- deleteKeyCode=null：防误删节点杀 shell，删除走显式 UI（待做）
+- **pty 已 tmux 续存**：socket `termboard`、会话 `tb-<nodeId>`、conf 在 userData（`destroy-unattached off` 是命根）。reload/HMR/app 退出=releasePty（会话活）；节点 ✕/换身份=destroyPty（kill-session）。调试残留：`tmux -L termboard ls / kill-server`
+- deleteKeyCode=null：防误删节点杀 shell，删除走 ✕（已实现 destroy 语义）
+- 启动状态推送必须走 renderer:ready 握手（首推早于订阅会竞态丢失）
 
 ## 路线图（详见 PRD.md）
 
