@@ -16,6 +16,7 @@ import { listPresets, upsertPreset, deletePreset } from './preset-store'
 import { startWorkerWatch, workerAction, type WorkerWatch } from './worker-watch'
 import { getSettings, setSettings, type Settings } from './settings-store'
 import { searchSkills, loadSkill, listSkills } from './skill-index'
+import { delegate, noteTranscript, noteStatus, dropNode } from './delegate'
 import { ensureTmux, hasSession, killSession, buildSpawnArgs } from './tmux'
 
 // dev 下 app 名默认是 "Electron"，userData 会指向共享目录 → 显式隔离
@@ -51,6 +52,7 @@ function releasePty(id: string): void {
 /** 真结束：kill-session + 客户端（节点 ✕ / 换身份重生成）*/
 function destroyPty(id: string): void {
   contextTail?.untrack(id)
+  dropNode(id)
   void killSession(id)
   releasePty(id)
 }
@@ -323,8 +325,14 @@ app.whenReady().then(async () => {
   contextTail = createContextTail((u) => sendToWin('agent:context', u))
   try {
     hookSystem = await startHookSystem(
-      (e) => sendToWin('agent:status', e),
-      (nodeId, tp) => contextTail?.track(nodeId, tp),
+      (e) => {
+        sendToWin('agent:status', e)
+        noteStatus(e.nodeId, e.state) // 派活等待判完成用
+      },
+      (nodeId, tp) => {
+        contextTail?.track(nodeId, tp)
+        noteTranscript(nodeId, tp) // 派活取结果用
+      },
       {
         // F8 工具中枢：agent 在终端里跑 tb 命令走这三个处理器
         skills: async (q) => {
@@ -343,7 +351,16 @@ app.whenReady().then(async () => {
           return boardAgents
             .map((a) => `${a.id}\t${a.title}\t${a.provider ?? 'shell'}\t${a.status}`)
             .join('\n')
-        }
+        },
+        ask: (target, task) =>
+          delegate(
+            {
+              hasNode: (nid) => ptys.has(nid),
+              writeToPty: (nid, data) => ptys.get(nid)?.write(data)
+            },
+            target,
+            task
+          )
       }
     )
   } catch (err) {

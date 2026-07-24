@@ -155,15 +155,23 @@ case "$cmd" in
     curl -s -H "$H" --get --data-urlencode "name=$*" "$BASE/tb/load" ;;
   agents|ls)
     curl -s -H "$H" "$BASE/tb/agents" ;;
+  ask|delegate)
+    target="$1"; shift 2>/dev/null
+    if [ -z "$target" ] || [ -z "$*" ]; then echo "用法: tb ask <节点id> <任务>" >&2; exit 2; fi
+    # 派活是同步等待（可能几分钟），拉长超时
+    curl -s -m 300 -H "$H" --get \
+      --data-urlencode "target=$target" --data-urlencode "task=$*" "$BASE/tb/ask" ;;
   ""|help|-h|--help)
     cat <<'EOF'
 tb — TermBoard 工具中枢
 
-  tb skills <关键词>    搜索可用 skill（返回名称 + 一行说明）
-  tb load <名称>        取出该 skill 全文，按其指示执行
-  tb agents             列出本画布上的其他 agent 终端
+  tb skills <关键词>       搜索可用 skill（返回名称 + 一行说明）
+  tb load <名称>           取出该 skill 全文，按其指示执行
+  tb agents                列出本画布上的其他 agent 终端
+  tb ask <节点id> <任务>   把任务派给另一个终端里的 agent，等它做完返回结果
 
-用法：先 skills 找，再 load 取全文。不要凭记忆猜 skill 内容。
+用法：先 skills 找、load 取全文，不要凭记忆猜 skill。
+派活前先 tb agents 看有哪些节点，再 tb ask <id> "任务描述"。
 EOF
     ;;
   *) echo "tb: 未知命令 '$cmd'（tb help 查看用法）" >&2; exit 2 ;;
@@ -175,6 +183,7 @@ export interface TbHandlers {
   skills: (q: string) => Promise<string>
   load: (name: string) => Promise<string>
   agents: () => Promise<string>
+  ask: (target: string, task: string) => Promise<string>
 }
 
 export async function startHookSystem(
@@ -200,12 +209,13 @@ export async function startHookSystem(
       res.statusCode = 204
       res.end()
     }
-    req.setTimeout(5000, () => req.destroy())
     const given = Buffer.from(String(req.headers['x-termboard-token'] ?? ''))
     const authed = given.length === tokenBuf.length && timingSafeEqual(given, tokenBuf)
 
     // ── tb 工具中枢路由（GET，纯文本返回，给 agent 直接读）──
     if (req.url?.startsWith('/tb/')) {
+      // ask 是同步派活可能等几分钟，其余 tb 命令给 30s；hook 上报仍是 5s（下面）
+      req.setTimeout(req.url.startsWith('/tb/ask') ? 310_000 : 30_000, () => req.destroy())
       if (!authed || !tb) {
         res.statusCode = 403
         return res.end('forbidden')
@@ -224,12 +234,15 @@ export async function startHookSystem(
             ? tb.load(u.searchParams.get('name') ?? '')
             : route === 'agents'
               ? tb.agents()
-              : Promise.resolve('unknown route')
+              : route === 'ask'
+                ? tb.ask(u.searchParams.get('target') ?? '', u.searchParams.get('task') ?? '')
+                : Promise.resolve('unknown route')
       void run.then(reply).catch(() => reply('内部错误'))
       return
     }
 
     if (req.method !== 'POST' || !req.url?.startsWith('/hook/')) return done()
+    req.setTimeout(5000, () => req.destroy())
 
     let size = 0
     const chunks: Buffer[] = []
