@@ -29,6 +29,8 @@ const api = {
     ipcRenderer.on(`pty:exit:${id}`, listener)
     return () => ipcRenderer.removeListener(`pty:exit:${id}`, listener)
   },
+  loadContext: (): Promise<string> => ipcRenderer.invoke('context:load'),
+  saveContext: (text: string): Promise<void> => ipcRenderer.invoke('context:save', text),
   loadWorkspace: (): Promise<unknown> => ipcRenderer.invoke('workspace:load'),
   saveWorkspace: (data: unknown): Promise<void> => ipcRenderer.invoke('workspace:save', data),
   onAgentStatus: (

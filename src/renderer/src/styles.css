@@ -632,6 +632,50 @@ body {
   flex: 1;
 }
 
+/* ── 共享上下文 Hub（F2）───────────────────────────── */
+.context-node {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  background: var(--tb-panel);
+  border: 0.5px solid rgba(191, 90, 242, 0.4); /* systemPurple dark */
+  border-radius: var(--tb-radius);
+  box-shadow:
+    0 0 0 1px rgba(191, 90, 242, 0.12),
+    var(--tb-shadow-card);
+}
+.context-node.selected {
+  border-color: rgba(191, 90, 242, 0.7);
+}
+.context-node-icon {
+  color: #bf5af2;
+  font-size: 12px;
+}
+.context-node .term-node-header {
+  border-radius: calc(var(--tb-radius) - 0.5px) calc(var(--tb-radius) - 0.5px) 0 0;
+}
+.context-node-body {
+  flex: 1;
+  min-height: 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  font-family: var(--tb-font-mono);
+  color: var(--tb-text);
+  background: var(--tb-terminal);
+  border: none;
+  border-radius: 0 0 calc(var(--tb-radius) - 0.5px) calc(var(--tb-radius) - 0.5px);
+  padding: 12px 14px;
+  outline: none;
+  resize: none;
+  user-select: text;
+}
+.context-node-body::placeholder {
+  color: var(--tb-muted);
+  opacity: 0.7;
+}
+
 /* ── Worker 卡片（F7，cdx 状态投影）─────────────────── */
 .worker-node {
   width: 100%;

@@ -1,5 +1,5 @@
 import { app, BrowserWindow, ipcMain, nativeTheme } from 'electron'
-import { readFile, writeFile } from 'node:fs/promises'
+import { readFile, writeFile, rename } from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 import * as pty from 'node-pty'
@@ -103,6 +103,8 @@ ipcMain.handle(
     env['TERMBOARD_NODE_ID'] = id
     env['TERMBOARD_AGENT_ID'] = opts?.provider ?? 'claude'
     if (hookSystem) env['TERMBOARD_HOOK_ENDPOINT'] = hookSystem.endpointFile
+    // F2 共享上下文：所有终端都能 cat 到；Claude 预设经 --append-system-prompt 注入
+    env['TERMBOARD_CONTEXT_FILE'] = contextFilePath()
     // identity env 包注入（多账号/多 key，密文存储主进程解密）
     const idEnv = await resolveIdentityEnv(opts?.identityId)
     if (idEnv) Object.assign(env, idEnv)
@@ -189,6 +191,27 @@ ipcMain.handle(
   (_e, input: Parameters<typeof upsertIdentity>[0]) => upsertIdentity(input)
 )
 ipcMain.handle('identity:delete', (_e, id: string) => deleteIdentity(id))
+
+// ── F2 共享上下文（单一事实源文件，Hub 节点编辑）──
+const contextFilePath = (): string => path.join(app.getPath('userData'), 'board-context.md')
+
+ipcMain.handle('context:load', async () => {
+  try {
+    return await readFile(contextFilePath(), 'utf8')
+  } catch {
+    return ''
+  }
+})
+
+ipcMain.handle('context:save', async (_e, text: string) => {
+  try {
+    const tmp = `${contextFilePath()}.tmp`
+    await writeFile(tmp, String(text))
+    await rename(tmp, contextFilePath())
+  } catch (err) {
+    console.error('context save failed:', err)
+  }
+})
 
 // ── 工作区持久化（JSON，M1 简版；多项目/tmux 续存后续做）──
 const workspacePath = (): string => path.join(app.getPath('userData'), 'workspace.json')

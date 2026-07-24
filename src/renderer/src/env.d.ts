@@ -28,6 +28,8 @@ interface TermboardApi {
   destroy: (id: string) => void
   onData: (id: string, cb: (data: string) => void) => () => void
   onExit: (id: string, cb: (code: number) => void) => () => void
+  loadContext: () => Promise<string>
+  saveContext: (text: string) => Promise<void>
   loadWorkspace: () => Promise<unknown>
   saveWorkspace: (data: unknown) => Promise<void>
   onAgentStatus: (

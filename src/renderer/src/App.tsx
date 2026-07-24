@@ -16,11 +16,17 @@ import '@xyflow/react/dist/style.css'
 import TerminalNode, { type TermNode } from './nodes/TerminalNode'
 import GroupNode, { type GroupNodeT } from './nodes/GroupNode'
 import WorkerNode, { type WorkerNodeT } from './nodes/WorkerNode'
+import ContextNode, { type ContextNodeT } from './nodes/ContextNode'
 import { IdentityContext } from './identity-context'
 
-export type BoardNode = TermNode | GroupNodeT | WorkerNodeT
+export type BoardNode = TermNode | GroupNodeT | WorkerNodeT | ContextNodeT
 
-const nodeTypes = { terminal: TerminalNode, group: GroupNode, worker: WorkerNode }
+const nodeTypes = {
+  terminal: TerminalNode,
+  group: GroupNode,
+  worker: WorkerNode,
+  context: ContextNode
+}
 
 const statusColor: Record<string, string> = {
   running: '#0A84FF',
@@ -37,7 +43,7 @@ interface SavedNode {
   width: number
   height: number
   title: string
-  type?: 'terminal' | 'group'
+  type?: 'terminal' | 'group' | 'context'
   parentId?: string
   identityId?: string
   command?: string
@@ -394,6 +400,16 @@ function seedNodes(): BoardNode[] {
 }
 
 function fromSaved(s: SavedNode): BoardNode {
+  if (s.type === 'context') {
+    return {
+      id: s.id,
+      type: 'context',
+      position: { x: s.x, y: s.y },
+      width: s.width,
+      height: s.height,
+      data: { title: s.title }
+    }
+  }
   if (s.type === 'group') {
     return {
       id: s.id,
@@ -432,7 +448,7 @@ function toSaved(n: Exclude<BoardNode, WorkerNodeT>): SavedNode {
     title: n.data.title,
     type: n.type
   }
-  if (n.type === 'group') return base
+  if (n.type === 'group' || n.type === 'context') return base
   return {
     ...base,
     parentId: n.parentId,
@@ -650,6 +666,28 @@ function Board(): React.JSX.Element {
     [defaultIdentity]
   )
 
+  // F2: 共享上下文 Hub — 无则建（一块板一个），有则聚焦
+  const openContextHub = useCallback(() => {
+    setNodes((ns) => {
+      const existing = ns.find((n) => n.type === 'context')
+      if (existing) {
+        setTimeout(() => focusNode(existing.id), 0)
+        return ns
+      }
+      return [
+        ...ns,
+        {
+          id: 'ctx-hub',
+          type: 'context' as const,
+          position: { x: 40, y: 300 },
+          width: 420,
+          height: 320,
+          data: { title: '共享上下文' }
+        }
+      ]
+    })
+  }, [focusNode])
+
   // F1: 框选成组 + 自动网格排列（Shift+拖拽框选后点「成组」）
   const groupSelected = useCallback(() => {
     setNodes((ns) => {
@@ -749,6 +787,7 @@ function Board(): React.JSX.Element {
             pannable
             zoomable
             nodeColor={(n) => {
+              if (n.type === 'context') return '#BF5AF2'
               if (n.type === 'group') return statusColor['group']
               if (n.type === 'worker') {
                 const st = (n.data as { state?: string }).state
@@ -814,6 +853,9 @@ function Board(): React.JSX.Element {
                 ))}
               </select>
             )}
+            <button className="toolbar-btn" onClick={openContextHub}>
+              ✦ 上下文
+            </button>
             <button className="toolbar-btn" onClick={() => setShowIdentities(true)}>
               凭证
             </button>

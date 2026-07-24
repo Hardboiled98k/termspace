@@ -17,6 +17,13 @@ export interface Preset {
 
 const DEFAULTS: Preset[] = [
   { id: 'p-claude', name: 'Claude Code', provider: 'claude', command: 'claude' },
+  {
+    id: 'p-claude-ctx',
+    name: 'Claude ＋共享上下文',
+    provider: 'claude',
+    // F2：启动时把 Hub 文件注入 system prompt（文件为空则无害）
+    command: 'claude --append-system-prompt "$(cat "$TERMBOARD_CONTEXT_FILE" 2>/dev/null)"'
+  },
   { id: 'p-codex', name: 'Codex', provider: 'codex', command: 'codex' },
   { id: 'p-gemini', name: 'Gemini', provider: 'gemini', command: 'gemini' }
 ]
@@ -32,6 +39,10 @@ async function load(): Promise<Preset[]> {
   }
   try {
     cache = JSON.parse(await readFile(file(), 'utf8')) as Preset[]
+    // 补齐新增的内置预设（老 presets.json 里没有的）
+    for (const d of DEFAULTS) {
+      if (!cache.some((p) => p.id === d.id)) cache.push({ ...d })
+    }
   } catch {
     cache = [...DEFAULTS]
   }
