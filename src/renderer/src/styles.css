@@ -397,6 +397,159 @@ body {
   padding-right: 6px;
 }
 
+/* ── Identity（凭证）UI ─────────────────────────────── */
+.identity-select {
+  font-size: 11px;
+  font-family: var(--tb-font-ui);
+  color: var(--tb-text);
+  background: rgba(255, 255, 255, 0.08);
+  border: 0.5px solid var(--tb-hairline);
+  border-radius: var(--tb-radius-pill);
+  padding: 3px 8px;
+  outline: none;
+  max-width: 110px;
+  flex-shrink: 0;
+  -webkit-appearance: none;
+  appearance: none;
+  cursor: pointer;
+}
+.identity-select:hover {
+  border-color: rgba(10, 132, 255, 0.5);
+}
+
+.identity-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+}
+.identity-panel {
+  width: 480px;
+  max-height: 70vh;
+  overflow-y: auto;
+  background: var(--tb-panel);
+  border: 0.5px solid var(--tb-hairline-strong);
+  border-radius: 14px;
+  box-shadow: var(--tb-shadow-card);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.identity-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 14px;
+  font-weight: 600;
+}
+.identity-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.identity-empty {
+  font-size: 12px;
+  color: var(--tb-muted);
+  text-align: center;
+  padding: 12px;
+}
+.identity-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  background: var(--tb-terminal);
+  border: 0.5px solid var(--tb-hairline);
+  border-radius: 8px;
+}
+.identity-provider {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 2px 7px;
+  border-radius: var(--tb-radius-pill);
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--tb-muted);
+}
+.identity-provider.claude {
+  color: var(--tb-orange);
+  background: rgba(255, 159, 10, 0.12);
+}
+.identity-provider.codex {
+  color: var(--tb-green);
+  background: rgba(48, 209, 88, 0.12);
+}
+.identity-provider.gemini {
+  color: var(--tb-blue);
+  background: rgba(10, 132, 255, 0.12);
+}
+.identity-name {
+  font-size: 12px;
+  font-weight: 500;
+}
+.identity-keys {
+  font-size: 10px;
+  color: var(--tb-muted);
+  font-family: var(--tb-font-mono);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.identity-del {
+  font-size: 11px;
+  color: var(--tb-muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+.identity-del:hover {
+  color: var(--tb-red);
+}
+.identity-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 0.5px solid var(--tb-hairline);
+  padding-top: 12px;
+}
+.identity-form-row {
+  display: flex;
+  gap: 8px;
+}
+.identity-form input,
+.identity-form select,
+.identity-form textarea {
+  font-size: 12px;
+  font-family: var(--tb-font-ui);
+  color: var(--tb-text);
+  background: var(--tb-terminal);
+  border: 0.5px solid var(--tb-hairline);
+  border-radius: 8px;
+  padding: 7px 10px;
+  outline: none;
+}
+.identity-form input {
+  flex: 1;
+}
+.identity-form textarea {
+  font-family: var(--tb-font-mono);
+  resize: vertical;
+}
+.identity-form input:focus,
+.identity-form textarea:focus {
+  border-color: rgba(10, 132, 255, 0.5);
+}
+.identity-error {
+  font-size: 11px;
+  color: var(--tb-red);
+}
+
 /* ── React Flow 组件玻璃化 ───────────────────────────── */
 .react-flow__minimap {
   background: var(--tb-panel-glass) !important;

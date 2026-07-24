@@ -1,8 +1,8 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron'
 
 const api = {
-  spawn: (id: string, cols: number, rows: number): Promise<void> =>
-    ipcRenderer.invoke('pty:spawn', id, cols, rows),
+  spawn: (id: string, cols: number, rows: number, identityId?: string): Promise<void> =>
+    ipcRenderer.invoke('pty:spawn', id, cols, rows, identityId),
   write: (id: string, data: string): void => {
     ipcRenderer.send('pty:write', id, data)
   },
@@ -47,6 +47,10 @@ const api = {
     ipcRenderer.on('agent:context', listener)
     return () => ipcRenderer.removeListener('agent:context', listener)
   },
+  listIdentities: (): Promise<unknown> => ipcRenderer.invoke('identity:list'),
+  upsertIdentity: (input: unknown): Promise<unknown> =>
+    ipcRenderer.invoke('identity:upsert', input),
+  deleteIdentity: (id: string): Promise<unknown> => ipcRenderer.invoke('identity:delete', id),
   onQuota: (
     cb: (q: {
       five_hour?: { used_percentage: number; resets_at: number }

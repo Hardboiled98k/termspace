@@ -14,6 +14,7 @@ import {
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import TerminalNode, { type TermNode } from './nodes/TerminalNode'
+import { IdentityContext } from './identity-context'
 
 const nodeTypes = { terminal: TerminalNode }
 
@@ -31,6 +32,7 @@ interface SavedNode {
   width: number
   height: number
   title: string
+  identityId?: string
 }
 interface Workspace {
   nodes: SavedNode[]
@@ -73,6 +75,106 @@ function QuotaRow({ label, pool }: { label: string; pool: QuotaPool }): React.JS
   )
 }
 
+/* ── Identity 管理面板 ── */
+function IdentityPanel({
+  identities,
+  onChanged,
+  onClose
+}: {
+  identities: IdentityMeta[]
+  onChanged: (list: IdentityMeta[]) => void
+  onClose: () => void
+}): React.JSX.Element {
+  const [name, setName] = useState('')
+  const [provider, setProvider] = useState<IdentityMeta['provider']>('claude')
+  const [envText, setEnvText] = useState('')
+  const [error, setError] = useState('')
+
+  const save = async (): Promise<void> => {
+    const env: Record<string, string> = {}
+    for (const line of envText.split('\n')) {
+      const t = line.trim()
+      if (!t || t.startsWith('#')) continue
+      const eq = t.indexOf('=')
+      if (eq <= 0) continue
+      env[t.slice(0, eq).trim()] = t.slice(eq + 1).trim()
+    }
+    if (!name.trim() || Object.keys(env).length === 0) {
+      setError('名称和至少一条 KEY=VALUE 必填')
+      return
+    }
+    try {
+      onChanged(await window.termboard.upsertIdentity({ name, provider, env }))
+      setName('')
+      setEnvText('')
+      setError('')
+    } catch {
+      setError('保存失败（系统加密不可用？）')
+    }
+  }
+
+  return (
+    <div className="identity-overlay" onClick={onClose}>
+      <div className="identity-panel" onClick={(e) => e.stopPropagation()}>
+        <div className="identity-panel-head">
+          <span>凭证管理</span>
+          <button className="term-node-close" onClick={onClose}>
+            ✕
+          </button>
+        </div>
+        <div className="identity-list">
+          {identities.length === 0 && <div className="identity-empty">还没有凭证</div>}
+          {identities.map((i) => (
+            <div key={i.id} className="identity-row">
+              <span className={`identity-provider ${i.provider}`}>{i.provider}</span>
+              <span className="identity-name">{i.name}</span>
+              <span className="identity-keys">{i.envKeys.join(' · ')}</span>
+              <button
+                className="identity-del"
+                onClick={async () => onChanged(await window.termboard.deleteIdentity(i.id))}
+              >
+                删除
+              </button>
+            </div>
+          ))}
+        </div>
+        <div className="identity-form">
+          <div className="identity-form-row">
+            <input
+              placeholder="名称（如 Claude 工作号）"
+              value={name}
+              onChange={(e) => setName(e.currentTarget.value)}
+            />
+            <select
+              value={provider}
+              onChange={(e) =>
+                setProvider(e.currentTarget.value as IdentityMeta['provider'])
+              }
+            >
+              <option value="claude">claude</option>
+              <option value="codex">codex</option>
+              <option value="gemini">gemini</option>
+              <option value="custom">custom</option>
+            </select>
+          </div>
+          <textarea
+            rows={4}
+            placeholder={
+              '每行一条 KEY=VALUE，例如\nANTHROPIC_API_KEY=sk-ant-xxx\nCLAUDE_CONFIG_DIR=/Users/me/.claude-work'
+            }
+            value={envText}
+            onChange={(e) => setEnvText(e.currentTarget.value)}
+          />
+          {error && <div className="identity-error">{error}</div>}
+          <button className="toolbar-btn" onClick={() => void save()}>
+            保存凭证（Keychain 加密）
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function QuotaHUD(): React.JSX.Element | null {
   const [quota, setQuota] = useState<Quota | null>(null)
   useEffect(() => window.termboard.onQuota(setQuota), [])
@@ -105,7 +207,7 @@ function toTermNode(s: SavedNode): TermNode {
     position: { x: s.x, y: s.y },
     width: s.width || DEFAULT_SIZE.width,
     height: s.height || DEFAULT_SIZE.height,
-    data: { title: s.title || s.id, status: 'idle' }
+    data: { title: s.title || s.id, status: 'idle', identityId: s.identityId }
   }
 }
 
@@ -116,7 +218,8 @@ function toSaved(n: TermNode): SavedNode {
     y: n.position.y,
     width: n.width ?? n.measured?.width ?? DEFAULT_SIZE.width,
     height: n.height ?? n.measured?.height ?? DEFAULT_SIZE.height,
-    title: n.data.title
+    title: n.data.title,
+    identityId: n.data.identityId
   }
 }
 
@@ -132,6 +235,13 @@ function Board(): React.JSX.Element {
   const [nodes, setNodes] = useState<TermNode[]>([])
   const [loaded, setLoaded] = useState(false)
   const [saveTick, setSaveTick] = useState(0)
+  const [identities, setIdentities] = useState<IdentityMeta[]>([])
+  const [defaultIdentity, setDefaultIdentity] = useState('')
+  const [showIdentities, setShowIdentities] = useState(false)
+
+  useEffect(() => {
+    void window.termboard.listIdentities().then(setIdentities)
+  }, [])
   const hadSaved = useRef(false)
   const viewportRef = useRef<Viewport | null>(null)
   const { setViewport, fitView } = useReactFlow()
@@ -240,14 +350,26 @@ function Board(): React.JSX.Element {
           type: 'terminal' as const,
           position: { x: 120 + (n % 5) * 160, y: 160 + (n % 3) * 140 },
           ...DEFAULT_SIZE,
-          data: { title: `zsh · ${id}`, status: 'idle' as const }
+          data: {
+            title: `zsh · ${id}`,
+            status: 'idle' as const,
+            identityId: defaultIdentity || undefined
+          }
         }
       ]
     })
-  }, [])
+  }, [defaultIdentity])
 
   return (
+    <IdentityContext.Provider value={identities}>
     <div className="h-screen w-screen">
+      {showIdentities && (
+        <IdentityPanel
+          identities={identities}
+          onChanged={setIdentities}
+          onClose={() => setShowIdentities(false)}
+        />
+      )}
       <ReactFlow
         nodes={nodes}
         onNodesChange={onNodesChange}
@@ -282,10 +404,29 @@ function Board(): React.JSX.Element {
           <button className="toolbar-btn" onClick={addTerminal}>
             ＋ 终端
           </button>
+          {identities.length > 0 && (
+            <select
+              className="identity-select"
+              value={defaultIdentity}
+              title="新终端使用的默认身份"
+              onChange={(e) => setDefaultIdentity(e.currentTarget.value)}
+            >
+              <option value="">默认身份</option>
+              {identities.map((i) => (
+                <option key={i.id} value={i.id}>
+                  {i.name}
+                </option>
+              ))}
+            </select>
+          )}
+          <button className="toolbar-btn" onClick={() => setShowIdentities(true)}>
+            凭证
+          </button>
           <span className="toolbar-count">{nodes.length} 节点</span>
         </Panel>
       </ReactFlow>
     </div>
+    </IdentityContext.Provider>
   )
 }
 
@@ -296,3 +437,4 @@ export default function App(): React.JSX.Element {
     </ReactFlowProvider>
   )
 }
+

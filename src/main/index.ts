@@ -5,6 +5,12 @@ import os from 'node:os'
 import * as pty from 'node-pty'
 import { startHookSystem, type HookSystem } from './hooks'
 import { createContextTail, type ContextTail } from './context-tail'
+import {
+  listIdentities,
+  upsertIdentity,
+  deleteIdentity,
+  resolveIdentityEnv
+} from './identity-store'
 
 // dev 下 app 名默认是 "Electron"，userData 会指向共享目录 → 显式隔离
 app.setPath('userData', path.join(app.getPath('appData'), 'termboard'))
@@ -62,18 +68,23 @@ function createWindow(): BrowserWindow {
   return win
 }
 
-ipcMain.handle('pty:spawn', (e, id: string, cols: number, rows: number) => {
-  killPty(id)
-  const shell = process.env['SHELL'] || '/bin/zsh'
-  const env: Record<string, string> = {}
-  for (const [k, v] of Object.entries(process.env)) {
-    if (v !== undefined) env[k] = v
-  }
-  env['TERM'] = 'xterm-256color'
-  env['COLORTERM'] = 'truecolor'
-  // hook 门控：托管脚本只在带 NODE_ID 的终端里工作
-  env['TERMBOARD_NODE_ID'] = id
-  if (hookSystem) env['TERMBOARD_HOOK_ENDPOINT'] = hookSystem.endpointFile
+ipcMain.handle(
+  'pty:spawn',
+  async (e, id: string, cols: number, rows: number, identityId?: string) => {
+    killPty(id)
+    const shell = process.env['SHELL'] || '/bin/zsh'
+    const env: Record<string, string> = {}
+    for (const [k, v] of Object.entries(process.env)) {
+      if (v !== undefined) env[k] = v
+    }
+    env['TERM'] = 'xterm-256color'
+    env['COLORTERM'] = 'truecolor'
+    // hook 门控：托管脚本只在带 NODE_ID 的终端里工作
+    env['TERMBOARD_NODE_ID'] = id
+    if (hookSystem) env['TERMBOARD_HOOK_ENDPOINT'] = hookSystem.endpointFile
+    // identity env 包注入（多账号/多 key，密文存储主进程解密）
+    const idEnv = await resolveIdentityEnv(identityId)
+    if (idEnv) Object.assign(env, idEnv)
 
   const p = pty.spawn(shell, ['-l'], {
     name: 'xterm-256color',
@@ -113,6 +124,14 @@ ipcMain.on('pty:resize', (_e, id: string, cols: number, rows: number) => {
 ipcMain.on('pty:kill', (_e, id: string) => {
   killPty(id)
 })
+
+// ── Identity（凭证）IPC：渲染层只见元数据，env 值不出主进程 ──
+ipcMain.handle('identity:list', () => listIdentities())
+ipcMain.handle(
+  'identity:upsert',
+  (_e, input: Parameters<typeof upsertIdentity>[0]) => upsertIdentity(input)
+)
+ipcMain.handle('identity:delete', (_e, id: string) => deleteIdentity(id))
 
 // ── 工作区持久化（JSON，M1 简版；多项目/tmux 续存后续做）──
 const workspacePath = (): string => path.join(app.getPath('userData'), 'workspace.json')

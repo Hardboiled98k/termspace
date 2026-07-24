@@ -1,7 +1,14 @@
 /// <reference types="vite/client" />
 
+interface IdentityMeta {
+  id: string
+  name: string
+  provider: 'claude' | 'codex' | 'gemini' | 'custom'
+  envKeys: string[]
+}
+
 interface TermboardApi {
-  spawn: (id: string, cols: number, rows: number) => Promise<void>
+  spawn: (id: string, cols: number, rows: number, identityId?: string) => Promise<void>
   write: (id: string, data: string) => void
   resize: (id: string, cols: number, rows: number) => void
   kill: (id: string) => void
@@ -27,6 +34,14 @@ interface TermboardApi {
       seven_day?: { used_percentage: number; resets_at: number }
     }) => void
   ) => () => void
+  listIdentities: () => Promise<IdentityMeta[]>
+  upsertIdentity: (input: {
+    id?: string
+    name: string
+    provider: IdentityMeta['provider']
+    env: Record<string, string>
+  }) => Promise<IdentityMeta[]>
+  deleteIdentity: (id: string) => Promise<IdentityMeta[]>
 }
 
 declare interface Window {

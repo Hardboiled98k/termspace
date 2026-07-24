@@ -1,4 +1,5 @@
-import { memo, useEffect, useRef, useState } from 'react'
+import { memo, useContext, useEffect, useRef, useState } from 'react'
+import { IdentityContext } from '../identity-context'
 import {
   NodeResizer,
   useReactFlow,
@@ -12,7 +13,10 @@ import { WebglAddon } from '@xterm/addon-webgl'
 import '@xterm/xterm/css/xterm.css'
 
 export type TermStatus = 'running' | 'idle' | 'attention'
-export type TermNode = Node<{ title: string; status: TermStatus }, 'terminal'>
+export type TermNode = Node<
+  { title: string; status: TermStatus; identityId?: string },
+  'terminal'
+>
 
 // 缩放低于此值 → 隐藏活终端，显示 LOD 占位（性能 + 可读性）
 const LOD_ZOOM = 0.35
@@ -52,6 +56,7 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
   const holderRef = useRef<HTMLDivElement>(null)
   const lod = useStore((s) => s.transform[2] < LOD_ZOOM)
   const { deleteElements, updateNodeData } = useReactFlow()
+  const identities = useContext(IdentityContext)
   const [editing, setEditing] = useState(false)
   const [ctxPct, setCtxPct] = useState<number | null>(null)
 
@@ -95,7 +100,7 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
     const offExit = window.termboard.onExit(id, (code) =>
       term.write(`\r\n\x1b[38;5;244m[进程已退出 code=${code}]\x1b[0m\r\n`)
     )
-    void window.termboard.spawn(id, term.cols, term.rows)
+    void window.termboard.spawn(id, term.cols, term.rows, data.identityId)
     const inputSub = term.onData((d) => window.termboard.write(id, d))
 
     let raf = 0
@@ -118,7 +123,8 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
       window.termboard.kill(id)
       term.dispose()
     }
-  }, [id])
+    // identityId 变更 = 换凭证重生成会话（cleanup kill → respawn 注入新 env）
+  }, [id, data.identityId])
 
   return (
     <div className={`term-node status-${data.status}${selected ? ' selected' : ''}`}>
@@ -145,6 +151,23 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
           <span className="term-node-title" onDoubleClick={() => setEditing(true)}>
             {data.title}
           </span>
+        )}
+        {identities.length > 0 && (
+          <select
+            className="identity-select nodrag"
+            value={data.identityId ?? ''}
+            title="切换凭证会重开会话"
+            onChange={(e) =>
+              updateNodeData(id, { identityId: e.currentTarget.value || undefined })
+            }
+          >
+            <option value="">默认身份</option>
+            {identities.map((i) => (
+              <option key={i.id} value={i.id}>
+                {i.name}
+              </option>
+            ))}
+          </select>
         )}
         {ctxPct !== null && (
           <span
