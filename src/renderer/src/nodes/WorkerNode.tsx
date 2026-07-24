@@ -1,5 +1,5 @@
 import { memo, useState } from 'react'
-import type { Node, NodeProps } from '@xyflow/react'
+import { useReactFlow, type Node, type NodeProps } from '@xyflow/react'
 
 /* F7：detached worker 卡片（cdx 引擎，只显示不持久化） */
 export type WorkerNodeT = Node<
@@ -54,8 +54,9 @@ function extractResult(output: string): string {
   }
 }
 
-function WorkerNodeImpl({ data }: NodeProps<WorkerNodeT>): React.JSX.Element {
+function WorkerNodeImpl({ id, data }: NodeProps<WorkerNodeT>): React.JSX.Element {
   const cls = stateClass(data.state)
+  const { deleteElements } = useReactFlow()
   const [reply, setReply] = useState('')
   const [resultText, setResultText] = useState('')
   const [busy, setBusy] = useState(false)
@@ -79,6 +80,31 @@ function WorkerNodeImpl({ data }: NodeProps<WorkerNodeT>): React.JSX.Element {
         <span className={`status-chip ${cls === 'error' ? 'attention' : cls}`}>
           {STATE_LABEL[data.state] ?? data.state}
         </span>
+        <button
+          className="term-node-close nodrag"
+          title={
+            TERMINAL_STATES.has(data.state)
+              ? '移除卡片（清理 cdx 任务记录）'
+              : '先杀掉再移除'
+          }
+          disabled={busy}
+          onClick={async (e) => {
+            e.stopPropagation()
+            setBusy(true)
+            try {
+              // 未结束的先 kill，再 clean 掉记录，最后从画布移除
+              if (!TERMINAL_STATES.has(data.state)) {
+                await window.termboard.workerAction('kill', data.task)
+              }
+              await window.termboard.workerAction('clean', data.task)
+            } finally {
+              setBusy(false)
+              void deleteElements({ nodes: [{ id }] })
+            }
+          }}
+        >
+          ✕
+        </button>
       </div>
       <div className="worker-node-meta">
         {data.model && <span className="hud-node-model">{data.model}</span>}

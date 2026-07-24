@@ -1,12 +1,13 @@
 import { memo, useEffect, useRef, useState } from 'react'
-import { NodeResizer, type Node, type NodeProps } from '@xyflow/react'
+import { NodeResizer, useReactFlow, type Node, type NodeProps } from '@xyflow/react'
 
 /* F2：共享上下文 Hub — 编辑单一事实源文件（userData/board-context.md）
    注入路径：所有终端 env TERMBOARD_CONTEXT_FILE；
    「Claude ＋共享上下文」预设启动时 --append-system-prompt 灌入 */
 export type ContextNodeT = Node<{ title: string }, 'context'>
 
-function ContextNodeImpl({ selected }: NodeProps<ContextNodeT>): React.JSX.Element {
+function ContextNodeImpl({ id, selected }: NodeProps<ContextNodeT>): React.JSX.Element {
+  const { deleteElements } = useReactFlow()
   const [text, setText] = useState('')
   const [loaded, setLoaded] = useState(false)
   const [dirty, setDirty] = useState(false)
@@ -37,6 +38,16 @@ function ContextNodeImpl({ selected }: NodeProps<ContextNodeT>): React.JSX.Eleme
         <span className={`status-chip ${dirty ? 'attention' : 'idle'}`}>
           {dirty ? '保存中…' : '已注入新 agent'}
         </span>
+        <button
+          className="term-node-close nodrag"
+          title="从画布移除（内容已存盘，随时可再打开）"
+          onClick={(e) => {
+            e.stopPropagation()
+            void deleteElements({ nodes: [{ id }] })
+          }}
+        >
+          ✕
+        </button>
       </div>
       <textarea
         className="context-node-body nodrag nowheel"

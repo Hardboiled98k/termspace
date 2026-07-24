@@ -48,6 +48,7 @@ interface SavedNode {
   identityId?: string
   command?: string
   provider?: string
+  fontSize?: number
 }
 interface Workspace {
   nodes: SavedNode[]
@@ -94,6 +95,26 @@ function QuotaRow({ label, pool }: { label: string; pool: QuotaPool }): React.JS
   )
 }
 
+/* 一个供应商一块（未来加 Codex/OpenAI/自定义 API 只需往数组里加） */
+function ProviderBlock({
+  name,
+  pools
+}: {
+  name: string
+  pools: { label: string; pool: QuotaPool }[]
+}): React.JSX.Element {
+  return (
+    <div className="quota-provider">
+      <span className="quota-provider-name">{name}</span>
+      <div className="quota-provider-rows">
+        {pools.map((p) => (
+          <QuotaRow key={p.label} label={p.label} pool={p.pool} />
+        ))}
+      </div>
+    </div>
+  )
+}
+
 /* ── HUD：额度 + 画布概览（M4，用户想法 #1）── */
 interface NodeCtx {
   pct: number
@@ -114,6 +135,7 @@ function BoardHUD({
   onFocus: (id: string) => void
 }): React.JSX.Element | null {
   const [quota, setQuota] = useState<Quota | null>(null)
+  const [collapsed, setCollapsed] = useState(false)
   useEffect(() => window.termboard.onQuota(setQuota), [])
 
   const terms = nodes.filter((n): n is TermNode => n.type === 'terminal')
@@ -128,19 +150,33 @@ function BoardHUD({
     })
   const shown = agentRows.slice(0, 6)
 
-  const hasQuota = quota?.five_hour || quota?.seven_day
-  if (!hasQuota && agentRows.length === 0) return null
+  const claudePools: { label: string; pool: QuotaPool }[] = []
+  if (quota?.five_hour) claudePools.push({ label: '5h', pool: quota.five_hour })
+  if (quota?.seven_day) claudePools.push({ label: '周', pool: quota.seven_day })
+  const providers = claudePools.length ? [{ name: 'Claude', pools: claudePools }] : []
+  if (providers.length === 0 && agentRows.length === 0) return null
+
+  // 折叠态：只留一行摘要（多订阅时最省地方）
+  const peak = Math.max(0, ...claudePools.map((p) => Math.round(p.pool.used_percentage)))
 
   return (
-    <Panel position="top-right" className="quota-hud">
-      {hasQuota && (
+    <Panel position="top-right" className={`quota-hud${collapsed ? ' collapsed' : ''}`}>
+      <button className="hud-toggle" onClick={() => setCollapsed((c) => !c)}>
+        <span className="hud-toggle-label">
+          {collapsed
+            ? `${providers.length ? `${peak}%` : ''}${
+                attention > 0 ? ` · ${attention} 需要你` : running > 0 ? ` · ${running} 运行` : ''
+              }` || '概览'
+            : '用量'}
+        </span>
+        <span className="hud-caret">{collapsed ? '▾' : '▴'}</span>
+      </button>
+      {!collapsed && (
         <>
-          <span className="quota-title">Claude</span>
-          {quota?.five_hour && <QuotaRow label="5h" pool={quota.five_hour} />}
-          {quota?.seven_day && <QuotaRow label="周" pool={quota.seven_day} />}
-        </>
-      )}
-      {agentRows.length > 0 && (
+          {providers.map((p) => (
+            <ProviderBlock key={p.name} name={p.name} pools={p.pools} />
+          ))}
+          {agentRows.length > 0 && (
         <>
           <div className="hud-divider" />
           <span className="quota-title">
@@ -174,6 +210,8 @@ function BoardHUD({
           {agentRows.length > shown.length && (
             <span className="hud-more">还有 {agentRows.length - shown.length} 个…</span>
           )}
+        </>
+      )}
         </>
       )}
     </Panel>
@@ -433,7 +471,8 @@ function fromSaved(s: SavedNode): BoardNode {
       status: 'idle',
       identityId: s.identityId,
       command: s.command,
-      provider: s.provider
+      provider: s.provider,
+      fontSize: s.fontSize
     }
   }
 }
@@ -454,7 +493,8 @@ function toSaved(n: Exclude<BoardNode, WorkerNodeT>): SavedNode {
     parentId: n.parentId,
     identityId: n.data.identityId,
     command: n.data.command,
-    provider: n.data.provider
+    provider: n.data.provider,
+    fontSize: n.data.fontSize
   }
 }
 
@@ -768,7 +808,15 @@ function Board(): React.JSX.Element {
           onMoveEnd={onMoveEnd}
           nodeTypes={nodeTypes}
           colorMode="dark"
-          minZoom={0.15}
+          minZoom={0.02} /* 真·无限：能缩到极远看全局分布 */
+          translateExtent={[
+            [-Infinity, -Infinity],
+            [Infinity, Infinity]
+          ]}
+          nodeExtent={[
+            [-Infinity, -Infinity],
+            [Infinity, Infinity]
+          ]}
           maxZoom={1.5} /* ponytail: WebGL canvas 放大是位图拉伸会糊，>1.5 不可接受；真·清晰放大需按 zoom 重设 fontSize，后续做 */
           panOnScroll
           zoomOnScroll={false}
@@ -855,6 +903,13 @@ function Board(): React.JSX.Element {
             )}
             <button className="toolbar-btn" onClick={openContextHub}>
               ✦ 上下文
+            </button>
+            <button
+              className="toolbar-btn"
+              title="缩放到全部节点"
+              onClick={() => void fitView({ padding: 0.2, duration: 300 })}
+            >
+              适应
             </button>
             <button className="toolbar-btn" onClick={() => setShowIdentities(true)}>
               凭证

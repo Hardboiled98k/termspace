@@ -180,6 +180,43 @@ body {
   flex: 1;
 }
 
+/* 终端字号步进器 */
+.font-step {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.term-node:hover .font-step,
+.term-node.selected .font-step {
+  opacity: 1;
+}
+.font-step button {
+  font-size: 9.5px;
+  font-weight: 600;
+  font-family: var(--tb-font-ui);
+  color: var(--tb-muted);
+  background: rgba(255, 255, 255, 0.07);
+  border: none;
+  border-radius: 5px;
+  padding: 2px 5px;
+  cursor: pointer;
+  line-height: 1.2;
+}
+.font-step button:hover {
+  background: rgba(10, 132, 255, 0.9);
+  color: #fff;
+}
+.font-step-val {
+  font-size: 9px;
+  color: var(--tb-muted);
+  font-variant-numeric: tabular-nums;
+  min-width: 13px;
+  text-align: center;
+}
+
 .term-node-close {
   width: 18px;
   height: 18px;
@@ -233,40 +270,95 @@ body {
 .quota-hud {
   display: flex;
   flex-direction: column;
-  gap: 7px;
-  padding: 10px 14px;
+  gap: 4px;
+  padding: 6px 10px 8px;
   background: var(--tb-panel-glass);
   backdrop-filter: blur(24px) saturate(180%);
   border: 0.5px solid var(--tb-hairline);
-  border-radius: var(--tb-radius);
+  border-radius: 10px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
   margin-top: 34px;
-  min-width: 190px;
+  width: 196px;
+  max-height: 70vh;
+  overflow-y: auto;
 }
-.quota-title {
-  font-size: 10px;
+.quota-hud.collapsed {
+  width: auto;
+  padding: 5px 10px;
+}
+.hud-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--tb-muted);
+  font-family: var(--tb-font-ui);
+}
+.hud-toggle:hover {
+  color: var(--tb-text);
+}
+.hud-toggle-label {
+  font-size: 9.5px;
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
+  flex: 1;
+  text-align: left;
+  font-variant-numeric: tabular-nums;
+}
+.hud-caret {
+  font-size: 8px;
+}
+
+/* 供应商块：多订阅时纵向堆叠仍紧凑 */
+.quota-provider {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.quota-provider-name {
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--tb-muted);
+  width: 34px;
+  flex-shrink: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.quota-provider-rows {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.quota-title {
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
   color: var(--tb-muted);
 }
 .quota-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 .quota-label {
-  font-size: 11px;
-  color: var(--tb-text);
-  width: 18px;
+  font-size: 9.5px;
+  color: var(--tb-muted);
+  width: 14px;
   flex-shrink: 0;
 }
 .quota-bar {
   flex: 1;
-  height: 4px;
+  height: 3px;
   border-radius: 2px;
   background: rgba(255, 255, 255, 0.1);
   overflow: hidden;
+  min-width: 24px;
 }
 .quota-fill {
   display: block;
@@ -284,17 +376,17 @@ body {
   background: var(--tb-red);
 }
 .quota-pct {
-  font-size: 11px;
+  font-size: 9.5px;
   color: var(--tb-text);
   font-variant-numeric: tabular-nums;
-  width: 34px;
+  width: 26px;
   text-align: right;
 }
 .quota-reset {
-  font-size: 10px;
+  font-size: 9px;
   color: var(--tb-muted);
   font-variant-numeric: tabular-nums;
-  width: 44px;
+  width: 36px;
   text-align: right;
 }
 
@@ -302,14 +394,14 @@ body {
 .hud-divider {
   height: 0.5px;
   background: var(--tb-hairline);
-  margin: 2px 0;
+  margin: 3px 0 1px;
 }
 .hud-node-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 4px 6px;
-  margin: 0 -6px;
+  gap: 6px;
+  padding: 2px 5px;
+  margin: 0 -5px;
   border: none;
   border-radius: 7px;
   background: none;
@@ -326,15 +418,15 @@ body {
   width: 34px;
 }
 .hud-node-title {
-  font-size: 11px;
+  font-size: 10px;
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 110px;
+  max-width: 84px;
 }
 .hud-node-model {
-  font-size: 9px;
+  font-size: 8.5px;
   color: var(--tb-muted);
   font-family: var(--tb-font-mono);
 }

@@ -169,7 +169,7 @@ ipcMain.on('pty:destroy', (_e, id: string) => {
 // ── Worker 操作 IPC（F7）──
 ipcMain.handle(
   'worker:action',
-  (_e, action: 'result' | 'kill' | 'send', task: string, text?: string) => {
+  (_e, action: 'result' | 'kill' | 'send' | 'clean', task: string, text?: string) => {
     const r = workerAction(action, task, text)
     // 操作后强制刷新一轮（比如 kill 后状态立刻变）
     setTimeout(() => workerWatch?.refresh(), 500)

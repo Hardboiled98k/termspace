@@ -60,7 +60,7 @@ const api = {
     ipcRenderer.send('renderer:ready')
   },
   workerAction: (
-    action: 'result' | 'kill' | 'send',
+    action: 'result' | 'kill' | 'send' | 'clean',
     task: string,
     text?: string
   ): Promise<{ ok: boolean; output: string }> =>

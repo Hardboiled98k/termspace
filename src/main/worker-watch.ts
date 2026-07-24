@@ -27,12 +27,16 @@ const TASK_RE = /^[a-zA-Z0-9_-]+$/
 
 /** worker 卡片操作：result / kill / send（回复 worker 提问）*/
 export async function workerAction(
-  action: 'result' | 'kill' | 'send',
+  action: 'result' | 'kill' | 'send' | 'clean',
   task: string,
   text?: string
 ): Promise<{ ok: boolean; output: string }> {
   if (!TASK_RE.test(task)) return { ok: false, output: 'bad task name' }
-  const args = [CDX, action, task, '--json']
+  // clean 用 --task 传参，其余动词位置参数
+  const args =
+    action === 'clean'
+      ? [CDX, 'clean', '--task', task, '--json']
+      : [CDX, action, task, '--json']
   if (action === 'send') {
     if (!text?.trim()) return { ok: false, output: 'empty reply' }
     args.splice(3, 0, text) // cdx send <task> <prompt> --json

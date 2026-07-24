@@ -4,7 +4,7 @@ import { useReactFlow, useStore, type Node, type NodeProps } from '@xyflow/react
 export type GroupNodeT = Node<{ title: string }, 'group'>
 
 function GroupNodeImpl({ id, data }: NodeProps<GroupNodeT>): React.JSX.Element {
-  const { setNodes } = useReactFlow()
+  const { setNodes, getNodes, deleteElements } = useReactFlow()
 
   // 聚合子节点状态（返回字符串保证 selector 相等性）
   const counts = useStore((s) => {
@@ -54,6 +54,18 @@ function GroupNodeImpl({ id, data }: NodeProps<GroupNodeT>): React.JSX.Element {
         </span>
         <button className="term-node-close nodrag" title="解组（终端保留）" onClick={ungroup}>
           ⊟
+        </button>
+        <button
+          className="term-node-close nodrag"
+          title="删除集群及组内全部终端（会话结束）"
+          onClick={(e) => {
+            e.stopPropagation()
+            const kids = getNodes().filter((n) => n.parentId === id)
+            for (const k of kids) window.termboard.destroy(k.id) // 真杀 tmux 会话
+            void deleteElements({ nodes: [{ id }, ...kids.map((k) => ({ id: k.id }))] })
+          }}
+        >
+          ✕
         </button>
       </div>
     </div>

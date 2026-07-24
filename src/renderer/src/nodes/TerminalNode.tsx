@@ -20,6 +20,7 @@ export type TermNode = Node<
     identityId?: string
     command?: string // agent 预设启动命令
     provider?: string
+    fontSize?: number
   },
   'terminal'
 >
@@ -58,8 +59,14 @@ const STATUS_LABEL: Record<TermStatus, string> = {
   idle: '空闲'
 }
 
+const FONT_MIN = 8
+const FONT_MAX = 24
+const FONT_DEFAULT = 13
+
 function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JSX.Element {
   const holderRef = useRef<HTMLDivElement>(null)
+  const termRef = useRef<Terminal | null>(null)
+  const fitRef = useRef<FitAddon | null>(null)
   const lod = useStore((s) => s.transform[2] < LOD_ZOOM)
   const { deleteElements, updateNodeData } = useReactFlow()
   const identities = useContext(IdentityContext)
@@ -81,7 +88,7 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
 
     const term = new Terminal({
       fontFamily: 'ui-monospace, "SF Mono", Menlo, monospace',
-      fontSize: 13,
+      fontSize: data.fontSize ?? FONT_DEFAULT,
       lineHeight: 1.25,
       cursorBlink: true,
       scrollback: 5000,
@@ -91,6 +98,8 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
     const fit = new FitAddon()
     term.loadAddon(fit)
     term.open(el)
+    termRef.current = term
+    fitRef.current = fit
     try {
       // Chromium 每页 ~16 个 WebGL context 上限，超限最老的被强制丢弃；
       // context 丢失时 dispose addon → xterm 落回 DOM renderer 保持可用
@@ -131,10 +140,28 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
       offData()
       offExit()
       window.termboard.kill(id)
+      termRef.current = null
+      fitRef.current = null
       term.dispose()
     }
     // identityId/command 变更 = 重生成会话（cleanup kill → respawn）
+    // fontSize 故意不在依赖里：改字号只重排，不重开会话
   }, [id, data.identityId, data.command])
+
+  // 字号变更：改渲染 + refit + 通知 pty 新 cols/rows（会话不动）
+  useEffect(() => {
+    const term = termRef.current
+    const fit = fitRef.current
+    if (!term || !fit) return
+    term.options.fontSize = data.fontSize ?? FONT_DEFAULT
+    fit.fit()
+    window.termboard.resize(id, term.cols, term.rows)
+  }, [id, data.fontSize])
+
+  const stepFont = (delta: number): void => {
+    const next = Math.min(FONT_MAX, Math.max(FONT_MIN, (data.fontSize ?? FONT_DEFAULT) + delta))
+    updateNodeData(id, { fontSize: next })
+  }
 
   return (
     <div className={`term-node status-${data.status}${selected ? ' selected' : ''}`}>
@@ -181,6 +208,11 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
             ))}
           </select>
         )}
+        <span className="font-step nodrag" title="终端字号（⌥+滚轮亦可）">
+          <button onClick={() => stepFont(-1)}>A−</button>
+          <span className="font-step-val">{data.fontSize ?? FONT_DEFAULT}</span>
+          <button onClick={() => stepFont(1)}>A+</button>
+        </span>
         {ctxPct !== null && (
           <span
             className={`ctx-meter ${ctxPct > 80 ? 'hot' : ctxPct > 60 ? 'warm' : ''}`}
@@ -207,6 +239,13 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
         className="term-node-body nodrag"
         style={{ visibility: lod ? 'hidden' : 'visible' }}
         onWheel={(e) => {
+          // ⌥+滚轮 = 调字号（不动画布，不动会话）
+          if (e.altKey) {
+            e.stopPropagation()
+            e.preventDefault()
+            stepFont(e.deltaY < 0 ? 1 : -1)
+            return
+          }
           // 普通滚轮留给终端回滚（拦住画布 pan）；
           // pinch 缩放（macOS 上是 ctrlKey+wheel）放行给画布 zoom
           if (!e.ctrlKey) e.stopPropagation()
