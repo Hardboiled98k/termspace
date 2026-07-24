@@ -139,6 +139,21 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
     })
     const inputSub = term.onData((d) => window.termboard.write(id, d))
 
+    // Warp 式复制粘贴：选中即可复制（⌘C），⌘V 粘贴；右键也走这套
+    const onKey = term.attachCustomKeyEventHandler((e) => {
+      if (e.type !== 'keydown' || !(e.metaKey || e.ctrlKey)) return true
+      if (e.key === 'c' && term.hasSelection()) {
+        void navigator.clipboard.writeText(term.getSelection())
+        return false
+      }
+      if (e.key === 'v') {
+        void navigator.clipboard.readText().then((t) => window.termboard.write(id, t))
+        return false
+      }
+      return true
+    })
+    void onKey
+
     let raf = 0
     const ro = new ResizeObserver(() => {
       // rAF 合帧：NodeResizer 拖拽期间每帧触发
@@ -271,6 +286,17 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
         ref={holderRef}
         className="term-node-body nodrag"
         style={{ visibility: lod ? 'hidden' : 'visible' }}
+        onContextMenu={(e) => {
+          // 终端内右键：有选中就复制，否则粘贴（不弹画布菜单）
+          e.preventDefault()
+          e.stopPropagation()
+          const term = termRef.current
+          if (term?.hasSelection()) {
+            void navigator.clipboard.writeText(term.getSelection())
+          } else {
+            void navigator.clipboard.readText().then((t) => window.termboard.write(id, t))
+          }
+        }}
         onWheel={(e) => {
           // ⌥+滚轮 = 调字号（不动画布，不动会话）
           if (e.altKey) {

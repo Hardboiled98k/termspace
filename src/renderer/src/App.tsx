@@ -22,6 +22,7 @@ import TerminalNode, { type TermNode } from './nodes/TerminalNode'
 import GroupNode, { type GroupNodeT } from './nodes/GroupNode'
 import WorkerNode, { type WorkerNodeT } from './nodes/WorkerNode'
 import ContextNode, { type ContextNodeT } from './nodes/ContextNode'
+import BrowserNode, { type BrowserNodeT } from './nodes/BrowserNode'
 import { IdentityContext } from './identity-context'
 import { SettingsPanel, type SettingsSection } from './SettingsPanel'
 import {
@@ -32,16 +33,18 @@ import {
   IconKey,
   IconSettings,
   IconGroup,
-  IconChevron
+  IconChevron,
+  IconGlobe
 } from './Icons'
 
-export type BoardNode = TermNode | GroupNodeT | WorkerNodeT | ContextNodeT
+export type BoardNode = TermNode | GroupNodeT | WorkerNodeT | ContextNodeT | BrowserNodeT
 
 const nodeTypes = {
   terminal: TerminalNode,
   group: GroupNode,
   worker: WorkerNode,
-  context: ContextNode
+  context: ContextNode,
+  browser: BrowserNode
 }
 
 const statusColor: Record<string, string> = {
@@ -59,13 +62,14 @@ interface SavedNode {
   width: number
   height: number
   title: string
-  type?: 'terminal' | 'group' | 'context'
+  type?: 'terminal' | 'group' | 'context' | 'browser'
   parentId?: string
   identityId?: string
   command?: string
   provider?: string
   fontSize?: number
   cwd?: string
+  url?: string
 }
 interface SavedEdge {
   id: string
@@ -481,6 +485,16 @@ function seedNodes(): BoardNode[] {
 }
 
 function fromSaved(s: SavedNode): BoardNode {
+  if (s.type === 'browser') {
+    return {
+      id: s.id,
+      type: 'browser',
+      position: { x: s.x, y: s.y },
+      width: s.width,
+      height: s.height,
+      data: { url: s.url || 'about:blank', title: s.title }
+    }
+  }
   if (s.type === 'context') {
     return {
       id: s.id,
@@ -528,9 +542,10 @@ function toSaved(n: Exclude<BoardNode, WorkerNodeT>): SavedNode {
     y: n.position.y,
     width: n.width ?? n.measured?.width ?? DEFAULT_SIZE.width,
     height: n.height ?? n.measured?.height ?? DEFAULT_SIZE.height,
-    title: n.data.title,
+    title: n.type === 'browser' ? (n.data.title ?? '浏览器') : n.data.title,
     type: n.type
   }
+  if (n.type === 'browser') return { ...base, url: n.data.url }
   if (n.type === 'group' || n.type === 'context') return base
   return {
     ...base,
@@ -890,6 +905,27 @@ function Board(): React.JSX.Element {
     [defaultIdentity, projectCwd]
   )
 
+  const addBrowser = useCallback(
+    (url?: string) => {
+      setNodes((ns) => {
+        const id = nextId(ns, 'b')
+        const n = ns.length
+        return [
+          ...ns,
+          {
+            id,
+            type: 'browser' as const,
+            position: { x: 200 + (n % 4) * 120, y: 200 + (n % 3) * 100 },
+            width: 640,
+            height: 460,
+            data: { url: url || 'https://www.google.com' }
+          }
+        ]
+      })
+    },
+    []
+  )
+
   // F2: 共享上下文 Hub — 无则建（一块板一个），有则聚焦
   const openContextHub = useCallback(() => {
     setNodes((ns) => {
@@ -1076,6 +1112,7 @@ function Board(): React.JSX.Element {
             zoomable
             nodeColor={(n) => {
               if (n.type === 'context') return '#BF5AF2'
+              if (n.type === 'browser') return '#5AC8FA'
               if (n.type === 'group') return statusColor['group']
               if (n.type === 'worker') {
                 const st = (n.data as { state?: string }).state
@@ -1088,7 +1125,8 @@ function Board(): React.JSX.Element {
             nodeStrokeWidth={3}
           />
           <BoardHUD nodes={nodes} ctxMap={ctxMap} onFocus={focusNode} />
-          <Panel position="top-left" className="board-top">
+          {/* 浏览器式顶部标签条：贴顶、满宽、横向滚动 */}
+          <Panel position="top-center" className="project-tabbar">
             <div className="project-tabs">
               {projects.map((p) => (
                 <button
@@ -1116,6 +1154,8 @@ function Board(): React.JSX.Element {
                 ＋
               </button>
             </div>
+          </Panel>
+          <Panel position="top-left" className="board-top">
             <div className="toolbar">
             <button className="toolbar-btn" title="新建终端" onClick={() => addTerminal()}>
               <IconTerminal />
@@ -1175,6 +1215,10 @@ function Board(): React.JSX.Element {
             <button className="toolbar-btn" title="项目简报（共享上下文）" onClick={openContextHub}>
               <IconBrief />
               <span>简报</span>
+            </button>
+            <button className="toolbar-btn" title="画布内浏览器" onClick={() => addBrowser()}>
+              <IconGlobe />
+              <span>浏览器</span>
             </button>
             <button
               className="toolbar-btn icon-only"
@@ -1241,6 +1285,16 @@ function Board(): React.JSX.Element {
                   >
                     <IconBrief />
                     项目简报
+                  </button>
+                  <button
+                    className="ctx-menu-item"
+                    onClick={() => {
+                      addBrowser()
+                      setMenu(null)
+                    }}
+                  >
+                    <IconGlobe />
+                    浏览器
                   </button>
                   <button
                     className="ctx-menu-item"

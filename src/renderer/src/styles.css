@@ -579,53 +579,68 @@ body {
   color: var(--tb-muted);
 }
 
-/* ── 顶部：项目标签页 + 工具栏 ───────────────────────── */
+/* ── 浏览器式顶部标签条（贴顶满宽）───────────────────── */
+.project-tabbar {
+  left: 0 !important;
+  right: 0 !important;
+  top: 0 !important;
+  transform: none !important;
+  margin: 0 !important;
+  width: 100vw;
+  padding: 6px 12px 0 96px; /* 左让开 traffic lights */
+  -webkit-app-region: drag; /* 空白处可拖窗口，像原生标签栏 */
+}
+.project-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  overflow-x: auto;
+  -webkit-app-region: no-drag;
+}
+.project-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+/* ── 工具栏容器（标签条下方）───────────────────────── */
 .board-top {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  margin-top: 34px; /* 让开 traffic lights */
-}
-.project-tabs {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px;
-  background: var(--tb-panel-glass);
-  backdrop-filter: blur(24px) saturate(180%);
-  border: 0.5px solid var(--tb-hairline);
-  border-radius: 11px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
-  max-width: 62vw;
-  overflow-x: auto;
-  width: fit-content;
-}
-.project-tabs::-webkit-scrollbar {
-  display: none;
+  margin-top: 44px; /* 让开顶部标签条 */
 }
 .project-tab {
   display: flex;
   align-items: baseline;
   gap: 6px;
-  padding: 5px 11px;
-  border: none;
-  border-radius: 8px;
+  min-width: 92px;
+  max-width: 200px;
+  padding: 6px 12px;
+  border: 0.5px solid transparent;
+  border-bottom: none;
+  border-radius: 9px 9px 0 0;
   background: none;
   color: var(--tb-muted);
   font-family: var(--tb-font-ui);
   font-size: 12px;
   cursor: pointer;
   white-space: nowrap;
+  flex-shrink: 0;
   transition:
     background 0.16s ease,
     color 0.16s ease;
 }
+.project-tab .project-tab-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .project-tab:hover {
-  background: rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.05);
   color: var(--tb-text);
 }
 .project-tab.active {
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--tb-panel-glass);
+  backdrop-filter: blur(24px) saturate(180%);
+  border-color: var(--tb-hairline);
   color: var(--tb-text);
 }
 .project-tab.active .project-tab-name {
@@ -1212,6 +1227,90 @@ body {
 .context-node-body::placeholder {
   color: var(--tb-muted);
   opacity: 0.7;
+}
+
+/* ── 画布内浏览器节点 ───────────────────────────────── */
+.browser-node {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  background: var(--tb-panel);
+  border: 0.5px solid var(--tb-hairline);
+  border-radius: var(--tb-radius);
+  box-shadow: var(--tb-shadow-card);
+  overflow: hidden;
+}
+.browser-node.selected {
+  border-color: rgba(90, 200, 250, 0.7);
+  box-shadow:
+    0 0 0 1px rgba(90, 200, 250, 0.5),
+    0 0 24px rgba(90, 200, 250, 0.2),
+    var(--tb-shadow-card);
+}
+.browser-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 7px 10px;
+  background: rgba(38, 38, 41, 0.6);
+  backdrop-filter: blur(20px);
+  border-bottom: 0.5px solid var(--tb-hairline);
+  cursor: grab;
+  flex-shrink: 0;
+}
+.browser-nav {
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--tb-muted);
+  font-size: 15px;
+  cursor: pointer;
+}
+.browser-nav:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--tb-text);
+}
+.browser-addr {
+  flex: 1;
+  min-width: 0;
+  font-size: 11.5px;
+  font-family: var(--tb-font-mono);
+  color: var(--tb-text);
+  background: var(--tb-terminal);
+  border: 0.5px solid var(--tb-hairline);
+  border-radius: 7px;
+  padding: 4px 10px;
+  outline: none;
+}
+.browser-addr:focus {
+  border-color: rgba(90, 200, 250, 0.6);
+}
+.browser-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--tb-idle);
+  flex-shrink: 0;
+}
+.browser-dot.loading {
+  background: #5ac8fa;
+  animation: far-pulse 0.9s ease-in-out infinite;
+}
+.browser-body {
+  flex: 1;
+  min-height: 0;
+  background: #fff;
+}
+.browser-node.far {
+  border-width: 0;
+  background: rgba(90, 200, 250, 0.85);
 }
 
 /* ── Worker 卡片（F7，cdx 状态投影）─────────────────── */
