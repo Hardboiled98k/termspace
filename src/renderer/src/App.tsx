@@ -127,6 +127,56 @@ function Board(): React.JSX.Element {
     []
   )
 
+  // agent 状态事件 → 节点 glow/胶囊（兜底策略见 ARCHITECTURE-NOTES.md §3）
+  useEffect(() => {
+    const doneAt = new Map<string, number>()
+    const lastEventAt = new Map<string, number>()
+
+    const apply = (nodeId: string, status: TermNode['data']['status']): void => {
+      setNodes((ns) =>
+        ns.map((n) =>
+          n.id === nodeId && n.data.status !== status
+            ? { ...n, data: { ...n.data, status } }
+            : n
+        )
+      )
+    }
+
+    const off = window.termboard.onAgentStatus((e) => {
+      lastEventAt.set(e.nodeId, Date.now())
+      if (e.state === 'working') {
+        // done-holdoff 3s：并行 hook 晚到的 working 不许复活已结束的 turn
+        if (!e.newTurn && Date.now() - (doneAt.get(e.nodeId) ?? 0) < 3000) return
+        apply(e.nodeId, 'running')
+      } else if (e.state === 'blocked' || e.state === 'waiting') {
+        apply(e.nodeId, 'attention')
+      } else {
+        // done / session(start|end reset)
+        doneAt.set(e.nodeId, Date.now())
+        apply(e.nodeId, 'idle')
+      }
+    })
+
+    // stale-working 清扫：丢 Stop / CLI 崩溃的最后防线（30min 无事件回 idle）
+    const sweep = setInterval(() => {
+      const now = Date.now()
+      setNodes((ns) =>
+        ns.map((n) => {
+          if (n.data.status === 'idle') return n
+          const last = lastEventAt.get(n.id)
+          return last && now - last > 30 * 60_000
+            ? { ...n, data: { ...n.data, status: 'idle' as const } }
+            : n
+        })
+      )
+    }, 60_000)
+
+    return () => {
+      off()
+      clearInterval(sweep)
+    }
+  }, [])
+
   const onMoveEnd = useCallback((_: unknown, vp: Viewport) => {
     viewportRef.current = vp
     setSaveTick((t) => t + 1) // 走统一防抖保存

@@ -3,11 +3,14 @@ import { readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 import * as pty from 'node-pty'
+import { startHookSystem, type HookSystem } from './hooks'
 
 // dev 下 app 名默认是 "Electron"，userData 会指向共享目录 → 显式隔离
 app.setPath('userData', path.join(app.getPath('appData'), 'termboard'))
 
 const ptys = new Map<string, pty.IPty>()
+let hookSystem: HookSystem | null = null
+let mainWin: BrowserWindow | null = null
 
 function killPty(id: string): void {
   const p = ptys.get(id)
@@ -61,6 +64,9 @@ ipcMain.handle('pty:spawn', (e, id: string, cols: number, rows: number) => {
   }
   env['TERM'] = 'xterm-256color'
   env['COLORTERM'] = 'truecolor'
+  // hook 门控：托管脚本只在带 NODE_ID 的终端里工作
+  env['TERMBOARD_NODE_ID'] = id
+  if (hookSystem) env['TERMBOARD_HOOK_ENDPOINT'] = hookSystem.endpointFile
 
   const p = pty.spawn(shell, ['-l'], {
     name: 'xterm-256color',
@@ -120,10 +126,23 @@ ipcMain.handle('workspace:save', async (_e, data: unknown) => {
   }
 })
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   // 设计系统 dark-first：vibrancy 跟随系统会在浅色模式下透白，先锁深色
   nativeTheme.themeSource = 'dark'
+
+  // hook 系统先于窗口（pty spawn 需要 endpoint 路径）；失败不阻塞启动
+  try {
+    hookSystem = await startHookSystem((e) => {
+      if (mainWin && !mainWin.isDestroyed()) {
+        mainWin.webContents.send('agent:status', e)
+      }
+    })
+  } catch (err) {
+    console.error('hook system failed to start:', err)
+  }
+
   const win = createWindow()
+  mainWin = win
 
   // 自检模式：TERMBOARD_SHOT=/path/x.png 启动 → 6 秒后截图退出
   const shotPath = process.env['TERMBOARD_SHOT']
@@ -145,5 +164,6 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   for (const id of [...ptys.keys()]) killPty(id)
+  hookSystem?.dispose()
   app.quit()
 })

@@ -23,7 +23,17 @@ const api = {
     return () => ipcRenderer.removeListener(`pty:exit:${id}`, listener)
   },
   loadWorkspace: (): Promise<unknown> => ipcRenderer.invoke('workspace:load'),
-  saveWorkspace: (data: unknown): Promise<void> => ipcRenderer.invoke('workspace:save', data)
+  saveWorkspace: (data: unknown): Promise<void> => ipcRenderer.invoke('workspace:save', data),
+  onAgentStatus: (
+    cb: (e: { nodeId: string; agentId: string; state: string; newTurn: boolean }) => void
+  ): (() => void) => {
+    const listener = (
+      _e: IpcRendererEvent,
+      ev: { nodeId: string; agentId: string; state: string; newTurn: boolean }
+    ): void => cb(ev)
+    ipcRenderer.on('agent:status', listener)
+    return () => ipcRenderer.removeListener('agent:status', listener)
+  }
 }
 
 contextBridge.exposeInMainWorld('termboard', api)

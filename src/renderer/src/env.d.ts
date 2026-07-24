@@ -9,6 +9,9 @@ interface TermboardApi {
   onExit: (id: string, cb: (code: number) => void) => () => void
   loadWorkspace: () => Promise<unknown>
   saveWorkspace: (data: unknown) => Promise<void>
+  onAgentStatus: (
+    cb: (e: { nodeId: string; agentId: string; state: string; newTurn: boolean }) => void
+  ) => () => void
 }
 
 declare interface Window {
