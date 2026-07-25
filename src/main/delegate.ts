@@ -16,20 +16,41 @@ interface NodeRuntime {
    */
   live: boolean
   lastEventAt: number
-  /** 当前会话 id；已收到 SessionEnd 的那个 id 记在 endedSession，用来挡迟到事件 */
+  /** 当前活跃会话 id（有些事件不带，故可空） */
   sessionId?: string
-  endedSession?: string
+  /**
+   * 单调递增的会话代号。任何"这个终端换人了"的时刻都 +1：
+   * SessionStart / SessionEnd / 节点销毁。授权弹窗前后比对它，比对可空的 sessionId 可靠。
+   */
+  epoch: number
+  /** 已判死，只有 SessionStart 能复活 —— 别的事件（含迟到的）一律不复活 */
+  deadUntilStart: boolean
 }
 
 /** 可以接单的状态白名单 —— fail-closed：不在名单里一律拒，别用黑名单 */
 const ACCEPTING = new Set(['idle', 'done', 'session'])
+
+/* 已结束的会话 id。必须独立于 NodeRuntime 存在：节点被删（dropNode）时 runtime 会被重置，
+   若墓碑跟着没了，旧会话的迟到事件就能把同 id 的新终端（可能只是个普通 shell）判成活 agent。 */
+const endedSessions = new Set<string>()
+const ENDED_MAX = 500
+function rememberEnded(sid: string): void {
+  endedSessions.add(sid)
+  if (endedSessions.size > ENDED_MAX) {
+    // Set 保序，删最早的一批
+    for (const s of endedSessions) {
+      endedSessions.delete(s)
+      if (endedSessions.size <= ENDED_MAX * 0.8) break
+    }
+  }
+}
 
 const runtime = new Map<string, NodeRuntime>()
 
 function rt(id: string): NodeRuntime {
   let r = runtime.get(id)
   if (!r) {
-    r = { status: 'idle', lastStopAt: 0, live: false, lastEventAt: 0 }
+    r = { status: 'idle', lastStopAt: 0, live: false, lastEventAt: 0, epoch: 0, deadUntilStart: false }
     runtime.set(id, r)
   }
   return r
@@ -39,32 +60,59 @@ export function noteTranscript(id: string, path: string): void {
   rt(id).transcriptPath = path
 }
 
+/**
+ * 会话存活判定 —— 这是整个派活链路的地基，判错就是往普通 shell 里执行任意命令。
+ *
+ * 难点在于 hook 是并行且乱序的：SessionEnd 之后仍会收到同会话的 PostToolUse，
+ * 新会话开始后也可能收到旧会话的 Stop。规则因此是 fail-closed 的：
+ * - 已知已结束的会话（endedSessions），其事件整条丢弃
+ * - 只有 SessionStart 能把判死的节点复活
+ * - 其余事件必须属于当前活跃会话，否则忽略
+ */
 export function noteStatus(id: string, state: string, event?: string, sessionId?: string): void {
   const r = rt(id)
-  // 归一化后的 state：working=运行；done/session=一轮结束
-  if (state === 'done' || state === 'session') r.lastStopAt = Date.now()
-  r.status = state
   r.lastEventAt = Date.now()
 
-  /* 会话存活判定。并行 hook 会晚到：SessionEnd 之后仍可能收到同一会话的
-     PostToolUse/Notification，若无条件置活，派活就会把任务直接执行进普通 shell。
-     所以按 session_id 记住"已结束的那个会话"，它的迟到事件一律不复活。 */
-  if (event === 'SessionEnd') {
-    r.live = false
-    r.endedSession = sessionId ?? r.sessionId ?? 'unknown'
-    return
-  }
-  if (sessionId) {
-    if (sessionId === r.endedSession) return // 已结束会话的迟到事件，忽略
+  /* SessionStart 要先于墓碑判定处理：`claude --resume` 会用**同一个 session_id**
+     重开会话，若被墓碑挡掉，这个节点就永远不可派活了。SessionStart 是明确的
+     "现在开始"信号，迟到的旧 SessionStart 实际不存在，所以放它复活是安全的。 */
+  if (event === 'SessionStart') {
+    if (sessionId) endedSessions.delete(sessionId)
     r.sessionId = sessionId
-    r.endedSession = undefined
+    r.deadUntilStart = false
     r.live = true
+    r.epoch++
+    r.status = state
+    r.lastStopAt = Date.now()
     return
   }
-  // 没有 session_id 可依据时保守处理：只有 SessionStart 能把死会话拉回活
-  if (r.endedSession && event !== 'SessionStart') return
-  if (event === 'SessionStart') r.endedSession = undefined
+
+  // 已结束会话的迟到事件：连状态都不许改
+  if (sessionId && endedSessions.has(sessionId)) return
+
+  if (event === 'SessionEnd') {
+    if (sessionId) rememberEnded(sessionId)
+    r.live = false
+    r.deadUntilStart = true
+    r.epoch++
+    r.sessionId = undefined
+    r.status = state
+    return
+  }
+
+  // 别的会话的事件（新旧都算），不碰本节点状态
+  if (sessionId && r.sessionId && sessionId !== r.sessionId) return
+  // 判死后只认 SessionStart，其余一律不复活
+  if (r.deadUntilStart) return
+  // 还没见过 SessionStart（app 后启动、接回已经在跑的会话）→ 采纳它
+  if (sessionId && !r.sessionId) {
+    r.sessionId = sessionId
+    r.epoch++
+  }
+
   r.live = true
+  r.status = state
+  if (state === 'done' || state === 'session') r.lastStopAt = Date.now()
 }
 
 /** 该节点当前是否是活着的 agent 会话 */
@@ -72,8 +120,20 @@ export function isAgentSession(id: string): boolean {
   return runtime.get(id)?.live === true
 }
 
+/**
+ * 节点销毁 / PTY 结束。**不能直接 delete** —— 那会把"已判死"的墓碑一起抹掉，
+ * 旧会话的迟到事件就能把同 id 的新终端重新判成活 agent（codex 复现过真实注入）。
+ */
 export function dropNode(id: string): void {
-  runtime.delete(id)
+  const r = runtime.get(id)
+  if (!r) return
+  if (r.sessionId) rememberEnded(r.sessionId)
+  r.live = false
+  r.deadUntilStart = true
+  r.epoch++
+  r.sessionId = undefined
+  r.transcriptPath = undefined
+  r.status = 'idle'
 }
 
 /** 读 transcript 最后一条 assistant 文本消息 */
@@ -160,7 +220,8 @@ tb ask 只能派给正在跑 agent 的终端 —— 往普通 shell 注入文本
     return `派活被拒：${targetId} 上已有一次派活在进行中，等它结束再来。`
   }
 
-  const epoch = r.sessionId
+  // 比对 epoch 而不是可空的 sessionId：没带 session_id 的 End→Start 序列同样会推进 epoch
+  const epoch = r.epoch
   if (!(await deps.authorize(sourceId, targetId, task))) {
     return `派活被拒：${sourceId} → ${targetId} 未获授权。
 在画布上从你的节点拉一条线到目标终端（终端→终端 = 派活通道），或在弹窗里批准本次调用。`
@@ -172,8 +233,10 @@ tb ask 只能派给正在跑 agent 的终端 —— 往普通 shell 注入文本
   if (now !== r || !deps.hasNode(targetId)) {
     return `派活被拒：${targetId} 在你批准期间已经变了（节点被重建或移除），未注入。`
   }
-  if (!now.live || !ACCEPTING.has(now.status) || now.sessionId !== epoch) {
-    return `派活被拒：${targetId} 在你批准期间状态变成了 ${now.live ? now.status : '会话已结束'}，未注入。`
+  if (!now.live || !ACCEPTING.has(now.status) || now.epoch !== epoch) {
+    return `派活被拒：${targetId} 在你批准期间${
+      now.epoch !== epoch ? '换了会话' : now.live ? `状态变成了 ${now.status}` : '会话已结束'
+    }，未注入。`
   }
   if (busy.has(targetId)) return `派活被拒：${targetId} 上已有一次派活在进行中。`
   busy.add(targetId)

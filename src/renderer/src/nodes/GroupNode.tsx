@@ -1,5 +1,6 @@
-import { memo, useState } from 'react'
+import { memo, useContext, useState } from 'react'
 import { useReactFlow, useStore, type Node, type NodeProps } from '@xyflow/react'
+import { TmuxContext } from '../identity-context'
 
 export type GroupNodeT = Node<{ title: string; collapsed?: boolean }, 'group'>
 
@@ -10,6 +11,7 @@ const COLLAPSED_H = 46
 function GroupNodeImpl({ id, data }: NodeProps<GroupNodeT>): React.JSX.Element {
   const { setNodes, getNodes, deleteElements } = useReactFlow()
   const [bcast, setBcast] = useState<string | null>(null)
+  const tmuxOk = useContext(TmuxContext)
 
   // 聚合子节点状态（返回字符串保证 selector 相等性）
   const counts = useStore((s) => {
@@ -52,8 +54,13 @@ function GroupNodeImpl({ id, data }: NodeProps<GroupNodeT>): React.JSX.Element {
     })
   }
 
-  /** 折叠：子节点 hidden（会被卸载 → 只释放客户端，tmux 会话照活），组身缩成一条 */
+  /**
+   * 折叠：子节点 hidden → React Flow 不再渲染 → TerminalNode cleanup 释放 PTY 客户端。
+   * 只有存在 tmux 会话时里面的进程才活得下来；**没有 tmux 时折叠就是把进程杀了**，
+   * 所以无 tmux 一律禁用折叠（按钮置灰并说明原因）。
+   */
   const toggleCollapse = (): void => {
+    if (!tmuxOk) return
     const next = !data.collapsed
     setNodes((ns) => {
       // 展开时按子节点实际范围回算高度，不用额外存旧高度
@@ -115,7 +122,14 @@ function GroupNodeImpl({ id, data }: NodeProps<GroupNodeT>): React.JSX.Element {
       <div className="group-node-header">
         <button
           className="group-caret nodrag"
-          title={data.collapsed ? '展开集群' : '折叠集群（会话保持存活）'}
+          disabled={!tmuxOk}
+          title={
+            !tmuxOk
+              ? '折叠需要 tmux：没有 tmux 时子终端被隐藏即等于结束进程'
+              : data.collapsed
+                ? '展开集群'
+                : '折叠集群（tmux 会话保持存活）'
+          }
           onClick={(e) => {
             e.stopPropagation()
             toggleCollapse()

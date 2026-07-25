@@ -23,7 +23,7 @@ import GroupNode, { type GroupNodeT } from './nodes/GroupNode'
 import WorkerNode, { type WorkerNodeT } from './nodes/WorkerNode'
 import ContextNode, { type ContextNodeT } from './nodes/ContextNode'
 import BrowserNode, { type BrowserNodeT, browserViews } from './nodes/BrowserNode'
-import { IdentityContext } from './identity-context'
+import { IdentityContext, TmuxContext } from './identity-context'
 import { SettingsPanel, type SettingsSection } from './SettingsPanel'
 import { MessageCenter } from './MessageCenter'
 import {
@@ -237,7 +237,7 @@ function BoardHUD({
   const peak = Math.max(0, ...claudePools.map((p) => Math.round(p.pool.used_percentage)))
 
   return (
-    <Panel position="top-right" className={`quota-hud${collapsed ? ' collapsed' : ''}`}>
+    <div className={`quota-hud${collapsed ? ' collapsed' : ''}`}>
       <button className="hud-toggle" onClick={() => setCollapsed((c) => !c)}>
         <span className="hud-toggle-label">
           {collapsed
@@ -291,7 +291,7 @@ function BoardHUD({
       )}
         </>
       )}
-    </Panel>
+    </div>
   )
 }
 
@@ -610,6 +610,8 @@ function Board(): React.JSX.Element {
   const [presets, setPresets] = useState<Preset[]>([])
   const [defaultIdentity, setDefaultIdentity] = useState('')
   const [defaultFontSize, setDefaultFontSize] = useState(13)
+  /** tmux 可用与否决定集群能不能折叠（无 tmux 时隐藏子节点 = 杀进程） */
+  const [tmuxOk, setTmuxOk] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState<SettingsSection | null>(
     // 自检截图模式下直接展开设置面板
     new URLSearchParams(location.search).get('panel') as SettingsSection | null
@@ -703,8 +705,15 @@ function Board(): React.JSX.Element {
     void window.termscape.listIdentities().then(setIdentities)
     void window.termscape.listPresets().then(setPresets)
     void window.termscape.getSettings().then((s) => {
-      const n = (s as { defaultFontSize?: number } | null)?.defaultFontSize
-      if (typeof n === 'number' && n > 0) setDefaultFontSize(n)
+      const cfg = s as { defaultFontSize?: number; tmuxEnabled?: boolean } | null
+      if (typeof cfg?.defaultFontSize === 'number' && cfg.defaultFontSize > 0) {
+        setDefaultFontSize(cfg.defaultFontSize)
+      }
+      // 设置里开着还不够，本机得真装了 tmux
+      void window.termscape.doctor().then((items) => {
+        const tmux = items.find((d) => d.key === 'tmux')
+        setTmuxOk(!!cfg?.tmuxEnabled && !!tmux?.ok)
+      })
     })
   }, [])
 
@@ -886,27 +895,36 @@ function Board(): React.JSX.Element {
     const doneAt = new Map<string, number>()
     const lastEventAt = new Map<string, number>()
 
-    const apply = (nodeId: string, status: TermNode['data']['status']): void => {
+    /* error 是进程非零退出置的，属于"这个终端已经出事了"的终态。
+       迟到的 hook 事件（Stop/PostToolUse）不能把它洗回 idle/running —— 那样红框一闪就没了。
+       只有明确的新一轮（SessionStart / 用户提交新 prompt）才允许覆盖。 */
+    const apply = (
+      nodeId: string,
+      status: TermNode['data']['status'],
+      canClearError = false
+    ): void => {
       setNodes((ns) =>
-        ns.map((n) =>
-          n.id === nodeId && n.type === 'terminal' && n.data.status !== status
-            ? { ...n, data: { ...n.data, status } }
-            : n
-        )
+        ns.map((n) => {
+          if (n.id !== nodeId || n.type !== 'terminal') return n
+          if (n.data.status === status) return n
+          if (n.data.status === 'error' && !canClearError) return n
+          return { ...n, data: { ...n.data, status } }
+        })
       )
     }
 
     const off = window.termscape.onAgentStatus((e) => {
       lastEventAt.set(e.nodeId, Date.now())
+      const fresh = e.newTurn || e.event === 'SessionStart' // 新一轮才允许清 error
       if (e.state === 'working') {
         // done-holdoff 3s：并行 hook 晚到的 working 不许复活已结束的 turn
         if (!e.newTurn && Date.now() - (doneAt.get(e.nodeId) ?? 0) < 3000) return
-        apply(e.nodeId, 'running')
+        apply(e.nodeId, 'running', fresh)
       } else if (e.state === 'blocked' || e.state === 'waiting') {
-        apply(e.nodeId, 'attention')
+        apply(e.nodeId, 'attention', fresh)
       } else {
         doneAt.set(e.nodeId, Date.now())
-        apply(e.nodeId, 'idle')
+        apply(e.nodeId, 'idle', fresh)
       }
     })
 
@@ -1148,7 +1166,9 @@ function Board(): React.JSX.Element {
         })),
       links: edges
         .filter((e) => (e.data?.kind ?? 'delegate') === 'delegate')
-        .map((e) => `${e.source}>${e.target}`)
+        .map((e) => `${e.source}>${e.target}`),
+      // 现存节点全集：主进程据此撤销指向已消失节点的一次性授权（id 会被复用）
+      nodeIds: nodes.filter((n) => n.type !== 'worker').map((n) => n.id)
     })
   }, [nodes, edges])
 
@@ -1195,6 +1215,7 @@ function Board(): React.JSX.Element {
 
   return (
     <IdentityContext.Provider value={identities}>
+      <TmuxContext.Provider value={tmuxOk}>
       <div className={`h-screen w-screen mode-${canvasMode}`}>
         {settingsOpen && (
           <SettingsPanel
@@ -1303,13 +1324,17 @@ function Board(): React.JSX.Element {
             }}
             nodeStrokeWidth={3}
           />
-          <BoardHUD nodes={nodes} ctxMap={ctxMap} onFocus={focusNode} />
-          <MessageCenter
-            nodes={nodes}
-            approvals={approvals}
-            onFocus={focusNode}
-            onDecide={decideApproval}
-          />
+          {/* 右上角单一栏：额度 HUD 与消息中心竖排。两个各自的 top-right Panel
+              会被绝对定位到同一点上，字直接压在一起 */}
+          <Panel position="top-right" className="right-rail">
+            <BoardHUD nodes={nodes} ctxMap={ctxMap} onFocus={focusNode} />
+            <MessageCenter
+              nodes={nodes}
+              approvals={approvals}
+              onFocus={focusNode}
+              onDecide={decideApproval}
+            />
+          </Panel>
           {/* 浏览器式顶部标签条：贴顶、满宽、横向滚动 */}
           <Panel position="top-center" className="project-tabbar">
             <div className="project-tabs">
@@ -1450,10 +1475,18 @@ function Board(): React.JSX.Element {
                   <button
                     className="ctx-menu-item danger"
                     onClick={() => {
-                      const sel = nodes.filter((n) => n.type === 'terminal' && n.selected)
-                      for (const s of sel) void window.termscape.destroy(s.id)
-                      const gone = new Set(nodes.filter((n) => n.selected).map((n) => n.id))
-                      setNodes((ns) => ns.filter((n) => !n.selected))
+                      // 选中里若有集群，子节点要一起删 —— 否则组没了、子节点还留着
+                      // parentId 和 hidden:true，变成永远看不见也删不掉的孤儿
+                      const selIds = new Set(nodes.filter((n) => n.selected).map((n) => n.id))
+                      const gone = new Set(
+                        nodes.filter((n) => n.selected || (n.parentId && selIds.has(n.parentId))).map((n) => n.id)
+                      )
+                      for (const n of nodes) {
+                        if (gone.has(n.id) && n.type === 'terminal') {
+                          void window.termscape.destroy(n.id)
+                        }
+                      }
+                      setNodes((ns) => ns.filter((n) => !gone.has(n.id)))
                       dropEdgesOf(gone)
                       setMenu(null)
                     }}
@@ -1559,6 +1592,7 @@ function Board(): React.JSX.Element {
           )}
         </ReactFlow>
       </div>
+      </TmuxContext.Provider>
     </IdentityContext.Provider>
   )
 }

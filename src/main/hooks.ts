@@ -130,7 +130,8 @@ function summarizeToolInput(toolName: string, input: unknown): string {
 }
 
 async function writeAtomic(file: string, content: string): Promise<void> {
-  const tmp = `${file}.tmp`
+  // 临时文件名带随机后缀：install 与 uninstall 若撞在一起，固定名会互相覆盖或 rename ENOENT
+  const tmp = `${file}.${randomUUID().slice(0, 8)}.tmp`
   await writeFile(tmp, content)
   await rename(tmp, file)
 }
@@ -142,7 +143,13 @@ interface HookGroup {
 
 const claudeSettingsPath = (): string => path.join(os.homedir(), '.claude', 'settings.json')
 
-/** 托管 hook 条目此刻是否真的在用户 settings.json 里（体检要报实情，不能只看我们自己的开关） */
+const isOurs = (cmd: unknown): boolean => typeof cmd === 'string' && cmd.includes(MARKER)
+
+/**
+ * 托管 hook 是否**完整**装在用户 settings.json 里（体检要报实情）。
+ * 用「全部事件都在」而不是「有一个就算」：少装几个事件时状态系统是残的，
+ * 报「正常」比不报更误导人。
+ */
 export async function claudeHooksPresent(): Promise<boolean> {
   const p = claudeSettingsPath()
   if (!existsSync(p)) return false
@@ -150,10 +157,9 @@ export async function claudeHooksPresent(): Promise<boolean> {
     const settings = JSON.parse(await readFile(p, 'utf8')) as {
       hooks?: Record<string, HookGroup[]>
     }
-    return Object.values(settings.hooks ?? {}).some((arr) =>
-      (Array.isArray(arr) ? arr : []).some((g) =>
-        g.hooks?.some((h) => typeof h.command === 'string' && h.command.includes(MARKER))
-      )
+    const hooks = settings.hooks ?? {}
+    return CLAUDE_EVENTS.every((ev) =>
+      (Array.isArray(hooks[ev]) ? hooks[ev] : []).some((g) => g.hooks?.some((h) => isOurs(h.command)))
     )
   } catch {
     return false
@@ -175,14 +181,22 @@ export async function uninstallClaudeHooks(): Promise<boolean> {
   let changed = false
   for (const ev of Object.keys(hooks)) {
     const arr = Array.isArray(hooks[ev]) ? hooks[ev] : []
-    const kept = arr.filter(
-      (g) => !g.hooks?.some((h) => typeof h.command === 'string' && h.command.includes(MARKER))
-    )
-    if (kept.length !== arr.length) {
-      changed = true
-      if (kept.length) hooks[ev] = kept
-      else delete hooks[ev]
+    const kept: HookGroup[] = []
+    let touched = false
+    for (const g of arr) {
+      if (!g.hooks?.some((h) => isOurs(h.command))) {
+        kept.push(g)
+        continue
+      }
+      // 逐条摘，不能整组删 —— 用户自己的 hook 可能和我们在同一个 group 里
+      const rest = g.hooks.filter((h) => !isOurs(h.command))
+      touched = true
+      if (rest.length) kept.push({ ...g, hooks: rest })
     }
+    if (!touched) continue
+    changed = true
+    if (kept.length) hooks[ev] = kept
+    else delete hooks[ev]
   }
   if (changed) await writeAtomic(p, JSON.stringify(settings, null, 2) + '\n')
   return changed

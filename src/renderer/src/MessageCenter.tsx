@@ -1,4 +1,3 @@
-import { Panel } from '@xyflow/react'
 import type { TermNode } from './nodes/TerminalNode'
 import type { BoardNode, PendingApproval } from './App'
 
@@ -30,8 +29,9 @@ export function MessageCenter({
 
   if (approvals.length === 0 && attention.length === 0 && running.length === 0) return null
 
+  // 不自带 Panel：和额度 HUD 同属右上角栏（两个 top-right Panel 会叠在同一点上）
   return (
-    <Panel position="top-right" className="msg-center">
+    <div className="msg-center">
       {approvals.length > 0 && (
         <div className="msg-section">
           <div className="msg-title needs">
@@ -112,6 +112,6 @@ export function MessageCenter({
           {groups} 个集群 · {terms.length} 终端
         </div>
       )}
-    </Panel>
+    </div>
   )
 }

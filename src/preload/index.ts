@@ -70,11 +70,11 @@ const api = {
   saveWorkspace: (data: unknown): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('workspace:save', data),
   onAgentStatus: (
-    cb: (e: { nodeId: string; agentId: string; state: string; newTurn: boolean; nonce?: string }) => void
+    cb: (e: { nodeId: string; agentId: string; state: string; newTurn: boolean; event?: string }) => void
   ): (() => void) => {
     const listener = (
       _e: IpcRendererEvent,
-      ev: { nodeId: string; agentId: string; state: string; newTurn: boolean; nonce?: string }
+      ev: { nodeId: string; agentId: string; state: string; newTurn: boolean; event?: string }
     ): void => cb(ev)
     ipcRenderer.on('agent:status', listener)
     return () => ipcRenderer.removeListener('agent:status', listener)

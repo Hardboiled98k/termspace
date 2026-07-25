@@ -218,7 +218,9 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
       stepFont(e.deltaY < 0 ? 1 : -1)
       return
     }
-    e.stopPropagation()
+    // 普通滚轮**不能**在这里 stopPropagation：这是祖先元素的 capture 阶段，
+    // 拦下来 xterm（监听在子元素 .xterm 上）就收不到，终端回滚直接失效。
+    // 挡住画布 pan 靠容器上的 nowheel class，不靠拦事件。
   })
   const setHolder = useCallback(
     (el: HTMLDivElement | null): void => {
@@ -311,7 +313,7 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
       </div>
       <div
         ref={setHolder}
-        className="term-node-body nodrag"
+        className="term-node-body nodrag nowheel"
         style={{ visibility: lod ? 'hidden' : 'visible' }}
         onContextMenu={(e) => {
           // 终端内右键：有选中就复制，否则粘贴（不弹画布菜单）

@@ -55,6 +55,8 @@ interface TermscapeApi {
     agents: { id: string; title: string; provider?: string; status: string }[]
     /** 授权连线，形如 `source>target` */
     links: string[]
+    /** 现存节点 id 全集（主进程据此撤销失效授权） */
+    nodeIds: string[]
   }) => void
   onApprovals: (
     cb: (
@@ -89,7 +91,7 @@ interface TermscapeApi {
   loadWorkspace: () => Promise<unknown>
   saveWorkspace: (data: unknown) => Promise<{ ok: boolean; error?: string }>
   onAgentStatus: (
-    cb: (e: { nodeId: string; agentId: string; state: string; newTurn: boolean; nonce?: string }) => void
+    cb: (e: { nodeId: string; agentId: string; state: string; newTurn: boolean; event?: string }) => void
   ) => () => void
   onAgentContext: (
     cb: (e: {

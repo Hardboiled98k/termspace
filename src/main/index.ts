@@ -44,6 +44,9 @@ const fromMainWin = (e: { sender: Electron.WebContents }): boolean =>
 const PTY_WRITE_LIMIT = 256 * 1024
 
 
+/** 本次运行是否已经问过 hook 写入同意（renderer:ready 会被 reload 反复触发） */
+let askedConsent = false
+
 const ptys = new Map<string, pty.IPty>()
 let hookSystem: HookSystem | null = null
 let contextTail: ContextTail | null = null
@@ -55,12 +58,26 @@ let boardAgents: { id: string; title: string; provider?: string; status: string 
 let boardLinks = new Set<string>()
 ipcMain.on(
   'board:agents',
-  (e, payload: { agents?: typeof boardAgents; links?: string[] } | typeof boardAgents) => {
+  (
+    e,
+    payload:
+      | { agents?: typeof boardAgents; links?: string[]; nodeIds?: string[] }
+      | typeof boardAgents
+  ) => {
     if (!fromMainWin(e)) return
     // 兼容旧形态（纯数组）
-    const p = Array.isArray(payload) ? { agents: payload, links: [] } : payload
+    const p = Array.isArray(payload) ? { agents: payload, links: [], nodeIds: [] } : payload
     boardAgents = Array.isArray(p?.agents) ? p.agents : []
     boardLinks = new Set(Array.isArray(p?.links) ? p.links.filter((s) => typeof s === 'string') : [])
+    /* 节点 id 会被复用（nextId 取 max+1）：删掉 b1 再建一个新的 b1，
+       旧授权就白送给了陌生节点。所以节点一消失就撤销与它有关的一次性授权。 */
+    if (Array.isArray(p?.nodeIds)) {
+      const alive = new Set(p.nodeIds.filter((s) => typeof s === 'string'))
+      for (const g of [...grants]) {
+        const [src, dst] = g.split('>')
+        if (!alive.has(src) || !alive.has(dst)) grants.delete(g)
+      }
+    }
   }
 )
 
@@ -158,10 +175,12 @@ const idLocks = new Map<string, Promise<unknown>>()
 function serialize<T>(id: string, fn: () => Promise<T>): Promise<T> {
   const prev = idLocks.get(id) ?? Promise.resolve()
   const next = prev.then(fn, fn) // 前一个失败也要继续排队
-  idLocks.set(
-    id,
-    next.catch(() => undefined)
-  )
+  const tail = next.catch(() => undefined)
+  idLocks.set(id, tail)
+  // 队尾跑完就把锁清掉，别让 Map 无限长
+  void tail.then(() => {
+    if (idLocks.get(id) === tail) idLocks.delete(id)
+  })
   return next
 }
 
@@ -303,8 +322,9 @@ ipcMain.handle(
   'pty:spawn',
   async (e, id: string, cols: number, rows: number, opts?: SpawnOpts) => {
     if (!fromMainWin(e) || !okId(id)) return
-    // 等该 id 上未收尾的 destroy（kill-session 是异步的，抢跑会杀掉马上要建的新会话）
-    await idLocks.get(id)
+    /* spawn 与 destroy 走同一条串行链。只"等一下旧锁"不够：spawn 自身是异步的，
+       后来的 destroy 会和它重叠，kill-session 可能落在刚建好的新会话上。 */
+    return serialize(id, async () => {
     // 客户端是同步断开的；抓屏落盘不阻塞 spawn（否则每次重挂载都要等一次 capture-pane）
     void releasePty(id) // 只释放客户端；有 tmux 会话则下面 -A 接回
     const settings = await getSettings()
@@ -383,7 +403,10 @@ ipcMain.handle(
     // 实例守卫：exit 是异步的，同 id 重生成后旧实例的 exit 不能删/通知新实例
     if (ptys.get(id) !== p) return
     ptys.delete(id)
+    // 进程没了 → 会话按死处理，迟到的 hook 不得再把它判成活 agent
+    dropNode(id)
     if (!wc.isDestroyed()) wc.send(`pty:exit:${id}`, exitCode)
+  })
   })
 })
 
@@ -822,8 +845,10 @@ app.whenReady().then(async () => {
   ipcMain.on('renderer:ready', () => {
     void pushQuota()
     workerWatch?.refresh()
-    // 首启征求 hook 写入同意：放在窗口起来之后问，别卡启动；自检截图模式下跳过
-    if (st.claudeHooks === 'ask' && !process.env['TERMBOARD_SHOT']) {
+    // 首启征求 hook 写入同意：放在窗口起来之后问，别卡启动；自检截图模式下跳过。
+    // renderer:ready 每次 reload/HMR 都会来，askedConsent 保证一轮只问一次。
+    if (st.claudeHooks === 'ask' && !askedConsent && !process.env['TERMBOARD_SHOT']) {
+      askedConsent = true
       void dialog
         .showMessageBox(win, {
           type: 'question',

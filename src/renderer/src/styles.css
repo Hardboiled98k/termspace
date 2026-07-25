@@ -270,7 +270,6 @@ body {
   border: 0.5px solid var(--tb-hairline);
   border-radius: 10px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
-  margin-top: 34px;
   width: 196px;
   max-height: 70vh;
   overflow-y: auto;
@@ -1675,6 +1674,142 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* ── 右上角栏：额度 HUD + 消息中心竖排（两个 top-right Panel 会叠在同一点） ── */
+.right-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  width: 268px;
+  margin-top: 34px !important; /* 让开顶部标签条 */
+  pointer-events: none; /* 空白处不挡画布 */
+}
+.right-rail > * {
+  pointer-events: auto;
+  width: 100%;
+}
+
+/* ── 消息中心：只在有事时出现 ── */
+.msg-center {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  background: var(--tb-panel-glass);
+  backdrop-filter: blur(24px) saturate(180%);
+  border: 0.5px solid var(--tb-hairline);
+  border-radius: 10px;
+  box-shadow: var(--tb-shadow-card);
+  max-height: 62vh;
+  overflow-y: auto;
+}
+.msg-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.msg-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font: 600 11px/1 var(--tb-font-ui);
+  color: var(--tb-muted);
+  letter-spacing: 0.01em;
+}
+.msg-title.needs {
+  color: var(--tb-orange);
+}
+.msg-pulse {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--tb-orange);
+  box-shadow: 0 0 8px var(--tb-orange);
+  animation: far-pulse 1.6s ease-in-out infinite;
+}
+.msg-card {
+  padding: 8px 9px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 0.5px solid var(--tb-hairline);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.msg-card:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+.msg-card-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.msg-card-title {
+  flex: 1;
+  min-width: 0;
+  font: 500 12px/1.3 var(--tb-font-ui);
+  color: var(--tb-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.msg-card-actions {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+.msg-act {
+  padding: 3px 9px;
+  font: 500 11px/1 var(--tb-font-ui);
+  color: var(--tb-text);
+  background: rgba(255, 255, 255, 0.1);
+  border: 0.5px solid var(--tb-hairline-strong);
+  border-radius: var(--tb-radius-pill);
+  cursor: pointer;
+}
+.msg-act:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+.msg-act.approve {
+  color: #fff;
+  background: var(--tb-blue);
+  border-color: transparent;
+}
+.msg-act.deny {
+  color: var(--tb-red);
+  background: rgba(255, 69, 58, 0.14);
+  border-color: rgba(255, 69, 58, 0.35);
+}
+.msg-act.ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--tb-muted);
+}
+.msg-run-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 6px;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: left;
+}
+.msg-run-row:hover {
+  background: rgba(255, 255, 255, 0.07);
+}
+.msg-more {
+  font: 400 11px/1 var(--tb-font-ui);
+  color: var(--tb-muted);
+  white-space: nowrap;
+}
+.msg-foot {
+  padding-top: 2px;
+  font: 400 10px/1 var(--tb-font-ui);
+  color: var(--tb-muted);
+  border-top: 0.5px solid var(--tb-hairline);
 }
 
 /* 审批卡片里的工具名与命令摘要 */
