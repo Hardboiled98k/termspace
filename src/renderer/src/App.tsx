@@ -582,6 +582,8 @@ function Board(): React.JSX.Element {
   const [edges, setEdges] = useState<Edge[]>([])
   const [loaded, setLoaded] = useState(false)
   const [saveTick, setSaveTick] = useState(0)
+  // 落盘失败必须让用户看见：静默失败 = 用户以为存好了，关掉就没了
+  const [saveErr, setSaveErr] = useState<string | null>(null)
   const [identities, setIdentities] = useState<IdentityMeta[]>([])
   const [presets, setPresets] = useState<Preset[]>([])
   const [defaultIdentity, setDefaultIdentity] = useState('')
@@ -698,6 +700,7 @@ function Board(): React.JSX.Element {
 
   // 启动恢复（含 v1 单画布 → v2 多项目迁移）
   useEffect(() => {
+    let reapTimer = 0
     void window.termboard.loadWorkspace().then((raw) => {
       const ws = raw as Workspace | null
       let projs = ws?.projects
@@ -728,11 +731,16 @@ function Board(): React.JSX.Element {
       setActiveProject(act)
       applyBoard(boardsRef.current[act])
       setLoaded(true)
-      // 清理孤儿 tmux 会话：全工作区所有项目的节点 id 都保留，其余杀掉
-      const known = Object.values(boardsRef.current).flatMap((b) => b.nodes.map((n) => n.id))
-      // 延迟 5s，等活跃画布节点 spawn 完（它们也在 ptys 里被保护）
-      setTimeout(() => void window.termboard.reapSessions(known), 5000)
+      // 清理孤儿 tmux 会话：全工作区所有项目的节点 id 都保留，其余杀掉。
+      // 只在**确实读到**工作区时做 —— 读不到（首次启动 / 文件损坏）时 known 里只有种子节点，
+      // reap 会把用户全部真会话当孤儿杀光，和 workspace 损坏组成连环丢数据。
+      if (raw) {
+        const known = Object.values(boardsRef.current).flatMap((b) => b.nodes.map((n) => n.id))
+        // 延迟 5s，等活跃画布节点 spawn 完（它们也在 ptys 里被保护）
+        reapTimer = window.setTimeout(() => void window.termboard.reapSessions(known), 5000)
+      }
     })
+    return () => window.clearTimeout(reapTimer)
   }, [applyBoard])
 
   // 当前画布快照（worker 卡片是运行时投影，不持久化）
@@ -757,11 +765,13 @@ function Board(): React.JSX.Element {
     if (!loaded || !activeProject) return
     const t = setTimeout(() => {
       boardsRef.current[activeProject] = snapshot()
-      void window.termboard.saveWorkspace({
-        projects,
-        activeProjectId: activeProject,
-        boards: boardsRef.current
-      })
+      void window.termboard
+        .saveWorkspace({
+          projects,
+          activeProjectId: activeProject,
+          boards: boardsRef.current
+        })
+        .then((r) => setSaveErr(r?.ok === false ? (r.error ?? '未知错误') : null))
     }, 500)
     return () => clearTimeout(t)
   }, [saveTick, loaded, activeProject, projects, snapshot])
@@ -946,7 +956,8 @@ function Board(): React.JSX.Element {
     []
   )
 
-  // F2: 共享上下文 Hub — 无则建（一块板一个），有则聚焦
+  // F2: 共享上下文 Hub — 无则建（一块板一个），有则聚焦。
+  // id 必须带项目号：早期硬编码 'ctx-hub' 导致所有项目共用同一个磁盘文件，简报跨项目串板。
   const openContextHub = useCallback(() => {
     setNodes((ns) => {
       const existing = ns.find((n) => n.type === 'context')
@@ -957,7 +968,7 @@ function Board(): React.JSX.Element {
       return [
         ...ns,
         {
-          id: 'ctx-hub',
+          id: `ctx-${activeProject}`,
           type: 'context' as const,
           position: { x: 40, y: 300 },
           width: 420,
@@ -966,7 +977,7 @@ function Board(): React.JSX.Element {
         }
       ]
     })
-  }, [focusNode])
+  }, [focusNode, activeProject])
 
   // F1: 框选成组 + 自动网格排列（Shift+拖拽框选后点「成组」）
   const groupSelected = useCallback(() => {
@@ -1096,10 +1107,10 @@ function Board(): React.JSX.Element {
   )
   const deleteMenuNode = useCallback(() => {
     if (!menuNode) return
-    if (menuNode.type === 'terminal') window.termboard.destroy(menuNode.id)
+    if (menuNode.type === 'terminal') void window.termboard.destroy(menuNode.id)
     if (menuNode.type === 'group') {
       const kids = nodes.filter((n) => n.parentId === menuNode.id)
-      for (const k of kids) window.termboard.destroy(k.id)
+      for (const k of kids) void window.termboard.destroy(k.id)
       setNodes((ns) => ns.filter((n) => n.id !== menuNode.id && n.parentId !== menuNode.id))
       setMenu(null)
       return
@@ -1179,6 +1190,15 @@ function Board(): React.JSX.Element {
             bgColor="transparent"
           />
           <Controls position="bottom-left" showInteractive={false} />
+          {saveErr && (
+            <Panel position="bottom-center" className="save-alert">
+              <span className="save-alert-dot" />
+              画布未能保存：{saveErr}
+              <button className="save-alert-retry" onClick={() => setSaveTick((t) => t + 1)}>
+                重试
+              </button>
+            </Panel>
+          )}
           <Panel position="bottom-left" className="mode-switch">
             <button
               className={`mode-btn active ${canvasMode}`}
@@ -1353,7 +1373,7 @@ function Board(): React.JSX.Element {
                     className="ctx-menu-item danger"
                     onClick={() => {
                       const sel = nodes.filter((n) => n.type === 'terminal' && n.selected)
-                      for (const s of sel) window.termboard.destroy(s.id)
+                      for (const s of sel) void window.termboard.destroy(s.id)
                       setNodes((ns) => ns.filter((n) => !n.selected))
                       setMenu(null)
                     }}

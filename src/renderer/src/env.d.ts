@@ -57,13 +57,13 @@ interface TermboardApi {
   write: (id: string, data: string) => void
   resize: (id: string, cols: number, rows: number) => void
   kill: (id: string) => void
-  destroy: (id: string) => void
+  destroy: (id: string) => Promise<void>
   onData: (id: string, cb: (data: string) => void) => () => void
   onExit: (id: string, cb: (code: number) => void) => () => void
   loadContext: (nodeId: string) => Promise<string>
-  saveContext: (nodeId: string, text: string) => Promise<void>
+  saveContext: (nodeId: string, text: string) => Promise<{ ok: boolean; error?: string }>
   loadWorkspace: () => Promise<unknown>
-  saveWorkspace: (data: unknown) => Promise<void>
+  saveWorkspace: (data: unknown) => Promise<{ ok: boolean; error?: string }>
   onAgentStatus: (
     cb: (e: { nodeId: string; agentId: string; state: string; newTurn: boolean }) => void
   ) => () => void

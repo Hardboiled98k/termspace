@@ -55,45 +55,76 @@ function run(args: string[]): Promise<boolean> {
   })
 }
 
+/* tmux 的 -t 默认按前缀 + fnmatch 匹配，`tb-p1` 能命中 `tb-p11`。
+   全部加 `=` 前缀强制精确匹配，否则删一个节点可能连坐杀掉另一个会话。 */
+const target = (nodeId: string): string => `=${sessionName(nodeId)}`
+
 export function hasSession(nodeId: string): Promise<boolean> {
-  return run(['has-session', '-t', sessionName(nodeId)])
+  return run(['has-session', '-t', target(nodeId)])
 }
 
 export function killSession(nodeId: string): Promise<boolean> {
-  return run(['kill-session', '-t', sessionName(nodeId)])
+  return run(['kill-session', '-t', target(nodeId)])
 }
 
-/** 列出所有 tb- 会话名（用于孤儿清理） */
-export function listSessions(): Promise<string[]> {
+export interface SessionInfo {
+  name: string
+  attached: boolean
+  /** 最近活动时间（unix 秒） */
+  activity: number
+}
+
+/** 列出所有 tb- 会话及其活跃度（用于孤儿清理时判断能不能杀） */
+export function listSessions(): Promise<SessionInfo[]> {
   return new Promise((resolve) => {
     if (!tmuxPath) return resolve([])
     execFile(
       tmuxPath,
-      ['-L', SOCKET, 'list-sessions', '-F', '#{session_name}'],
+      [
+        '-L',
+        SOCKET,
+        'list-sessions',
+        '-F',
+        '#{session_name}\t#{session_attached}\t#{session_activity}'
+      ],
       { timeout: 5000 },
       (err, stdout) => {
         if (err) return resolve([]) // 无 server = 无会话
         resolve(
           stdout
             .split('\n')
-            .map((s) => s.trim())
-            .filter((s) => s.startsWith('tb-'))
+            .map((line) => line.trim().split('\t'))
+            .filter((f) => f[0]?.startsWith('tb-'))
+            .map((f) => ({
+              name: f[0],
+              attached: Number(f[1] ?? 0) > 0,
+              activity: Number(f[2] ?? 0)
+            }))
         )
       }
     )
   })
 }
 
-/** 杀掉不在存活节点集合里的孤儿会话，返回清理数量 */
-export async function reapOrphanSessions(liveNodeIds: Set<string>): Promise<number> {
+/**
+ * 杀掉不在存活节点集合里的孤儿会话，返回清理数量。
+ *
+ * 两道保险，因为误杀 = 用户正在跑的 agent 直接没了：
+ * - attached 的绝不杀（有客户端连着 = 有人在用，哪怕它不在名单里）
+ * - graceMs 内有活动的绝不杀（可能是崩溃前没来得及落盘的节点，留到下次启动再判）
+ */
+export async function reapOrphanSessions(
+  liveNodeIds: Set<string>,
+  graceMs = 10 * 60 * 1000
+): Promise<number> {
   const live = new Set([...liveNodeIds].map(sessionName))
   const sessions = await listSessions()
+  const cutoff = (Date.now() - graceMs) / 1000
   let n = 0
   for (const s of sessions) {
-    if (!live.has(s)) {
-      await run(['kill-session', '-t', s])
-      n++
-    }
+    if (live.has(s.name) || s.attached || s.activity > cutoff) continue
+    await run(['kill-session', '-t', `=${s.name}`])
+    n++
   }
   return n
 }
@@ -104,7 +135,7 @@ export function capturePane(nodeId: string): Promise<string> {
     if (!tmuxPath) return resolve('')
     execFile(
       tmuxPath,
-      ['-L', SOCKET, 'capture-pane', '-p', '-e', '-t', sessionName(nodeId), '-S', '-800'],
+      ['-L', SOCKET, 'capture-pane', '-p', '-e', '-t', target(nodeId), '-S', '-800'],
       { timeout: 5000, maxBuffer: 4 * 1024 * 1024 },
       (err, stdout) => resolve(err ? '' : stdout)
     )

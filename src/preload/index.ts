@@ -42,9 +42,7 @@ const api = {
   kill: (id: string): void => {
     ipcRenderer.send('pty:kill', id)
   },
-  destroy: (id: string): void => {
-    ipcRenderer.send('pty:destroy', id)
-  },
+  destroy: (id: string): Promise<void> => ipcRenderer.invoke('pty:destroy', id),
   onData: (id: string, cb: (data: string) => void): (() => void) => {
     const listener = (_e: IpcRendererEvent, data: string): void => cb(data)
     ipcRenderer.on(`pty:data:${id}`, listener)
@@ -56,10 +54,11 @@ const api = {
     return () => ipcRenderer.removeListener(`pty:exit:${id}`, listener)
   },
   loadContext: (nodeId: string): Promise<string> => ipcRenderer.invoke('context:load', nodeId),
-  saveContext: (nodeId: string, text: string): Promise<void> =>
+  saveContext: (nodeId: string, text: string): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('context:save', nodeId, text),
   loadWorkspace: (): Promise<unknown> => ipcRenderer.invoke('workspace:load'),
-  saveWorkspace: (data: unknown): Promise<void> => ipcRenderer.invoke('workspace:save', data),
+  saveWorkspace: (data: unknown): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('workspace:save', data),
   onAgentStatus: (
     cb: (e: { nodeId: string; agentId: string; state: string; newTurn: boolean }) => void
   ): (() => void) => {

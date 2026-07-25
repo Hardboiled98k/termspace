@@ -250,7 +250,7 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
             title="切换凭证会重开会话"
             onChange={(e) => {
               // 换身份 = 新 env → 必须真杀旧会话（否则 tmux -A 会接回旧 env 的会话）
-              window.termboard.destroy(id)
+              void window.termboard.destroy(id)
               updateNodeData(id, { identityId: e.currentTarget.value || undefined })
             }}
           >
@@ -277,7 +277,7 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
           title="关闭终端（结束会话）"
           onClick={(e) => {
             e.stopPropagation()
-            window.termboard.destroy(id) // 真杀 tmux 会话（unmount cleanup 只释放客户端）
+            void window.termboard.destroy(id) // 真杀 tmux 会话（unmount cleanup 只释放客户端）
             void deleteElements({ nodes: [{ id }] })
           }}
         >

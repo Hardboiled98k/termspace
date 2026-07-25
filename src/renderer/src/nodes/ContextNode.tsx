@@ -22,13 +22,21 @@ function ContextNodeImpl({ id, selected }: NodeProps<ContextNodeT>): React.JSX.E
   const [text, setText] = useState('')
   const [loaded, setLoaded] = useState(false)
   const [dirty, setDirty] = useState(false)
+  const [failed, setFailed] = useState(false)
   const timer = useRef(0)
 
   useEffect(() => {
+    // alive 守卫：快速删除/重建同 id 时，迟到的 load 不能覆盖新状态
+    let alive = true
     void window.termboard.loadContext(id).then((t) => {
+      if (!alive) return
       setText(t)
       setLoaded(true)
     })
+    return () => {
+      alive = false
+      window.clearTimeout(timer.current) // 卸载时丢弃未触发的防抖保存
+    }
   }, [id])
 
   const onChange = (v: string): void => {
@@ -36,7 +44,10 @@ function ContextNodeImpl({ id, selected }: NodeProps<ContextNodeT>): React.JSX.E
     setDirty(true)
     window.clearTimeout(timer.current)
     timer.current = window.setTimeout(() => {
-      void window.termboard.saveContext(id, v).then(() => setDirty(false))
+      void window.termboard.saveContext(id, v).then((r) => {
+        setFailed(r?.ok === false)
+        setDirty(false)
+      })
     }, 800)
   }
 
@@ -65,8 +76,8 @@ function ContextNodeImpl({ id, selected }: NodeProps<ContextNodeT>): React.JSX.E
       <div className="term-node-header">
         <span className="context-node-icon">✦</span>
         <span className="term-node-title">共享上下文</span>
-        <span className={`status-chip ${dirty ? 'attention' : 'idle'}`}>
-          {dirty ? '保存中…' : '已注入新 agent'}
+        <span className={`status-chip ${failed ? 'error' : dirty ? 'attention' : 'idle'}`}>
+          {failed ? '保存失败' : dirty ? '保存中…' : '已注入新 agent'}
         </span>
         <button
           className="term-node-close nodrag"

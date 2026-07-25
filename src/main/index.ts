@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme } from 'electron'
-import { readFile, writeFile, rename, mkdir } from 'node:fs/promises'
+import { readFile, writeFile, rename, mkdir, unlink } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
@@ -89,25 +89,57 @@ async function snapshotScrollback(id: string): Promise<void> {
   }
 }
 
-/** 只杀客户端，tmux 会话存活（reload / app 退出 / 重挂载）— 续存的关键 */
-function releasePty(id: string): void {
+/** 进行中的抓屏：destroy 删快照前要等它落完，否则删掉又被写回来 */
+const pendingSnapshots = new Map<string, Promise<void>>()
+
+/* 同一 nodeId 的 spawn / destroy 必须串行。destroy 里的 kill-session 是异步的，
+   紧接着 respawn（换身份）时，迟到的 kill 会把刚建好的新会话杀掉。 */
+const idLocks = new Map<string, Promise<unknown>>()
+function serialize<T>(id: string, fn: () => Promise<T>): Promise<T> {
+  const prev = idLocks.get(id) ?? Promise.resolve()
+  const next = prev.then(fn, fn) // 前一个失败也要继续排队
+  idLocks.set(
+    id,
+    next.catch(() => undefined)
+  )
+  return next
+}
+
+/**
+ * 只杀客户端，tmux 会话存活（reload / app 退出 / 重挂载）— 续存的关键。
+ * snapshot=false 用于 destroy：节点都要没了，抓屏存下来只会在同 id 重建时回灌旧内容。
+ */
+function releasePty(id: string, snapshot = true): Promise<void> {
   const p = ptys.get(id)
-  if (!p) return
+  if (!p) return pendingSnapshots.get(id) ?? Promise.resolve()
   ptys.delete(id)
-  void snapshotScrollback(id) // 先抓屏落盘（机器重启后 cold-restore 用）
+  let done = Promise.resolve()
+  if (snapshot) {
+    done = snapshotScrollback(id)
+    pendingSnapshots.set(id, done)
+    void done.finally(() => {
+      if (pendingSnapshots.get(id) === done) pendingSnapshots.delete(id)
+    })
+  }
   try {
     p.kill()
   } catch {
     // 进程可能已退出
   }
+  return done
 }
 
-/** 真结束：kill-session + 客户端（节点 ✕ / 换身份重生成）*/
-function destroyPty(id: string): void {
-  contextTail?.untrack(id)
-  dropNode(id)
-  void killSession(id)
-  releasePty(id)
+/** 真结束：kill-session + 客户端 + 清快照（节点 ✕ / 换身份重生成）*/
+function destroyPty(id: string): Promise<void> {
+  return serialize(id, async () => {
+    contextTail?.untrack(id)
+    dropNode(id)
+    await releasePty(id, false)
+    await pendingSnapshots.get(id) // 等在飞的抓屏落完，否则下一行删了又被写回来
+    // 快照必须删：否则删掉节点后，新节点若拿到同一个 id 会回灌已删除终端的内容
+    await unlink(scrollbackFile(id)).catch(() => undefined)
+    await killSession(id)
+  })
 }
 
 function createWindow(): BrowserWindow {
@@ -132,7 +164,7 @@ function createWindow(): BrowserWindow {
   // reload 时 renderer effect cleanup 不执行 → 释放客户端（tmux 会话存活，新页面 -A 接回）
   // （did-navigate 先于新页面 JS 执行，不会误杀新 spawn）
   win.webContents.on('did-navigate', () => {
-    for (const id of [...ptys.keys()]) releasePty(id)
+    for (const id of [...ptys.keys()]) void releasePty(id)
   })
 
   if (process.env['ELECTRON_RENDERER_URL']) {
@@ -156,7 +188,10 @@ interface SpawnOpts {
 ipcMain.handle(
   'pty:spawn',
   async (e, id: string, cols: number, rows: number, opts?: SpawnOpts) => {
-    releasePty(id) // 只释放客户端；有 tmux 会话则下面 -A 接回
+    // 等该 id 上未收尾的 destroy（kill-session 是异步的，抢跑会杀掉马上要建的新会话）
+    await idLocks.get(id)
+    // 客户端是同步断开的；抓屏落盘不阻塞 spawn（否则每次重挂载都要等一次 capture-pane）
+    void releasePty(id) // 只释放客户端；有 tmux 会话则下面 -A 接回
     const settings = await getSettings()
     const shell =
       (settings.defaultShell && existsSync(settings.defaultShell) ? settings.defaultShell : '') ||
@@ -225,6 +260,8 @@ ipcMain.handle(
     )
   }
   p.onData((data) => {
+    // 与 onExit 同样的实例守卫：同 id 重生成后，旧实例的尾部输出不能串进新 xterm
+    if (ptys.get(id) !== p) return
     if (!wc.isDestroyed()) wc.send(`pty:data:${id}`, data)
   })
   p.onExit(({ exitCode }) => {
@@ -251,13 +288,11 @@ ipcMain.on('pty:resize', (_e, id: string, cols: number, rows: number) => {
 
 ipcMain.on('pty:kill', (_e, id: string) => {
   // effect cleanup（remount/HMR/reload 前奏）→ 释放客户端，会话续存
-  releasePty(id)
+  void releasePty(id)
 })
 
-ipcMain.on('pty:destroy', (_e, id: string) => {
-  // 节点 ✕ / 换身份 → 真杀会话
-  destroyPty(id)
-})
+// 节点 ✕ / 换身份 → 真杀会话。可 await：renderer 换身份时要等旧会话确实死透再 respawn
+ipcMain.handle('pty:destroy', (_e, id: string) => destroyPty(id))
 
 // ── Worker 操作 IPC（F7）──
 ipcMain.handle(
@@ -317,19 +352,20 @@ const ctxFile = (nodeId: string): string =>
   path.join(ctxDir(), `${nodeId.replace(/[^a-zA-Z0-9_-]/g, '_')}.md`)
 
 ipcMain.handle('context:load', async (_e, nodeId: string) => {
-  try {
-    return await readFile(ctxFile(nodeId), 'utf8')
-  } catch {
-    // 迁移：早期单文件版本
-    if (nodeId === 'ctx-hub') {
-      try {
-        return await readFile(path.join(app.getPath('userData'), 'board-context.md'), 'utf8')
-      } catch {
-        return ''
-      }
-    }
-    return ''
+  // 简报现在按项目隔离（ctx-<projectId>）。找不到自己的文件就沿老版本回退取内容，
+  // 保证从「全画布共用一份 ctx-hub」升上来时旧简报不丢；首次编辑即写进本项目自己的文件。
+  const chain = [ctxFile(nodeId)]
+  if (nodeId.startsWith('ctx-')) {
+    chain.push(ctxFile('ctx-hub'), path.join(app.getPath('userData'), 'board-context.md'))
   }
+  for (const f of chain) {
+    try {
+      return await readFile(f, 'utf8')
+    } catch {
+      // 试下一个回退源
+    }
+  }
+  return ''
 })
 
 ipcMain.handle('context:save', async (_e, nodeId: string, text: string) => {
@@ -338,8 +374,10 @@ ipcMain.handle('context:save', async (_e, nodeId: string, text: string) => {
     const f = ctxFile(nodeId)
     await writeFile(`${f}.tmp`, String(text))
     await rename(`${f}.tmp`, f)
+    return { ok: true }
   } catch (err) {
     console.error('context save failed:', err)
+    return { ok: false, error: String((err as Error)?.message ?? err) }
   }
 })
 
@@ -369,22 +407,56 @@ async function buildMergedContext(termId: string, ctxIds: string[]): Promise<str
   return out
 }
 
-// ── 工作区持久化（JSON，M1 简版；多项目/tmux 续存后续做）──
+// ── 工作区持久化：原子写 + last-good 备份 + 损坏隔离 ──
+// 裸 writeFile 写一半被杀 = JSON 截断 → load 的 catch 把它当"首次启动" → 整个画布布局静默归零。
+// 所以三件事缺一不可：写到 tmp 再 rename（原子）、覆写前留 .bak（有退路）、读不出来就隔离（不静默丢）。
 const workspacePath = (): string => path.join(app.getPath('userData'), 'workspace.json')
+const workspaceBak = (): string => `${workspacePath()}.bak`
+
+/** 最低限度形状校验：JSON 合法但内容不是工作区（如截断成 `{}`）同样不可信 */
+function parseWorkspace(raw: string): Record<string, unknown> | null {
+  const v: unknown = JSON.parse(raw)
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null
+  const o = v as Record<string, unknown>
+  // v2 有 projects，v1 有 nodes；两者皆无 = 不是有效工作区
+  if (!Array.isArray(o.projects) && !Array.isArray(o.nodes)) return null
+  return o
+}
 
 ipcMain.handle('workspace:load', async () => {
-  try {
-    return JSON.parse(await readFile(workspacePath(), 'utf8'))
-  } catch {
-    return null // 首次启动无文件
+  for (const p of [workspacePath(), workspaceBak()]) {
+    let raw: string
+    try {
+      raw = await readFile(p, 'utf8')
+    } catch {
+      continue // 文件不存在：首次启动，或还没生成过备份
+    }
+    try {
+      const ws = parseWorkspace(raw)
+      if (ws) return ws
+      throw new Error('形状校验未通过')
+    } catch (err) {
+      // 文件在、但读不出来 = 损坏。隔离而非丢弃，用户还有手工救回的机会
+      const quarantine = `${p}.corrupt-${Date.now()}`
+      await rename(p, quarantine).catch(() => {})
+      console.error(`workspace 损坏，已隔离到 ${quarantine}:`, err)
+    }
   }
+  return null
 })
 
 ipcMain.handle('workspace:save', async (_e, data: unknown) => {
+  const f = workspacePath()
   try {
-    await writeFile(workspacePath(), JSON.stringify(data, null, 2))
+    const json = JSON.stringify(data, null, 2)
+    await writeFile(`${f}.tmp`, json)
+    // 先把上一版转成备份再换新：这中间被杀，load 会从 .bak 恢复
+    if (existsSync(f)) await rename(f, workspaceBak())
+    await rename(`${f}.tmp`, f)
+    return { ok: true }
   } catch (err) {
     console.error('workspace save failed:', err)
+    return { ok: false, error: String((err as Error)?.message ?? err) }
   }
 })
 
@@ -498,11 +570,19 @@ app.whenReady().then(async () => {
   })
 })
 
+let quitting = false
 app.on('window-all-closed', () => {
-  // 只释放客户端 —— tmux 会话跨 app 重启存活（续存核心语义）
-  for (const id of [...ptys.keys()]) releasePty(id)
+  if (quitting) return
+  quitting = true
+  // 只释放客户端 —— tmux 会话跨 app 重启存活（续存核心语义）。
+  // 抓屏是异步的，必须等它写完再 quit，否则 cold-restore 快照永远缺最后一屏。
+  const snapshots = [...ptys.keys()].map((id) => releasePty(id))
   hookSystem?.dispose()
   workerWatch?.dispose()
   contextTail?.dispose()
-  app.quit()
+  // 兜底 3s：某个 tmux capture 卡住也不能让 app 关不掉
+  void Promise.race([
+    Promise.allSettled(snapshots),
+    new Promise((r) => setTimeout(r, 3000))
+  ]).then(() => app.quit())
 })

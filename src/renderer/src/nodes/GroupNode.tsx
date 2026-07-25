@@ -61,7 +61,14 @@ function GroupNodeImpl({ id, data }: NodeProps<GroupNodeT>): React.JSX.Element {
           onClick={(e) => {
             e.stopPropagation()
             const kids = getNodes().filter((n) => n.parentId === id)
-            for (const k of kids) window.termboard.destroy(k.id) // 真杀 tmux 会话
+            // 一次点击结束 N 个会话且不可撤销 → 必须确认。想留终端请用左边的「解组」
+            if (
+              kids.length > 0 &&
+              !window.confirm(`结束「${data.title}」下的 ${kids.length} 个终端？会话会被真正杀掉，无法恢复。`)
+            ) {
+              return
+            }
+            for (const k of kids) void window.termboard.destroy(k.id) // 真杀 tmux 会话
             void deleteElements({ nodes: [{ id }, ...kids.map((k) => ({ id: k.id }))] })
           }}
         >
