@@ -1,26 +1,33 @@
-import { memo } from 'react'
+import { memo, useState } from 'react'
 import { useReactFlow, useStore, type Node, type NodeProps } from '@xyflow/react'
 
-export type GroupNodeT = Node<{ title: string }, 'group'>
+export type GroupNodeT = Node<{ title: string; collapsed?: boolean }, 'group'>
+
+/* 组状态取组内最高优先级 error > attention > running > idle
+   —— 缩到全景时一个色块就要说清"这组里最糟的情况是什么" */
+const COLLAPSED_H = 46
 
 function GroupNodeImpl({ id, data }: NodeProps<GroupNodeT>): React.JSX.Element {
   const { setNodes, getNodes, deleteElements } = useReactFlow()
+  const [bcast, setBcast] = useState<string | null>(null)
 
   // 聚合子节点状态（返回字符串保证 selector 相等性）
   const counts = useStore((s) => {
-    let running = 0
-    let attention = 0
+    const c: Record<string, number> = { running: 0, attention: 0, error: 0, idle: 0 }
     let total = 0
     for (const n of s.nodes) {
       if (n.parentId !== id) continue
       total++
-      const st = (n.data as { status?: string }).status
-      if (st === 'running') running++
-      else if (st === 'attention') attention++
+      const st = String((n.data as { status?: string }).status ?? 'idle')
+      if (st in c) c[st]++
     }
-    return `${total}|${running}|${attention}`
+    return `${total}|${c.running}|${c.attention}|${c.error}`
   })
-  const [total, running, attention] = counts.split('|').map(Number)
+  const [total, running, attention, error] = counts.split('|').map(Number)
+  const worst = error > 0 ? 'error' : attention > 0 ? 'attention' : running > 0 ? 'running' : 'idle'
+
+  const kids = (): Node[] => getNodes().filter((n) => n.parentId === id)
+  const terms = (): Node[] => kids().filter((n) => n.type === 'terminal')
 
   const ungroup = (): void => {
     setNodes((ns) => {
@@ -34,6 +41,7 @@ function GroupNodeImpl({ id, data }: NodeProps<GroupNodeT>): React.JSX.Element {
                 ...n,
                 parentId: undefined,
                 extent: undefined,
+                hidden: false,
                 position: {
                   x: g.position.x + n.position.x,
                   y: g.position.y + n.position.y
@@ -44,14 +52,108 @@ function GroupNodeImpl({ id, data }: NodeProps<GroupNodeT>): React.JSX.Element {
     })
   }
 
+  /** 折叠：子节点 hidden（会被卸载 → 只释放客户端，tmux 会话照活），组身缩成一条 */
+  const toggleCollapse = (): void => {
+    const next = !data.collapsed
+    setNodes((ns) => {
+      // 展开时按子节点实际范围回算高度，不用额外存旧高度
+      const extent = ns.reduce(
+        (m, n) => (n.parentId === id ? Math.max(m, n.position.y + (n.height ?? 380)) : m),
+        0
+      )
+      return ns.map((n) => {
+        if (n.id === id) {
+          return {
+            ...n,
+            height: next ? COLLAPSED_H : Math.max(240, extent + 20),
+            data: { ...n.data, collapsed: next }
+          }
+        }
+        return n.parentId === id ? { ...n, hidden: next } : n
+      })
+    })
+  }
+
+  const sendBroadcast = (): void => {
+    const cmd = (bcast ?? '').trim()
+    const list = terms()
+    if (!cmd || !list.length) return
+    for (const n of list) window.termscape.write(n.id, `${cmd}\r`)
+    setBcast(null)
+  }
+
+  /** 批量重启：真杀会话再以相同身份/目录/预设重开（restartTick 驱动 spawn effect 重跑） */
+  const restartAll = (): void => {
+    const list = terms()
+    if (!list.length) return
+    if (
+      !window.confirm(
+        `重启「${data.title}」下的 ${list.length} 个终端？\n当前会话会被结束，再以相同身份、目录和启动命令重开。`
+      )
+    ) {
+      return
+    }
+    for (const n of list) void window.termscape.destroy(n.id)
+    setNodes((ns) =>
+      ns.map((n) =>
+        n.parentId === id && n.type === 'terminal'
+          ? {
+              ...n,
+              data: {
+                ...n.data,
+                status: 'idle',
+                restartTick: (((n.data as { restartTick?: number }).restartTick ?? 0) + 1)
+              }
+            }
+          : n
+      )
+    )
+  }
+
   return (
-    <div className={`group-node${attention > 0 ? ' has-attention' : ''}`}>
+    <div className={`group-node group-${worst}${data.collapsed ? ' collapsed' : ''}`}>
       <div className="group-node-header">
+        <button
+          className="group-caret nodrag"
+          title={data.collapsed ? '展开集群' : '折叠集群（会话保持存活）'}
+          onClick={(e) => {
+            e.stopPropagation()
+            toggleCollapse()
+          }}
+        >
+          {data.collapsed ? '▸' : '▾'}
+        </button>
         <span className="group-node-title">{data.title}</span>
         <span className="group-node-counts">
           {total} 终端{running > 0 && ` · ${running} 运行`}
           {attention > 0 && ` · ${attention} 需要你`}
+          {error > 0 && ` · ${error} 出错`}
         </span>
+        {/* 折叠时子终端已卸载（pty 客户端不在），群发/重启会静默落空 → 直接不给按钮 */}
+        {!data.collapsed && (
+          <>
+            <button
+              className="group-act nodrag"
+              title="向组内所有终端群发一条命令"
+              onClick={(e) => {
+                e.stopPropagation()
+                setBcast(bcast === null ? '' : null)
+              }}
+            >
+              群发
+            </button>
+            <button
+              className="group-act nodrag"
+              title="结束并重开组内所有会话（保留身份/目录/启动命令）"
+              onClick={(e) => {
+                e.stopPropagation()
+                restartAll()
+              }}
+            >
+              重启
+            </button>
+          </>
+        )}
         <button className="term-node-close nodrag" title="解组（终端保留）" onClick={ungroup}>
           ⊟
         </button>
@@ -60,21 +162,42 @@ function GroupNodeImpl({ id, data }: NodeProps<GroupNodeT>): React.JSX.Element {
           title="删除集群及组内全部终端（会话结束）"
           onClick={(e) => {
             e.stopPropagation()
-            const kids = getNodes().filter((n) => n.parentId === id)
+            const list = kids()
             // 一次点击结束 N 个会话且不可撤销 → 必须确认。想留终端请用左边的「解组」
             if (
-              kids.length > 0 &&
-              !window.confirm(`结束「${data.title}」下的 ${kids.length} 个终端？会话会被真正杀掉，无法恢复。`)
+              list.length > 0 &&
+              !window.confirm(
+                `结束「${data.title}」下的 ${list.length} 个终端？会话会被真正杀掉，无法恢复。`
+              )
             ) {
               return
             }
-            for (const k of kids) void window.termscape.destroy(k.id) // 真杀 tmux 会话
-            void deleteElements({ nodes: [{ id }, ...kids.map((k) => ({ id: k.id }))] })
+            for (const k of list) void window.termscape.destroy(k.id) // 真杀 tmux 会话
+            void deleteElements({ nodes: [{ id }, ...list.map((k) => ({ id: k.id }))] })
           }}
         >
           ✕
         </button>
       </div>
+      {bcast !== null && !data.collapsed && (
+        <div className="group-bcast nodrag">
+          <input
+            className="group-bcast-input"
+            autoFocus
+            value={bcast}
+            placeholder="命令会被原样敲进组内每个终端并回车"
+            onChange={(e) => setBcast(e.currentTarget.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') sendBroadcast()
+              if (e.key === 'Escape') setBcast(null)
+            }}
+            spellCheck={false}
+          />
+          <button className="group-act send" onClick={sendBroadcast} disabled={!bcast.trim()}>
+            发送到 {terms().length} 个终端
+          </button>
+        </div>
+      )}
     </div>
   )
 }

@@ -63,6 +63,7 @@ const nodeTypes = {
 const statusColor: Record<string, string> = {
   running: '#0A84FF',
   attention: '#FF9F0A',
+  error: '#FF453A',
   idle: '#48484A',
   group: '#2C2C2E'
 }
@@ -83,6 +84,7 @@ interface SavedNode {
   fontSize?: number
   cwd?: string
   url?: string
+  collapsed?: boolean
 }
 interface SavedEdge {
   id: string
@@ -525,7 +527,7 @@ function fromSaved(s: SavedNode): BoardNode {
       position: { x: s.x, y: s.y },
       width: s.width,
       height: s.height,
-      data: { title: s.title }
+      data: { title: s.title, collapsed: s.collapsed }
     }
   }
   return {
@@ -559,7 +561,9 @@ function toSaved(n: Exclude<BoardNode, WorkerNodeT>): SavedNode {
     type: n.type
   }
   if (n.type === 'browser') return { ...base, url: n.data.url }
-  if (n.type === 'group' || n.type === 'context') return base
+  // 折叠态要持久化：不然重开后组身还是缩着、子终端却全冒出来
+  if (n.type === 'group') return { ...base, collapsed: n.data.collapsed }
+  if (n.type === 'context') return base
   return {
     ...base,
     parentId: n.parentId,
@@ -698,7 +702,17 @@ function Board(): React.JSX.Element {
 
   const applyBoard = useCallback(
     (b: SavedBoard | undefined) => {
-      setNodes((b?.nodes ?? []).map(fromSaved))
+      // 折叠的组：子节点 hidden 不进磁盘（那是派生状态），加载时按父组重算
+      const collapsedGroups = new Set(
+        (b?.nodes ?? []).filter((n) => n.type === 'group' && n.collapsed).map((n) => n.id)
+      )
+      setNodes(
+        (b?.nodes ?? [])
+          .map(fromSaved)
+          .map((n) =>
+            n.parentId && collapsedGroups.has(n.parentId) ? { ...n, hidden: true } : n
+          )
+      )
       setEdges(
         (b?.edges ?? []).map((e) => ({
           id: e.id,

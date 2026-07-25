@@ -1225,8 +1225,80 @@ body {
   border-radius: 16px;
   background: rgba(255, 255, 255, 0.025);
 }
-.group-node.has-attention {
+/* 组边框取组内最高优先级状态：error > attention > running > idle */
+.group-node.group-attention {
   border-color: rgba(255, 159, 10, 0.5);
+}
+.group-node.group-error {
+  border-color: rgba(255, 69, 58, 0.55);
+}
+.group-node.group-running {
+  border-color: rgba(10, 132, 255, 0.4);
+}
+.group-node.collapsed {
+  border-style: solid;
+  background: rgba(255, 255, 255, 0.045);
+}
+.group-caret {
+  width: 16px;
+  padding: 0;
+  font-size: 11px;
+  color: var(--tb-muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+.group-caret:hover {
+  color: var(--tb-text);
+}
+.group-act {
+  padding: 3px 9px;
+  font: 500 11px/1 var(--tb-font-ui);
+  color: var(--tb-text);
+  background: rgba(255, 255, 255, 0.1);
+  border: 0.5px solid var(--tb-hairline-strong);
+  border-radius: var(--tb-radius-pill);
+  cursor: pointer;
+}
+.group-act:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+.group-act:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.group-act.send {
+  color: #fff;
+  background: var(--tb-blue);
+  border-color: transparent;
+  white-space: nowrap;
+}
+.group-bcast {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 0 16px 12px;
+}
+.group-bcast-input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+  font: 400 12px/1.3 var(--tb-font-mono);
+  color: var(--tb-text);
+  background: rgba(0, 0, 0, 0.35);
+  border: 0.5px solid var(--tb-hairline-strong);
+  border-radius: 7px;
+  outline: none;
+}
+.group-bcast-input:focus {
+  border-color: rgba(10, 132, 255, 0.6);
+}
+.status-chip.error {
+  color: var(--tb-red);
+  background: rgba(255, 69, 58, 0.16);
+}
+.term-node.far-error {
+  background: rgba(255, 69, 58, 0.85);
 }
 .group-node-header {
   display: flex;

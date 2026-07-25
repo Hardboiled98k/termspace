@@ -16,7 +16,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebglAddon } from '@xterm/addon-webgl'
 import '@xterm/xterm/css/xterm.css'
 
-export type TermStatus = 'running' | 'idle' | 'attention'
+export type TermStatus = 'running' | 'idle' | 'attention' | 'error'
 export type TermNode = Node<
   {
     title: string
@@ -26,6 +26,8 @@ export type TermNode = Node<
     provider?: string
     fontSize?: number
     cwd?: string
+    /** 自增即重开会话（集群批量重启用）；不持久化 */
+    restartTick?: number
   },
   'terminal'
 >
@@ -61,7 +63,8 @@ const XTERM_THEME = {
 const STATUS_LABEL: Record<TermStatus, string> = {
   running: '运行中',
   attention: '需要你',
-  idle: '空闲'
+  idle: '空闲',
+  error: '已退出'
 }
 
 const FONT_MIN = 8
@@ -129,9 +132,11 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
     fit.fit()
 
     const offData = window.termscape.onData(id, (d) => term.write(d))
-    const offExit = window.termscape.onExit(id, (code) =>
+    const offExit = window.termscape.onExit(id, (code) => {
       term.write(`\r\n\x1b[38;5;244m[进程已退出 code=${code}]\x1b[0m\r\n`)
-    )
+      // 非零退出 = 真出事了，红边框比一行灰字显眼得多（缩到全景也看得见）
+      if (code !== 0) updateNodeData(id, { status: 'error' })
+    })
     void window.termscape.spawn(id, term.cols, term.rows, {
       identityId: data.identityId,
       command: data.command,
@@ -181,7 +186,8 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
     // identityId/command 变更 = 重生成会话（cleanup kill → respawn）
     // ctxIds 变更也重生成：上下文是启动时注入的
     // fontSize 故意不在依赖里：改字号只重排，不重开会话
-  }, [id, data.identityId, data.command, data.cwd, ctxIds])
+    // restartTick 变更 = 批量重启：调用方已 destroy 掉旧会话，这里重跑即新开
+  }, [id, data.identityId, data.command, data.cwd, ctxIds, data.restartTick])
 
   // 字号变更：改渲染 + refit + 通知 pty 新 cols/rows（会话不动）
   useEffect(() => {
