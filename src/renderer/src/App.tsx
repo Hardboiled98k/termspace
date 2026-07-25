@@ -1184,9 +1184,43 @@ function Board(): React.JSX.Element {
         .filter((e) => (e.data?.kind ?? 'delegate') === 'delegate')
         .map((e) => `${e.source}>${e.target}`),
       // 现存节点全集：主进程据此撤销指向已消失节点的一次性授权（id 会被复用）
-      nodeIds: nodes.filter((n) => n.type !== 'worker').map((n) => n.id)
+      nodeIds: nodes.filter((n) => n.type !== 'worker').map((n) => n.id),
+      /* 完整画布快照，给远程 API（手机端要按同样的空间关系画出来）。
+         只含布局与状态，不含任何终端内容 —— 内容走单独的 peek 接口。 */
+      board: {
+        projects,
+        activeProjectId: activeProject,
+        nodes: nodes
+          .filter((n) => n.type !== 'worker')
+          .map((n) => ({
+            id: n.id,
+            type: n.type,
+            title:
+              n.type === 'terminal'
+                ? n.data.title
+                : n.type === 'browser'
+                  ? (n.data.title ?? '浏览器')
+                  : n.type === 'context'
+                    ? '共享上下文'
+                    : n.data.title,
+            status: n.type === 'terminal' ? n.data.status : undefined,
+            provider: n.type === 'terminal' ? n.data.provider : undefined,
+            x: n.position.x,
+            y: n.position.y,
+            width: n.width ?? n.measured?.width ?? 0,
+            height: n.height ?? n.measured?.height ?? 0,
+            parentId: n.parentId,
+            hidden: !!n.hidden
+          })),
+        edges: edges.map((e) => ({
+          id: e.id,
+          source: e.source,
+          target: e.target,
+          kind: (e.data?.kind as string) ?? 'delegate'
+        }))
+      }
     })
-  }, [nodes, edges])
+  }, [nodes, edges, projects, activeProject])
 
   // 右键菜单动作
   const menuNode = menu?.nodeId ? nodes.find((n) => n.id === menu.nodeId) : undefined

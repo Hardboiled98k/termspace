@@ -55,9 +55,15 @@ function run(args: string[]): Promise<boolean> {
   })
 }
 
-/* tmux 的 -t 默认按前缀 + fnmatch 匹配，`tb-p1` 能命中 `tb-p11`。
-   全部加 `=` 前缀强制精确匹配，否则删一个节点可能连坐杀掉另一个会话。 */
+/* tmux 的 -t 默认按前缀 + fnmatch 匹配，`tb-p1` 能命中 `tb-p11`，
+   所以加 `=` 前缀强制精确匹配，否则删一个节点可能连坐杀掉另一个会话。
+
+   注意两种目标不能混用：
+   - has-session / kill-session 收 **session** 目标 → `=name` 正确
+   - capture-pane 收 **pane** 目标 → 裸 `=name` 会报 "can't find pane"，
+     必须写成 `=name:`（冒号表示该会话的当前窗口·活动 pane）。踩过一次，别改回去。 */
 const target = (nodeId: string): string => `=${sessionName(nodeId)}`
+const paneTarget = (nodeId: string): string => `=${sessionName(nodeId)}:`
 
 export function hasSession(nodeId: string): Promise<boolean> {
   return run(['has-session', '-t', target(nodeId)])
@@ -135,7 +141,7 @@ export function capturePane(nodeId: string): Promise<string> {
     if (!tmuxPath) return resolve('')
     execFile(
       tmuxPath,
-      ['-L', SOCKET, 'capture-pane', '-p', '-e', '-t', target(nodeId), '-S', '-800'],
+      ['-L', SOCKET, 'capture-pane', '-p', '-e', '-t', paneTarget(nodeId), '-S', '-800'],
       { timeout: 5000, maxBuffer: 4 * 1024 * 1024 },
       (err, stdout) => resolve(err ? '' : stdout)
     )

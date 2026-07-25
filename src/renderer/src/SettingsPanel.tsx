@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react'
 
-type Section = 'general' | 'terminal' | 'presets' | 'identities' | 'hooks'
+type Section = 'general' | 'terminal' | 'presets' | 'identities' | 'hooks' | 'remote'
 
 const SECTIONS: { key: Section; label: string }[] = [
   { key: 'general', label: '通用' },
   { key: 'terminal', label: '终端' },
   { key: 'presets', label: 'Agent 预设' },
   { key: 'identities', label: '凭证' },
-  { key: 'hooks', label: 'Hooks 与状态' }
+  { key: 'hooks', label: 'Hooks 与状态' },
+  { key: 'remote', label: '远程访问' }
 ]
 
 export function SettingsPanel({
@@ -32,12 +33,16 @@ export function SettingsPanel({
   const [doctor, setDoctor] = useState<
     { key: string; label: string; ok: boolean; detail: string; hint: string }[]
   >([])
+  const [remote, setRemote] = useState<Awaited<
+    ReturnType<typeof window.termscape.remoteStatus>
+  > | null>(null)
 
   useEffect(() => {
     void window.termscape.getSettings().then(setS)
     void window.termscape.hooksStatus().then(setHooks)
     void window.termscape.listSkills().then(setSkills)
     void window.termscape.doctor().then(setDoctor)
+    void window.termscape.remoteStatus().then(setRemote)
   }, [])
 
   const patch = (p: Partial<AppSettings>): void => {
@@ -199,6 +204,81 @@ export function SettingsPanel({
                 画布布局、简报、预设、凭证密文均在
                 <code> ~/Library/Application Support/termboard/</code>。
                 凭证经系统 Keychain 加密，明文不落盘。
+              </p>
+            </>
+          )}
+
+          {section === 'remote' && s && (
+            <>
+              <h3 className="settings-h">远程访问</h3>
+              <label className="settings-row">
+                <span>开启远程 API</span>
+                <input
+                  type="checkbox"
+                  checked={s.remoteEnabled}
+                  onChange={(e) => patch({ remoteEnabled: e.currentTarget.checked })}
+                />
+                <span className={`status-chip ${remote?.running ? 'running' : 'idle'}`}>
+                  {remote?.running ? '运行中' : '未启动'}
+                </span>
+              </label>
+              <p className="settings-note">
+                开启后手机 / 其他电脑可以看画布、看终端输出、处理审批。改动需重启应用生效。
+              </p>
+
+              <label className="settings-row">
+                <span>允许远程写入终端</span>
+                <input
+                  type="checkbox"
+                  checked={s.remoteAllowInput}
+                  onChange={(e) => patch({ remoteAllowInput: e.currentTarget.checked })}
+                />
+                <span className={`status-chip ${s.remoteAllowInput ? 'attention' : 'idle'}`}>
+                  {s.remoteAllowInput ? '可写入' : '只读'}
+                </span>
+              </label>
+              <p className="settings-note">
+                关闭时远程端只能看和审批，不能往终端敲字。写入等于把 shell 交出去，按需再开。
+                这一项改完立刻生效。
+              </p>
+
+              <label className="settings-row">
+                <span>端口</span>
+                <input
+                  type="number"
+                  min={1024}
+                  max={65535}
+                  value={s.remotePort}
+                  onChange={(e) => patch({ remotePort: Number(e.currentTarget.value) })}
+                />
+              </label>
+
+              {remote?.running && (
+                <>
+                  <div className="settings-row">
+                    <span>地址</span>
+                    <code className="settings-doctor-detail">
+                      http://{remote.bind}:{remote.port}
+                    </code>
+                  </div>
+                  <div className="settings-row">
+                    <span>配对 token</span>
+                    <code className="settings-doctor-detail" title="删除 userData/remote-token 可重新生成">
+                      {remote.token}
+                    </code>
+                  </div>
+                </>
+              )}
+
+              <h3 className="settings-h">怎么从外面连</h3>
+              <p className="settings-note">
+                服务**只绑 127.0.0.1**，不会自己往公网监听 —— 这个进程能开终端、读写文件、
+                持有你的模型凭证，暴露到公网等于把整台机器交出去。
+                要在外面用，请装 <code>Tailscale</code> 这类设备级 VPN
+                （WireGuard + 设备认证），手机加入同一个 tailnet 后访问这台机器的
+                <code> {remote?.port ?? s.remotePort}</code> 端口。
+                请求头带 <code>Authorization: Bearer &lt;token&gt;</code>。
+                怀疑泄露就删掉 <code>userData/remote-token</code> 重启，token 会重新生成。
               </p>
             </>
           )}

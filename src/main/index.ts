@@ -19,6 +19,7 @@ import {
 } from './identity-store'
 import { listPresets, upsertPreset, deletePreset } from './preset-store'
 import { startWorkerWatch, workerAction, type WorkerWatch } from './worker-watch'
+import { startRemoteApi, type RemoteApi } from './remote'
 import { getSettings, setSettings, type Settings } from './settings-store'
 import { searchSkills, loadSkill, listSkills } from './skill-index'
 import { delegate, noteTranscript, noteStatus, dropNode, isAgentSession } from './delegate'
@@ -46,28 +47,51 @@ const PTY_WRITE_LIMIT = 256 * 1024
 
 /** 本次运行是否已经问过 hook 写入同意（renderer:ready 会被 reload 反复触发） */
 let askedConsent = false
+/** 远程端能否写入终端。设置里改了要立刻生效，所以单独缓存一份 */
+let remoteAllowInput = false
 
 const ptys = new Map<string, pty.IPty>()
 let hookSystem: HookSystem | null = null
 let contextTail: ContextTail | null = null
 let workerWatch: WorkerWatch | null = null
 let mainWin: BrowserWindow | null = null
+let remoteApi: RemoteApi | null = null
+
+/** 抓某终端当前屏尾部若干行的纯文本（消息中心和远程 API 共用） */
+async function peekPane(id: string, lines: number): Promise<string> {
+  const raw = await capturePane(id)
+  if (!raw) return ''
+  return raw
+    .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '') // 去掉 ANSI 转义，给 UI 用纯文本
+    .split('\n')
+    .map((l) => l.replace(/\s+$/, ''))
+    .filter((l, i, arr) => l !== '' || (i > 0 && arr[i - 1] !== '')) // 压掉连续空行
+    .slice(-Math.max(1, Math.min(200, lines)))
+    .join('\n')
+    .trim()
+}
 /** 渲染层推来的画布 agent 摘要，供 tb agents / 派活用 */
 let boardAgents: { id: string; title: string; provider?: string; status: string }[] = []
 /** 画布上的授权连线：`source>target`。终端→终端 = 派活；终端→浏览器 = 允许驱动 */
 let boardLinks = new Set<string>()
+/** 完整画布快照（布局 + 状态），远程 API 用；终端内容不在里面 */
+let boardSnapshot: unknown = null
 ipcMain.on(
   'board:agents',
   (
     e,
     payload:
-      | { agents?: typeof boardAgents; links?: string[]; nodeIds?: string[] }
+      | { agents?: typeof boardAgents; links?: string[]; nodeIds?: string[]; board?: unknown }
       | typeof boardAgents
   ) => {
     if (!fromMainWin(e)) return
     // 兼容旧形态（纯数组）
-    const p = Array.isArray(payload) ? { agents: payload, links: [], nodeIds: [] } : payload
+    const p = Array.isArray(payload) ? { agents: payload, links: [], nodeIds: [], board: null } : payload
     boardAgents = Array.isArray(p?.agents) ? p.agents : []
+    if (p?.board) {
+      boardSnapshot = p.board
+      remoteApi?.push('board', p.board)
+    }
     boardLinks = new Set(Array.isArray(p?.links) ? p.links.filter((s) => typeof s === 'string') : [])
     /* 节点 id 会被复用（nextId 取 max+1）：删掉 b1 再建一个新的 b1，
        旧授权就白送给了陌生节点。所以节点一消失就撤销与它有关的一次性授权。 */
@@ -452,16 +476,7 @@ ipcMain.handle('approval:decide', (e, id: string, allow: boolean) => {
  */
 ipcMain.handle('agent:peek', async (e, id: string, lines = 8) => {
   if (!fromMainWin(e) || !okId(id)) return ''
-  const raw = await capturePane(id)
-  if (!raw) return ''
-  return raw
-    .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '') // 去掉 ANSI 转义，纯文本给 UI
-    .split('\n')
-    .map((l) => l.replace(/\s+$/, ''))
-    .filter((l, i, arr) => l !== '' || (i > 0 && arr[i - 1] !== '')) // 压掉连续空行
-    .slice(-Math.max(1, Math.min(20, lines)))
-    .join('\n')
-    .trim()
+  return peekPane(id, lines)
 })
 
 /**
@@ -503,7 +518,26 @@ ipcMain.handle(
 
 // ── 设置 IPC ──
 ipcMain.handle('settings:get', () => getSettings())
-ipcMain.handle('settings:set', (_e, patch: Partial<Settings>) => setSettings(patch))
+ipcMain.handle('settings:set', async (_e, patch: Partial<Settings>) => {
+  const next = await setSettings(patch)
+  remoteAllowInput = next.remoteAllowInput // 立刻生效，不用重启
+  return next
+})
+
+/** 远程访问状态（设置面板显示地址与配对 token） */
+ipcMain.handle('remote:status', async (e) => {
+  if (!fromMainWin(e)) return null
+  const s = await getSettings()
+  return {
+    enabled: s.remoteEnabled,
+    allowInput: s.remoteAllowInput,
+    running: !!remoteApi,
+    port: remoteApi?.port ?? s.remotePort,
+    token: remoteApi?.token ?? '',
+    // 改成 0.0.0.0 是危险的：这个进程能 spawn pty、持有凭证
+    bind: '127.0.0.1'
+  }
+})
 ipcMain.handle('skills:list', async () => {
   const dirs = (await getSettings()).skillDirs
   return (await listSkills(dirs)).map((s) => ({
@@ -750,6 +784,7 @@ app.whenReady().then(async () => {
      对话框会把启动整个卡住（窗口都还没建）。先按已有选择起服务，窗口起来之后再问。 */
   const st = await getSettings()
   const installHooks = st.claudeHooks === 'on'
+  remoteAllowInput = st.remoteAllowInput
 
   // hook 系统先于窗口（pty spawn 需要 endpoint 路径）；失败不阻塞启动
   contextTail = createContextTail((u) => sendToWin('agent:context', u))
@@ -757,6 +792,7 @@ app.whenReady().then(async () => {
     hookSystem = await startHookSystem(
       (e) => {
         sendToWin('agent:status', e)
+        remoteApi?.push('status', e)
         // 派活等待判完成 + 会话存活判定（sessionId 用来挡已结束会话的迟到事件）
         noteStatus(e.nodeId, e.state, e.event, e.sessionId)
       },
@@ -855,7 +891,10 @@ app.whenReady().then(async () => {
           return r
         }
       },
-      (list) => sendToWin('approvals:update', list),
+      (list) => {
+        sendToWin('approvals:update', list)
+        remoteApi?.push('approvals', list)
+      },
       installHooks
     )
   } catch (err) {
@@ -864,6 +903,31 @@ app.whenReady().then(async () => {
 
   // F7 worker 卡片：轮询 cdx list（franke_skills 引擎）
   workerWatch = startWorkerWatch((rows) => sendToWin('workers:update', rows))
+
+  /* 远程 API（阶段 0）：默认关闭。只绑 127.0.0.1，远程访问请走 Tailscale 这类
+     设备级 VPN —— 这个进程能 spawn pty、持有凭证，绝不能自己往公网监听。 */
+  if (st.remoteEnabled) {
+    try {
+      remoteApi = await startRemoteApi({
+        tokenFile: path.join(app.getPath('userData'), 'remote-token'),
+        port: st.remotePort,
+        allowInput: () => remoteAllowInput,
+        getBoard: () => boardSnapshot,
+        listApprovals: () => hookSystem?.listApprovals() ?? [],
+        decideApproval: (id, allow) => hookSystem?.decideApproval(id, allow) ?? false,
+        peek: (nodeId, lines) => peekPane(nodeId, lines),
+        writeInput: (nodeId, text) => {
+          const p = ptys.get(nodeId)
+          if (!p) return false
+          p.write(text)
+          return true
+        }
+      })
+      console.log(`远程 API 已启动：http://127.0.0.1:${remoteApi.port}`)
+    } catch (err) {
+      console.error('远程 API 启动失败:', err)
+    }
+  }
 
   // 额度 HUD：读官方真值文件（statusline 同源），60s 轮询
   const quotaFile = path.join(os.homedir(), '.claude', 'claude-usage.json')
@@ -944,6 +1008,7 @@ app.on('window-all-closed', () => {
   hookSystem?.dispose()
   workerWatch?.dispose()
   contextTail?.dispose()
+  remoteApi?.dispose()
   // 兜底 3s：某个 tmux capture 卡住也不能让 app 关不掉
   void Promise.race([
     Promise.allSettled(snapshots),

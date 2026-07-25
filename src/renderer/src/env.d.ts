@@ -6,6 +6,10 @@ interface AppSettings {
   tmuxEnabled: boolean
   scrollback: number
   skillDirs: string[]
+  claudeHooks: 'ask' | 'on' | 'off'
+  remoteEnabled: boolean
+  remoteAllowInput: boolean
+  remotePort: number
 }
 
 interface IdentityMeta {
@@ -46,6 +50,14 @@ interface TermscapeApi {
     consent: 'ask' | 'on' | 'off'
   }>
   uninstallHooks: () => Promise<{ ok: boolean; changed?: boolean }>
+  remoteStatus: () => Promise<{
+    enabled: boolean
+    allowInput: boolean
+    running: boolean
+    port: number
+    token: string
+    bind: string
+  } | null>
   doctor: () => Promise<
     { key: string; label: string; ok: boolean; detail: string; hint: string }[]
   >
@@ -57,6 +69,8 @@ interface TermscapeApi {
     links: string[]
     /** 现存节点 id 全集（主进程据此撤销失效授权） */
     nodeIds: string[]
+    /** 完整画布快照（远程 API 用；只含布局与状态，不含终端内容） */
+    board: unknown
   }) => void
   onApprovals: (
     cb: (

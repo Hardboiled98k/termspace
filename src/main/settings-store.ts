@@ -15,6 +15,11 @@ export interface Settings {
    * 'ask' = 还没问过（首启会弹窗征得同意）。改用户全局配置这种事不能默默做。
    */
   claudeHooks: 'ask' | 'on' | 'off'
+  /** 远程 API（手机/其他电脑当客户端）。默认关闭，只绑 127.0.0.1 */
+  remoteEnabled: boolean
+  /** 远程端能否往终端写入。默认只读 —— 写入是把 shell 交出去，必须显式开 */
+  remoteAllowInput: boolean
+  remotePort: number
 }
 
 export const DEFAULTS: Settings = {
@@ -23,7 +28,10 @@ export const DEFAULTS: Settings = {
   tmuxEnabled: true,
   scrollback: 8000,
   skillDirs: [],
-  claudeHooks: 'ask'
+  claudeHooks: 'ask',
+  remoteEnabled: false,
+  remoteAllowInput: false,
+  remotePort: 7333
 }
 
 const file = (): string => path.join(app.getPath('userData'), 'settings.json')
@@ -49,6 +57,7 @@ export async function setSettings(patch: Partial<Settings>): Promise<Settings> {
   // 收敛到合法范围，防手改文件把 app 搞崩
   next.defaultFontSize = Math.min(24, Math.max(8, Math.round(next.defaultFontSize)))
   next.scrollback = Math.min(100000, Math.max(500, Math.round(next.scrollback)))
+  next.remotePort = Math.min(65535, Math.max(1024, Math.round(next.remotePort || 7333)))
   const tmp = `${file()}.tmp`
   await writeFile(tmp, JSON.stringify(next, null, 2))
   await rename(tmp, file())

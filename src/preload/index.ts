@@ -20,6 +20,7 @@ const api = {
   uninstallHooks: (): Promise<{ ok: boolean; changed?: boolean }> =>
     ipcRenderer.invoke('hooks:uninstall'),
   doctor: (): Promise<unknown[]> => ipcRenderer.invoke('app:doctor'),
+  remoteStatus: (): Promise<unknown> => ipcRenderer.invoke('remote:status'),
   reapSessions: (knownIds: string[]): Promise<number> =>
     ipcRenderer.invoke('sessions:reap', knownIds),
   listSkills: (): Promise<unknown> => ipcRenderer.invoke('skills:list'),
