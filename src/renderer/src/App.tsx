@@ -201,7 +201,7 @@ function BoardHUD({
 }): React.JSX.Element | null {
   const [quota, setQuota] = useState<Quota | null>(null)
   const [collapsed, setCollapsed] = useState(false)
-  useEffect(() => window.termboard.onQuota(setQuota), [])
+  useEffect(() => window.termscape.onQuota(setQuota), [])
 
   const terms = nodes.filter((n): n is TermNode => n.type === 'terminal')
   const running = terms.filter((n) => n.data.status === 'running').length
@@ -310,7 +310,7 @@ function IdentityPanel({
       return
     }
     try {
-      onChanged(await window.termboard.upsertIdentity({ name, provider, env }))
+      onChanged(await window.termscape.upsertIdentity({ name, provider, env }))
       setName('')
       setEnvText('')
       setError('')
@@ -331,7 +331,7 @@ function IdentityPanel({
               <span className="identity-keys">{i.envKeys.join(' · ')}</span>
               <button
                 className="identity-del"
-                onClick={async () => onChanged(await window.termboard.deleteIdentity(i.id))}
+                onClick={async () => onChanged(await window.termscape.deleteIdentity(i.id))}
               >
                 删除
               </button>
@@ -394,7 +394,7 @@ function PresetPanel({
       return
     }
     onChanged(
-      await window.termboard.upsertPreset({
+      await window.termscape.upsertPreset({
         name,
         provider,
         command,
@@ -427,7 +427,7 @@ function PresetPanel({
               </span>
               <button
                 className="identity-del"
-                onClick={async () => onChanged(await window.termboard.deletePreset(p.id))}
+                onClick={async () => onChanged(await window.termscape.deletePreset(p.id))}
               >
                 删除
               </button>
@@ -613,7 +613,7 @@ function Board(): React.JSX.Element {
   // HUD 画布概览用：收集各节点 context 用量（事件只在变化时来，频率低）
   useEffect(
     () =>
-      window.termboard.onAgentContext((e) => {
+      window.termscape.onAgentContext((e) => {
         setCtxMap((m) => ({ ...m, [e.nodeId]: { pct: e.usedPercent, model: e.model } }))
       }),
     []
@@ -628,15 +628,15 @@ function Board(): React.JSX.Element {
 
   // 消息中心快捷应答：不切终端直接发 y/回车/Esc 给对应会话
   const quickReply = useCallback((id: string, key: string) => {
-    if (key === 'approve') window.termboard.write(id, 'y\r')
-    else if (key === 'enter') window.termboard.write(id, '\r')
-    else if (key === 'esc') window.termboard.write(id, '\x1b')
+    if (key === 'approve') window.termscape.write(id, 'y\r')
+    else if (key === 'enter') window.termscape.write(id, '\r')
+    else if (key === 'esc') window.termscape.write(id, '\x1b')
   }, [])
 
   // F7：cdx worker 状态 → 卡片节点（upsert 保留用户拖过的位置；不持久化）
   useEffect(
     () =>
-      window.termboard.onWorkers((rows) => {
+      window.termscape.onWorkers((rows) => {
         setNodes((ns) => {
           const existing = new Map(
             ns.filter((n) => n.type === 'worker').map((n) => [n.id, n])
@@ -676,8 +676,8 @@ function Board(): React.JSX.Element {
   )
 
   useEffect(() => {
-    void window.termboard.listIdentities().then(setIdentities)
-    void window.termboard.listPresets().then(setPresets)
+    void window.termscape.listIdentities().then(setIdentities)
+    void window.termscape.listPresets().then(setPresets)
   }, [])
 
   const applyBoard = useCallback(
@@ -701,7 +701,7 @@ function Board(): React.JSX.Element {
   // 启动恢复（含 v1 单画布 → v2 多项目迁移）
   useEffect(() => {
     let reapTimer = 0
-    void window.termboard.loadWorkspace().then((raw) => {
+    void window.termscape.loadWorkspace().then((raw) => {
       const ws = raw as Workspace | null
       let projs = ws?.projects
       let boards = ws?.boards
@@ -737,7 +737,7 @@ function Board(): React.JSX.Element {
       if (raw) {
         const known = Object.values(boardsRef.current).flatMap((b) => b.nodes.map((n) => n.id))
         // 延迟 5s，等活跃画布节点 spawn 完（它们也在 ptys 里被保护）
-        reapTimer = window.setTimeout(() => void window.termboard.reapSessions(known), 5000)
+        reapTimer = window.setTimeout(() => void window.termscape.reapSessions(known), 5000)
       }
     })
     return () => window.clearTimeout(reapTimer)
@@ -765,7 +765,7 @@ function Board(): React.JSX.Element {
     if (!loaded || !activeProject) return
     const t = setTimeout(() => {
       boardsRef.current[activeProject] = snapshot()
-      void window.termboard
+      void window.termscape
         .saveWorkspace({
           projects,
           activeProjectId: activeProject,
@@ -787,7 +787,7 @@ function Board(): React.JSX.Element {
   )
 
   const addProject = useCallback(async () => {
-    const dir = await window.termboard.pickFolder()
+    const dir = await window.termscape.pickFolder()
     if (!dir) return
     const pid = `p${Date.now().toString(36)}`
     boardsRef.current[activeProject] = snapshot()
@@ -856,7 +856,7 @@ function Board(): React.JSX.Element {
       )
     }
 
-    const off = window.termboard.onAgentStatus((e) => {
+    const off = window.termscape.onAgentStatus((e) => {
       lastEventAt.set(e.nodeId, Date.now())
       if (e.state === 'working') {
         // done-holdoff 3s：并行 hook 晚到的 working 不许复活已结束的 turn
@@ -1028,16 +1028,16 @@ function Board(): React.JSX.Element {
 
   // 所有订阅 effect 注册完之后握手：主进程收到才重推 quota/workers（防启动竞态）
   useEffect(() => {
-    window.termboard.ready()
+    window.termscape.ready()
   }, [])
 
   // tb browser 驱动：主进程转发指令 → 操作对应 webview → 回结果
   useEffect(
     () =>
-      window.termboard.onBrowserCmd(async (req) => {
+      window.termscape.onBrowserCmd(async (req) => {
         const { reqId, nodeId, action, arg } = req
         const done = (ok: boolean, result: string): void =>
-          window.termboard.browserResult({ reqId, ok, result })
+          window.termscape.browserResult({ reqId, ok, result })
         // nodeId 为空时取第一个浏览器节点（agent 常只开一个）
         const wv =
           (nodeId && browserViews.get(nodeId)) ||
@@ -1078,7 +1078,7 @@ function Board(): React.JSX.Element {
 
   // 把画布 agent 摘要同步给主进程（tb agents / 派活要用）
   useEffect(() => {
-    window.termboard.reportAgents(
+    window.termscape.reportAgents(
       nodes
         .filter((n): n is TermNode => n.type === 'terminal')
         .map((n) => ({
@@ -1107,10 +1107,10 @@ function Board(): React.JSX.Element {
   )
   const deleteMenuNode = useCallback(() => {
     if (!menuNode) return
-    if (menuNode.type === 'terminal') void window.termboard.destroy(menuNode.id)
+    if (menuNode.type === 'terminal') void window.termscape.destroy(menuNode.id)
     if (menuNode.type === 'group') {
       const kids = nodes.filter((n) => n.parentId === menuNode.id)
-      for (const k of kids) void window.termboard.destroy(k.id)
+      for (const k of kids) void window.termscape.destroy(k.id)
       setNodes((ns) => ns.filter((n) => n.id !== menuNode.id && n.parentId !== menuNode.id))
       setMenu(null)
       return
@@ -1373,7 +1373,7 @@ function Board(): React.JSX.Element {
                     className="ctx-menu-item danger"
                     onClick={() => {
                       const sel = nodes.filter((n) => n.type === 'terminal' && n.selected)
-                      for (const s of sel) void window.termboard.destroy(s.id)
+                      for (const s of sel) void window.termscape.destroy(s.id)
                       setNodes((ns) => ns.filter((n) => !n.selected))
                       setMenu(null)
                     }}

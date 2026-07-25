@@ -13,7 +13,7 @@ import path from 'node:path'
 
 const SOCKET = 'termboard'
 
-const conf = (scrollback: number): string => `# TermBoard 托管 tmux 配置（自动生成，勿手改）
+const conf = (scrollback: number): string => `# Termscape 托管 tmux 配置（自动生成，勿手改）
 set -g status off
 set -g mouse on
 set -g history-limit ${Math.max(500, scrollback)}

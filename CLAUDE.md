@@ -1,13 +1,28 @@
-# TermBoard — 无限画布终端管理器
+# Termscape — 无限画布终端管理器
 
 ## 项目概述
 
 终端不是叠 tab，是可拖拽节点铺在无限画布上（对标 nodeterm，从零自研，BUSL 无关）。
 差异化方向：agent 状态发光边框（缩到全景看颜色分布即知哪个 agent 在等你）、太极协同可视化、中文市场。
 
-- **当前阶段**: Day-1 POC — 验证 xterm 在缩放画布上的渲染可行性
+- **当前阶段**: alpha（功能密度高，F1-F8 各有纵向切片；发布工程未就绪，不可外发）
 - **技术栈**: Electron + electron-vite + React 19 + TS + Tailwind 4 + @xyflow/react 12 + @xterm/xterm 6 + node-pty
 - **UI 规范**: 见 `DESIGN.md`（画布学 Figma、节点内部学 Warp、气质 Linear + 未来感 glow）
+
+### 命名（2026-07-25 由 TermBoard 改为 Termscape）
+
+改名只覆盖**品牌面**：appId `dev.termscape.app`、productName、窗口/页面标题、`window.termscape` bridge、文档。
+
+以下 `termboard` 字面量**故意保留，不要"顺手统一"**——它们指向磁盘上已存在的数据或运行中的会话，改了就断：
+
+| 保留项 | 改了会怎样 |
+|--------|-----------|
+| userData 目录 `~/Library/Application Support/termboard/` | 工作区/简报/凭证/预设全部孤儿化；活 tmux 会话里 `tb` 命令的 PATH 失效 |
+| tmux socket `termboard` + 会话前缀 `tb-` | 所有续存中的会话瞬间变孤儿 |
+| `TERMBOARD_*` 环境变量 | 已写进 `~/.claude/settings.json` 的 hook 命令与运行中会话的 env，改了 hook 全断 |
+| `tb` 命令名、`.termboard-backup` 备份后缀、`x-termboard-token` 头 | 同上，都是已落地的外部契约 |
+
+真要统一得配一次性迁移（重命名目录 + 重建 hook 配置 + 重建全部会话），目前不值。
 
 ## 结构
 
@@ -27,7 +42,7 @@ src/
 npm run dev        # 开发模式
 npm run typecheck  # tsc --noEmit
 npm run rebuild    # node-pty 重编译（换 Electron 版本后必跑）
-npm run dist       # 打包未签名 arm64 dmg → dist/TermBoard-*.dmg（118MB）
+npm run dist       # 打包未签名 arm64 dmg → dist/Termscape-*.dmg（118MB）
 TERMBOARD_SHOT=/tmp/shot.png npm run dev  # 自检：6 秒后截图退出
 TERMBOARD_PANEL=terminal npm run dev      # 自检：直接展开设置面板某分区
 ```

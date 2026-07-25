@@ -27,14 +27,14 @@ export function SettingsPanel({
   const [skills, setSkills] = useState<{ name: string; description: string }[]>([])
 
   useEffect(() => {
-    void window.termboard.getSettings().then(setS)
-    void window.termboard.hooksStatus().then(setHooks)
-    void window.termboard.listSkills().then(setSkills)
+    void window.termscape.getSettings().then(setS)
+    void window.termscape.hooksStatus().then(setHooks)
+    void window.termscape.listSkills().then(setSkills)
   }, [])
 
   const patch = (p: Partial<AppSettings>): void => {
     setS((cur) => (cur ? { ...cur, ...p } : cur))
-    void window.termboard.setSettings(p).then(setS)
+    void window.termscape.setSettings(p).then(setS)
   }
 
   return (
@@ -146,10 +146,10 @@ export function SettingsPanel({
                 </span>
               </div>
               <p className="settings-note">
-                TermBoard 在本机回环端口跑一个 hook 服务，Claude Code 通过它上报运行状态
+                Termscape 在本机回环端口跑一个 hook 服务，Claude Code 通过它上报运行状态
                 （运行中 / 需要你 / 空闲）。配置已合并进 <code>{hooks?.settingsPath}</code>
                 ，原文件备份为同名 <code>.termboard-backup</code>。
-                托管脚本对非 TermBoard 终端会立即退出，不影响你在别处正常使用 Claude Code。
+                托管脚本对非 Termscape 终端会立即退出，不影响你在别处正常使用 Claude Code。
               </p>
               <h3 className="settings-h">数据位置</h3>
               <p className="settings-note">

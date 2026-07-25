@@ -115,6 +115,6 @@ const api = {
   }
 }
 
-contextBridge.exposeInMainWorld('termboard', api)
+contextBridge.exposeInMainWorld('termscape', api)
 
-export type TermboardApi = typeof api
+export type TermscapeApi = typeof api

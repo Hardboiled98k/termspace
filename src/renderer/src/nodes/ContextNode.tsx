@@ -28,7 +28,7 @@ function ContextNodeImpl({ id, selected }: NodeProps<ContextNodeT>): React.JSX.E
   useEffect(() => {
     // alive 守卫：快速删除/重建同 id 时，迟到的 load 不能覆盖新状态
     let alive = true
-    void window.termboard.loadContext(id).then((t) => {
+    void window.termscape.loadContext(id).then((t) => {
       if (!alive) return
       setText(t)
       setLoaded(true)
@@ -44,7 +44,7 @@ function ContextNodeImpl({ id, selected }: NodeProps<ContextNodeT>): React.JSX.E
     setDirty(true)
     window.clearTimeout(timer.current)
     timer.current = window.setTimeout(() => {
-      void window.termboard.saveContext(id, v).then((r) => {
+      void window.termscape.saveContext(id, v).then((r) => {
         setFailed(r?.ok === false)
         setDirty(false)
       })

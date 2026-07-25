@@ -146,7 +146,7 @@ function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
     width: 1520,
     height: 940,
-    title: 'TermBoard',
+    title: 'Termscape',
     backgroundColor: '#00000000',
     vibrancy: 'under-window', // macOS 毛玻璃材质，画布透明底透出
     visualEffectState: 'active',
@@ -383,7 +383,7 @@ ipcMain.handle('context:save', async (_e, nodeId: string, text: string) => {
 
 /* F8 L0 路由提示：常驻成本 ~60 token，只讲"何时去查"，不讲工具内容。
    没有它模型不会主动去 tb 查，整个渐进式披露就白设计了。 */
-const TOOL_ROUTING_HINT = `## TermBoard 工具中枢
+const TOOL_ROUTING_HINT = `## Termscape 工具中枢
 本终端可用 \`tb\` 命令按需取用共享工具（不要凭记忆猜工具用法）：
 - 遇到需要专门方法的任务（设计/出图/部署/数据/视频/文档等）先跑 \`tb skills <关键词>\`
 - 命中后用 \`tb load <名称>\` 取全文再照做

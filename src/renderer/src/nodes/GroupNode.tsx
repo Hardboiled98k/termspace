@@ -68,7 +68,7 @@ function GroupNodeImpl({ id, data }: NodeProps<GroupNodeT>): React.JSX.Element {
             ) {
               return
             }
-            for (const k of kids) void window.termboard.destroy(k.id) // 真杀 tmux 会话
+            for (const k of kids) void window.termscape.destroy(k.id) // 真杀 tmux 会话
             void deleteElements({ nodes: [{ id }, ...kids.map((k) => ({ id: k.id }))] })
           }}
         >

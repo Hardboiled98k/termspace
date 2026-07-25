@@ -39,4 +39,4 @@ tmux -L termboard ls / kill-server       # 会话残留
 ```
 
 坑：vite 锁 7.x、plugin-react 锁 5.x、不用 StrictMode、启动推送必须走 `renderer:ready` 握手。
-用户 `~/.claude/settings.json` 已被合并 9 条 hook（备份 `.termboard-backup`，对非 TermBoard 终端 no-op）。
+用户 `~/.claude/settings.json` 已被合并 9 条 hook（备份 `.termboard-backup`，对非 Termscape 终端 no-op）。

@@ -1,5 +1,5 @@
-appId: dev.termboard.app
-productName: TermBoard
+appId: dev.termscape.app
+productName: Termscape
 directories:
   output: dist
   buildResources: build
@@ -20,4 +20,4 @@ mac:
   identity: null
   darkModeSupport: true
 dmg:
-  title: TermBoard
+  title: Termscape

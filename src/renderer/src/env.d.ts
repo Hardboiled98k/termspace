@@ -23,7 +23,7 @@ interface Preset {
   identityId?: string
 }
 
-interface TermboardApi {
+interface TermscapeApi {
   spawn: (
     id: string,
     cols: number,
@@ -115,5 +115,5 @@ interface TermboardApi {
 }
 
 declare interface Window {
-  termboard: TermboardApi
+  termscape: TermscapeApi
 }

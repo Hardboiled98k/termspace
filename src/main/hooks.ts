@@ -3,7 +3,7 @@
  *
  * Claude Code hook → 托管脚本 → POST 127.0.0.1:<随机port> → 归一化 → 回调
  * - 端口/token 写 endpoint 文件（0600），脚本每次调用时 source（app 重启端口会变）
- * - 脚本用 TERMBOARD_NODE_ID 门控：非 TermBoard 终端瞬间 exit 0
+ * - 脚本用 TERMBOARD_NODE_ID 门控：非 Termscape 终端瞬间 exit 0
  * - 全链路 fail-open：任何错误 204，永不阻塞 agent
  */
 import { app } from 'electron'
@@ -68,7 +68,7 @@ function normalizeClaude(event: string, payload: unknown): AgentState | null {
 function buildScript(): string {
   // POSIX sh；$1 = hook 事件名；stdin = hook JSON payload
   return `#!/bin/sh
-# TermBoard managed hook — 非 TermBoard 终端瞬间退出，可安全常驻
+# Termscape managed hook — 非 Termscape 终端瞬间退出，可安全常驻
 [ -n "$TERMBOARD_NODE_ID" ] || exit 0
 [ -n "$TERMBOARD_HOOK_ENDPOINT" ] || exit 0
 [ -f "$TERMBOARD_HOOK_ENDPOINT" ] || exit 0
@@ -142,9 +142,9 @@ export interface HookSystem {
 /** F8：tb 命令 —— agent 在终端里直接调，零常驻 token */
 function buildTbScript(): string {
   return `#!/bin/sh
-# TermBoard 工具中枢客户端（自动生成）
+# Termscape 工具中枢客户端（自动生成）
 [ -n "$TERMBOARD_HOOK_ENDPOINT" ] && [ -f "$TERMBOARD_HOOK_ENDPOINT" ] && . "$TERMBOARD_HOOK_ENDPOINT"
-if [ -z "$TERMBOARD_HOOK_PORT" ]; then echo "tb: TermBoard 服务不可用（请在 TermBoard 终端内使用）" >&2; exit 1; fi
+if [ -z "$TERMBOARD_HOOK_PORT" ]; then echo "tb: Termscape 服务不可用（请在 Termscape 终端内使用）" >&2; exit 1; fi
 BASE="http://127.0.0.1:$TERMBOARD_HOOK_PORT"
 H="X-Termboard-Token: $TERMBOARD_HOOK_TOKEN"
 cmd="$1"; shift 2>/dev/null
@@ -171,7 +171,7 @@ case "$cmd" in
       --data-urlencode "node=$node" "$BASE/tb/browser" ;;
   ""|help|-h|--help)
     cat <<'EOF'
-tb — TermBoard 工具中枢
+tb — Termscape 工具中枢
 
   tb skills <关键词>       搜索可用 skill（返回名称 + 一行说明）
   tb load <名称>           取出该 skill 全文，按其指示执行
