@@ -9,6 +9,13 @@ interface NodeRuntime {
   transcriptPath?: string
   status: string // working | idle | attention...
   lastStopAt: number
+  /**
+   * agent 会话此刻是否还活着。
+   * 注意不能只记"曾经收到过 hook 上报"——那是粘性的：Claude 退出回到 shell 后仍为真，
+   * 于是派活又会往普通 shell 里注入文本。必须靠 SessionEnd / 节点销毁把它翻回 false。
+   */
+  live: boolean
+  lastEventAt: number
 }
 
 const runtime = new Map<string, NodeRuntime>()
@@ -16,7 +23,7 @@ const runtime = new Map<string, NodeRuntime>()
 function rt(id: string): NodeRuntime {
   let r = runtime.get(id)
   if (!r) {
-    r = { status: 'idle', lastStopAt: 0 }
+    r = { status: 'idle', lastStopAt: 0, live: false, lastEventAt: 0 }
     runtime.set(id, r)
   }
   return r
@@ -26,11 +33,19 @@ export function noteTranscript(id: string, path: string): void {
   rt(id).transcriptPath = path
 }
 
-export function noteStatus(id: string, state: string): void {
+export function noteStatus(id: string, state: string, event?: string): void {
   const r = rt(id)
   // 归一化后的 state：working=运行；done/session=一轮结束
   if (state === 'done' || state === 'session') r.lastStopAt = Date.now()
   r.status = state
+  r.lastEventAt = Date.now()
+  // SessionEnd = agent 退出，之后这个终端就是普通 shell 了
+  r.live = event !== 'SessionEnd'
+}
+
+/** 该节点当前是否是活着的 agent 会话 */
+export function isAgentSession(id: string): boolean {
+  return runtime.get(id)?.live === true
 }
 
 export function dropNode(id: string): void {
@@ -75,7 +90,16 @@ async function lastAssistant(path: string): Promise<string> {
 export interface DelegateDeps {
   hasNode: (id: string) => boolean
   writeToPty: (id: string, data: string) => void
+  /**
+   * 授权判定：画布上有没有 source→target 的派活连线，没有就问用户。
+   * 说明白：source 是调用方自报的（同 UID 进程本来就能直接 tmux send-keys 绕过这里），
+   * 所以这是**产品护栏**——防 agent 自己乱派、让画布连线成为真语义——不是安全边界。
+   */
+  authorize: (source: string, target: string, task: string) => Promise<boolean>
 }
+
+/** 同一目标同时只允许一次派活：两个请求都看到 idle 然后一起注入 = 输入流互相踩 */
+const busy = new Set<string>()
 
 /**
  * 注入任务 → 轮询等这一轮的 Stop（相对发起时刻的新 Stop）→ 取 transcript 尾。
@@ -83,6 +107,7 @@ export interface DelegateDeps {
  */
 export async function delegate(
   deps: DelegateDeps,
+  sourceId: string,
   targetId: string,
   task: string,
   timeoutMs = 240_000
@@ -91,12 +116,49 @@ export async function delegate(
     return `派活失败：找不到终端 ${targetId}（tb agents 看可用节点）。`
   }
   if (!task.trim()) return '派活失败：任务为空。'
+  if (sourceId === targetId) return '派活失败：不能派给自己。'
 
   const r = rt(targetId)
+
+  // 注入 = 等同替用户在目标终端敲一行回车。目标若是普通 shell，这行就是被直接执行的命令。
+  // 所以要求"当前是活着的 agent 会话"，不能靠注入后再看反应（那时已经执行了）。
+  if (!r.live) {
+    return `派活被拒：${targetId} 当前不是活着的 agent 会话（没有 agent 状态上报，或已收到 SessionEnd）。
+tb ask 只能派给正在跑 agent 的终端 —— 往普通 shell 注入文本等于直接执行任意命令。
+用 tb agents 看哪些节点在跑 agent。`
+  }
+  if (r.status === 'working') {
+    return `派活被拒：${targetId} 正在运行中，此刻注入会把文字敲进它正在处理的输入流。等它空闲再试。`
+  }
+  if (busy.has(targetId)) {
+    return `派活被拒：${targetId} 上已有一次派活在进行中，等它结束再来。`
+  }
+
+  if (!(await deps.authorize(sourceId, targetId, task))) {
+    return `派活被拒：${sourceId} → ${targetId} 未获授权。
+在画布上从你的节点拉一条线到目标终端（终端→终端 = 派活通道），或在弹窗里批准本次调用。`
+  }
+  // 授权与状态检查之后再占位：中间有 await，必须重新确认目标没被别人抢走
+  if (busy.has(targetId)) return `派活被拒：${targetId} 上已有一次派活在进行中。`
+  busy.add(targetId)
+  try {
+    return await runDelegation(deps, r, targetId, task, timeoutMs)
+  } finally {
+    busy.delete(targetId)
+  }
+}
+
+async function runDelegation(
+  deps: DelegateDeps,
+  r: NodeRuntime,
+  targetId: string,
+  task: string,
+  timeoutMs: number
+): Promise<string> {
   const startStop = r.lastStopAt
   const startAt = Date.now()
 
-  // 注入任务（等同用户在目标终端敲一行回车）。前置换行确保落在干净提示符。
+  // 注入任务（等同用户在目标终端敲一行回车）
   deps.writeToPty(targetId, `${task}\r`)
 
   // 等这一轮结束：出现比发起时刻更新的 Stop，且已进入过 working（避免注入还没被处理就误判）

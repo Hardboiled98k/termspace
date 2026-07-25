@@ -21,6 +21,8 @@ export interface AgentStatusEvent {
   agentId: string
   state: AgentState
   newTurn: boolean
+  /** 原始 hook 事件名。SessionStart/SessionEnd 用来判会话是否还活着（派活要用） */
+  event?: string
 }
 
 const CLAUDE_EVENTS = [
@@ -75,6 +77,17 @@ function buildScript(): string {
 . "$TERMBOARD_HOOK_ENDPOINT" 2>/dev/null || exit 0
 [ -n "$TERMBOARD_HOOK_PORT" ] || exit 0
 payload=$(cat 2>/dev/null || true)
+if [ "$1" = "PermissionRequest" ]; then
+  # 审批走真通道：请求挂在这里等用户在画布上决定，主进程回的结构化 JSON 原样吐给 Claude。
+  # 超时或任何失败都吐空 → Claude 回落到它自己的交互提示（fail-open，绝不卡死 agent）。
+  curl -s -m ${PERMISSION_HOLD_SEC + 15} \\
+    -H "X-Termboard-Token: $TERMBOARD_HOOK_TOKEN" \\
+    --data-urlencode "nodeId=$TERMBOARD_NODE_ID" \\
+    --data-urlencode "event=$1" \\
+    --data-urlencode "payload=$payload" \\
+    "http://127.0.0.1:$TERMBOARD_HOOK_PORT/hook/permission" 2>/dev/null || true
+  exit 0
+fi
 curl -s -m 2 -o /dev/null \\
   -H "X-Termboard-Token: $TERMBOARD_HOOK_TOKEN" \\
   --data-urlencode "nodeId=$TERMBOARD_NODE_ID" \\
@@ -83,6 +96,35 @@ curl -s -m 2 -o /dev/null \\
   "http://127.0.0.1:$TERMBOARD_HOOK_PORT/hook/claude" 2>/dev/null || true
 exit 0
 `
+}
+
+/** 审批请求最多挂多久（秒）。到点回空 = Claude 回落到自己的原生提示，不会永远卡着。 */
+const PERMISSION_HOLD_SEC = 120
+
+export interface PendingApproval {
+  id: string
+  nodeId: string
+  toolName: string
+  /** tool_input 的单行摘要，够用户判断该不该批 */
+  summary: string
+  toolUseId: string
+  createdAt: number
+}
+
+/** 把 tool_input 压成一行给人看：命令/路径/URL 这类关键信息优先 */
+function summarizeToolInput(toolName: string, input: unknown): string {
+  const o = (input ?? {}) as Record<string, unknown>
+  const pick = (k: string): string => (typeof o[k] === 'string' ? (o[k] as string) : '')
+  const main =
+    pick('command') ||
+    pick('file_path') ||
+    pick('path') ||
+    pick('url') ||
+    pick('pattern') ||
+    pick('prompt')
+  const text = main || JSON.stringify(o)
+  const flat = text.replace(/\s+/g, ' ').trim()
+  return flat.length > 300 ? `${flat.slice(0, 300)}…` : flat || toolName
 }
 
 async function writeAtomic(file: string, content: string): Promise<void> {
@@ -136,6 +178,10 @@ async function installClaudeHooks(scriptPath: string): Promise<void> {
 export interface HookSystem {
   endpointFile: string
   binDir: string // 注入 PATH 的目录（内含 tb 命令）
+  /** 用户在画布上批准/拒绝一次工具调用；返回是否命中一个仍然挂着的请求 */
+  decideApproval: (id: string, allow: boolean) => boolean
+  /** 节点没了/会话结束 → 丢弃它挂着的审批（放行为空 = Claude 回落原生提示） */
+  dropApprovals: (nodeId: string) => void
   dispose: () => void
 }
 
@@ -147,26 +193,28 @@ function buildTbScript(): string {
 if [ -z "$TERMBOARD_HOOK_PORT" ]; then echo "tb: Termscape 服务不可用（请在 Termscape 终端内使用）" >&2; exit 1; fi
 BASE="http://127.0.0.1:$TERMBOARD_HOOK_PORT"
 H="X-Termboard-Token: $TERMBOARD_HOOK_TOKEN"
+# 调用方节点 id：让主进程知道"是谁在调"，用于连线授权与提示（自报，属产品护栏非安全边界）
+N="X-Termscape-Node: $TERMBOARD_NODE_ID"
 cmd="$1"; shift 2>/dev/null
 case "$cmd" in
   skills|search)
-    curl -s -H "$H" --get --data-urlencode "q=$*" "$BASE/tb/skills" ;;
+    curl -s -H "$H" -H "$N" --get --data-urlencode "q=$*" "$BASE/tb/skills" ;;
   load|skill)
-    curl -s -H "$H" --get --data-urlencode "name=$*" "$BASE/tb/load" ;;
+    curl -s -H "$H" -H "$N" --get --data-urlencode "name=$*" "$BASE/tb/load" ;;
   agents|ls)
-    curl -s -H "$H" "$BASE/tb/agents" ;;
+    curl -s -H "$H" -H "$N" "$BASE/tb/agents" ;;
   ask|delegate)
     target="$1"; shift 2>/dev/null
     if [ -z "$target" ] || [ -z "$*" ]; then echo "用法: tb ask <节点id> <任务>" >&2; exit 2; fi
     # 派活是同步等待（可能几分钟），拉长超时
-    curl -s -m 300 -H "$H" --get \
+    curl -s -m 300 -H "$H" -H "$N" --get \
       --data-urlencode "target=$target" --data-urlencode "task=$*" "$BASE/tb/ask" ;;
   browser|web)
     action="$1"; shift 2>/dev/null
     node=""
     # 可选 --node <id> 指定目标浏览器节点
     if [ "$1" = "--node" ]; then node="$2"; shift 2; fi
-    curl -s -m 40 -H "$H" --get \
+    curl -s -m 40 -H "$H" -H "$N" --get \
       --data-urlencode "action=$action" --data-urlencode "arg=$*" \
       --data-urlencode "node=$node" "$BASE/tb/browser" ;;
   ""|help|-h|--help)
@@ -196,15 +244,16 @@ esac
 export interface TbHandlers {
   skills: (q: string) => Promise<string>
   load: (name: string) => Promise<string>
-  agents: () => Promise<string>
-  ask: (target: string, task: string) => Promise<string>
-  browser: (action: string, arg: string, nodeId: string) => Promise<string>
+  agents: (source: string) => Promise<string>
+  ask: (source: string, target: string, task: string) => Promise<string>
+  browser: (source: string, action: string, arg: string, nodeId: string) => Promise<string>
 }
 
 export async function startHookSystem(
   onStatus: (e: AgentStatusEvent) => void,
   onTranscript?: (nodeId: string, transcriptPath: string) => void,
-  tb?: TbHandlers
+  tb?: TbHandlers,
+  onApprovals?: (list: PendingApproval[]) => void
 ): Promise<HookSystem> {
   const dir = app.getPath('userData')
   const hooksDir = path.join(dir, 'hooks')
@@ -217,6 +266,39 @@ export async function startHookSystem(
 
   const token = randomUUID()
   const tokenBuf = Buffer.from(token)
+
+  /* 挂起中的审批：HTTP 响应一直不结束，Claude 就一直等；用户在画布上点了才回。
+     回空 body = 不做决策 → Claude 回落到它自己的交互提示，绝不把 agent 卡死。 */
+  interface Held {
+    rec: PendingApproval
+    res: http.ServerResponse
+    timer: NodeJS.Timeout
+  }
+  const pending = new Map<string, Held>()
+  const publish = (): void => onApprovals?.([...pending.values()].map((h) => h.rec))
+
+  function settle(id: string, body: string): boolean {
+    const h = pending.get(id)
+    if (!h) return false
+    pending.delete(id)
+    clearTimeout(h.timer)
+    try {
+      h.res.statusCode = 200
+      h.res.setHeader('content-type', 'application/json')
+      h.res.end(body)
+    } catch {
+      // 客户端可能已经断开（agent 被 Ctrl-C 等）
+    }
+    publish()
+    return true
+  }
+
+  const ALLOW = JSON.stringify({
+    hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } }
+  })
+  const DENY = JSON.stringify({
+    hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'deny' } }
+  })
 
   const server = http.createServer((req, res) => {
     // fail-open：一切异常 204 收尾，绝不让 hook 卡住 agent
@@ -242,17 +324,24 @@ export async function startHookSystem(
         res.end(text)
       }
       const route = u.pathname.slice(4)
+      // 调用方节点：脚本自报（同 UID 下无法强制），用于连线授权与提示
+      const source = String(req.headers['x-termscape-node'] ?? '').slice(0, 64)
       const run =
         route === 'skills'
           ? tb.skills(u.searchParams.get('q') ?? '')
           : route === 'load'
             ? tb.load(u.searchParams.get('name') ?? '')
             : route === 'agents'
-              ? tb.agents()
+              ? tb.agents(source)
               : route === 'ask'
-                ? tb.ask(u.searchParams.get('target') ?? '', u.searchParams.get('task') ?? '')
+                ? tb.ask(
+                    source,
+                    u.searchParams.get('target') ?? '',
+                    u.searchParams.get('task') ?? ''
+                  )
                 : route === 'browser'
                   ? tb.browser(
+                      source,
                       u.searchParams.get('action') ?? '',
                       u.searchParams.get('arg') ?? '',
                       u.searchParams.get('node') ?? ''
@@ -263,7 +352,9 @@ export async function startHookSystem(
     }
 
     if (req.method !== 'POST' || !req.url?.startsWith('/hook/')) return done()
-    req.setTimeout(5000, () => req.destroy())
+    const isPermission = req.url.startsWith('/hook/permission')
+    // 审批请求要挂住等人，不能按普通 hook 的 5s 超时掐断
+    req.setTimeout(isPermission ? (PERMISSION_HOLD_SEC + 30) * 1000 : 5000, () => req.destroy())
 
     let size = 0
     const chunks: Buffer[] = []
@@ -288,9 +379,42 @@ export async function startHookSystem(
         }
         const tp = (payload as { transcript_path?: unknown } | null)?.transcript_path
         if (typeof tp === 'string' && tp) onTranscript?.(nodeId, tp)
+
+        if (isPermission) {
+          // 状态先照常推（节点变橙），再把这次请求挂起等用户决定
+          onStatus({ nodeId, agentId: 'claude', state: 'blocked', newTurn: false, event })
+          const p = (payload ?? {}) as Record<string, unknown>
+          const id = randomUUID()
+          const rec: PendingApproval = {
+            id,
+            nodeId,
+            toolName: String(p['tool_name'] ?? '未知工具'),
+            summary: summarizeToolInput(String(p['tool_name'] ?? ''), p['tool_input']),
+            toolUseId: String(p['tool_use_id'] ?? ''),
+            createdAt: Date.now()
+          }
+          const timer = setTimeout(() => settle(id, ''), PERMISSION_HOLD_SEC * 1000)
+          pending.set(id, { rec, res, timer })
+          // agent 那头断了（Ctrl-C / 退出）就别留着僵尸卡片
+          req.on('close', () => {
+            if (pending.delete(id)) {
+              clearTimeout(timer)
+              publish()
+            }
+          })
+          publish()
+          return // 不调 done()：响应故意挂着
+        }
+
         const state = normalizeClaude(event, payload)
         if (state) {
-          onStatus({ nodeId, agentId: 'claude', state, newTurn: event === 'UserPromptSubmit' })
+          onStatus({
+            nodeId,
+            agentId: 'claude',
+            state,
+            newTurn: event === 'UserPromptSubmit',
+            event
+          })
         }
       } catch {
         // fail-open
@@ -316,6 +440,15 @@ export async function startHookSystem(
   return {
     endpointFile,
     binDir,
-    dispose: () => server.close()
+    decideApproval: (id, allow) => settle(id, allow ? ALLOW : DENY),
+    dropApprovals: (nodeId) => {
+      for (const [id, h] of [...pending]) {
+        if (h.rec.nodeId === nodeId) settle(id, '') // 空 = 不决策，Claude 回落原生提示
+      }
+    },
+    dispose: () => {
+      for (const id of [...pending.keys()]) settle(id, '')
+      server.close()
+    }
   }
 }

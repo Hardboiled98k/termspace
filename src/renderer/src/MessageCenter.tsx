@@ -1,85 +1,97 @@
 import { Panel } from '@xyflow/react'
 import type { TermNode } from './nodes/TerminalNode'
-import type { BoardNode } from './App'
+import type { BoardNode, PendingApproval } from './App'
 
 /**
- * 右侧悬浮消息中心（用户想法 #3）：
- * 监控全画布，把「需要你」的 agent 浮出来，可一键聚焦/快捷应答（y / Enter / Esc），
- * 不用挨个切终端去看。运行中/集群概览也一眼可见。
+ * 右侧悬浮消息中心：把「需要你」的 agent 浮出来，不用挨个切终端去看。
+ *
+ * 审批走 Claude 的 PermissionRequest hook 结构化通道 —— 卡片上直接显示**它要做什么**
+ * （工具名 + 命令/路径摘要），批准/拒绝是真应答，不是往终端盲发按键。
+ * 拿不到结构化审批的 attention（比如普通 Notification）只给「查看」，不给假的批准按钮。
  */
 export function MessageCenter({
   nodes,
+  approvals,
   onFocus,
-  onQuickReply
+  onDecide
 }: {
   nodes: BoardNode[]
+  approvals: PendingApproval[]
   onFocus: (id: string) => void
-  onQuickReply: (id: string, key: string) => void
+  onDecide: (id: string, allow: boolean) => void
 }): React.JSX.Element | null {
   const terms = nodes.filter((n): n is TermNode => n.type === 'terminal')
-  const attention = terms.filter((n) => n.data.status === 'attention')
+  const title = (id: string): string => terms.find((t) => t.id === id)?.data.title ?? id
+  const pendingIds = new Set(approvals.map((a) => a.nodeId))
+  // 有结构化审批的节点单独成组；其余 attention 只提示去看
+  const attention = terms.filter((n) => n.data.status === 'attention' && !pendingIds.has(n.id))
   const running = terms.filter((n) => n.data.status === 'running')
   const groups = nodes.filter((n) => n.type === 'group').length
 
-  // 没有任何需要注意的、也没在跑 → 不打扰
-  if (attention.length === 0 && running.length === 0) return null
+  if (approvals.length === 0 && attention.length === 0 && running.length === 0) return null
 
   return (
     <Panel position="top-right" className="msg-center">
-      {attention.length > 0 && (
+      {approvals.length > 0 && (
         <div className="msg-section">
           <div className="msg-title needs">
             <span className="msg-pulse" />
-            {attention.length} 个 agent 需要你
+            {approvals.length} 个待批准
           </div>
-          {attention.map((n) => (
-            <div key={n.id} className="msg-card" onClick={() => onFocus(n.id)}>
+          {approvals.map((a) => (
+            <div key={a.id} className="msg-card" onClick={() => onFocus(a.nodeId)}>
               <div className="msg-card-head">
                 <span className="status-dot attention" />
-                <span className="msg-card-title">{n.data.title}</span>
+                <span className="msg-card-title">{title(a.nodeId)}</span>
+                <span className="msg-tool">{a.toolName}</span>
+              </div>
+              <div className="msg-detail" title={a.summary}>
+                {a.summary}
               </div>
               <div className="msg-card-actions">
                 <button
                   className="msg-act approve"
-                  title="发送 y + 回车（批准）"
+                  title="允许这次工具调用"
                   onClick={(e) => {
                     e.stopPropagation()
-                    onQuickReply(n.id, 'approve')
+                    onDecide(a.id, true)
                   }}
                 >
                   批准
                 </button>
                 <button
-                  className="msg-act"
-                  title="发送回车（确认默认）"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    onQuickReply(n.id, 'enter')
-                  }}
-                >
-                  确认
-                </button>
-                <button
                   className="msg-act deny"
-                  title="发送 Esc（取消）"
+                  title="拒绝这次工具调用"
                   onClick={(e) => {
                     e.stopPropagation()
-                    onQuickReply(n.id, 'esc')
+                    onDecide(a.id, false)
                   }}
                 >
-                  取消
+                  拒绝
                 </button>
                 <button
                   className="msg-act ghost"
                   onClick={(e) => {
                     e.stopPropagation()
-                    onFocus(n.id)
+                    onFocus(a.nodeId)
                   }}
                 >
                   查看 →
                 </button>
               </div>
             </div>
+          ))}
+        </div>
+      )}
+      {attention.length > 0 && (
+        <div className="msg-section">
+          <div className="msg-title needs">{attention.length} 个等你处理</div>
+          {attention.map((n) => (
+            <button key={n.id} className="msg-run-row" onClick={() => onFocus(n.id)}>
+              <span className="status-dot attention" />
+              <span className="msg-card-title">{n.data.title}</span>
+              <span className="msg-more">去终端 →</span>
+            </button>
           ))}
         </div>
       )}
@@ -95,7 +107,11 @@ export function MessageCenter({
           {running.length > 4 && <span className="msg-more">+{running.length - 4}</span>}
         </div>
       )}
-      {groups > 0 && <div className="msg-foot">{groups} 个集群 · {terms.length} 终端</div>}
+      {groups > 0 && (
+        <div className="msg-foot">
+          {groups} 个集群 · {terms.length} 终端
+        </div>
+      )}
     </Panel>
   )
 }

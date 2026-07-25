@@ -42,9 +42,24 @@ interface TermscapeApi {
   hooksStatus: () => Promise<{ installed: boolean; endpoint: string; settingsPath: string }>
   reapSessions: (knownIds: string[]) => Promise<number>
   listSkills: () => Promise<{ name: string; description: string; source: string }[]>
-  reportAgents: (
-    list: { id: string; title: string; provider?: string; status: string }[]
-  ) => void
+  reportAgents: (payload: {
+    agents: { id: string; title: string; provider?: string; status: string }[]
+    /** 授权连线，形如 `source>target` */
+    links: string[]
+  }) => void
+  onApprovals: (
+    cb: (
+      list: {
+        id: string
+        nodeId: string
+        toolName: string
+        summary: string
+        toolUseId: string
+        createdAt: number
+      }[]
+    ) => void
+  ) => () => void
+  decideApproval: (id: string, allow: boolean) => Promise<{ ok: boolean; error?: string }>
   onBrowserCmd: (
     cb: (req: {
       reqId: string
@@ -65,7 +80,7 @@ interface TermscapeApi {
   loadWorkspace: () => Promise<unknown>
   saveWorkspace: (data: unknown) => Promise<{ ok: boolean; error?: string }>
   onAgentStatus: (
-    cb: (e: { nodeId: string; agentId: string; state: string; newTurn: boolean }) => void
+    cb: (e: { nodeId: string; agentId: string; state: string; newTurn: boolean; nonce?: string }) => void
   ) => () => void
   onAgentContext: (
     cb: (e: {

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeTheme } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, session, shell } from 'electron'
 import { readFile, writeFile, rename, mkdir, unlink } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
@@ -16,7 +16,7 @@ import { listPresets, upsertPreset, deletePreset } from './preset-store'
 import { startWorkerWatch, workerAction, type WorkerWatch } from './worker-watch'
 import { getSettings, setSettings, type Settings } from './settings-store'
 import { searchSkills, loadSkill, listSkills } from './skill-index'
-import { delegate, noteTranscript, noteStatus, dropNode } from './delegate'
+import { delegate, noteTranscript, noteStatus, dropNode, isAgentSession } from './delegate'
 import {
   ensureTmux,
   hasSession,
@@ -29,6 +29,16 @@ import {
 // dev 下 app 名默认是 "Electron"，userData 会指向共享目录 → 显式隔离
 app.setPath('userData', path.join(app.getPath('appData'), 'termboard'))
 
+/* IPC 输入校验：nodeId 会被拼进文件路径、tmux 会话名、Map 键。各处虽都做了字符白名单
+   替换，但在入口统一拒掉更省心，也挡住超长 id 把 Map 撑爆。画布真实 id 形如 t1/b2/g3/ctx-p1。 */
+const NODE_ID_RE = /^[A-Za-z0-9_-]{1,64}$/
+const okId = (id: unknown): id is string => typeof id === 'string' && NODE_ID_RE.test(id)
+/** 只认主窗口来的 IPC（webview guest 等其他 webContents 一律拒） */
+const fromMainWin = (e: { sender: Electron.WebContents }): boolean =>
+  !!mainWin && !mainWin.isDestroyed() && e.sender === mainWin.webContents
+const PTY_WRITE_LIMIT = 256 * 1024
+
+
 const ptys = new Map<string, pty.IPty>()
 let hookSystem: HookSystem | null = null
 let contextTail: ContextTail | null = null
@@ -36,13 +46,58 @@ let workerWatch: WorkerWatch | null = null
 let mainWin: BrowserWindow | null = null
 /** 渲染层推来的画布 agent 摘要，供 tb agents / 派活用 */
 let boardAgents: { id: string; title: string; provider?: string; status: string }[] = []
-ipcMain.on('board:agents', (_e, list: typeof boardAgents) => {
-  boardAgents = Array.isArray(list) ? list : []
-})
+/** 画布上的授权连线：`source>target`。终端→终端 = 派活；终端→浏览器 = 允许驱动 */
+let boardLinks = new Set<string>()
+ipcMain.on(
+  'board:agents',
+  (e, payload: { agents?: typeof boardAgents; links?: string[] } | typeof boardAgents) => {
+    if (!fromMainWin(e)) return
+    // 兼容旧形态（纯数组）
+    const p = Array.isArray(payload) ? { agents: payload, links: [] } : payload
+    boardAgents = Array.isArray(p?.agents) ? p.agents : []
+    boardLinks = new Set(Array.isArray(p?.links) ? p.links.filter((s) => typeof s === 'string') : [])
+  }
+)
+
+/* 本次运行内用户当场批准过的跨节点调用（连线之外的逃生口）。
+   连线被删掉后授权立即失效，但这里的一次性批准按 app 生命周期保留。 */
+const grants = new Set<string>()
+
+/**
+ * 跨节点动作授权：先看画布连线，没有就弹窗问用户。
+ * 诚实说明：source 由调用方脚本自报，同 UID 进程能直接 `tmux send-keys` 绕过整条链路，
+ * 所以这是**产品护栏**（防 agent 自己乱来、让连线成为真语义），不是安全边界。
+ */
+async function authorizeLink(
+  source: string,
+  target: string,
+  what: string,
+  detail: string
+): Promise<boolean> {
+  if (!source || !target) return false
+  const key = `${source}>${target}`
+  if (boardLinks.has(key) || grants.has(key)) return true
+  if (!mainWin || mainWin.isDestroyed()) return false
+  const { response, checkboxChecked } = await dialog.showMessageBox(mainWin, {
+    type: 'question',
+    buttons: ['拒绝', '允许本次'],
+    defaultId: 0,
+    cancelId: 0,
+    message: `允许 ${source} ${what} ${target}？`,
+    detail: `${detail}\n\n画布上这两个节点之间没有连线。拉一条线过去即可长期授权。`,
+    checkboxLabel: '本次运行内不再询问这一对节点',
+    checkboxChecked: false
+  })
+  if (response !== 1) return false
+  if (checkboxChecked) grants.add(key)
+  return true
+}
 
 // 全工作区已知节点 id（跨所有项目）→ 清理不在其中的孤儿 tmux 会话
-ipcMain.handle('sessions:reap', async (_e, knownIds: string[]) => {
-  const keep = new Set([...(Array.isArray(knownIds) ? knownIds : []), ...ptys.keys()])
+ipcMain.handle('sessions:reap', async (e, knownIds: string[]) => {
+  if (!fromMainWin(e)) return 0
+  const given = Array.isArray(knownIds) ? knownIds.filter(okId) : []
+  const keep = new Set([...given, ...ptys.keys()])
   return reapOrphanSessions(keep)
 })
 
@@ -134,6 +189,7 @@ function destroyPty(id: string): Promise<void> {
   return serialize(id, async () => {
     contextTail?.untrack(id)
     dropNode(id)
+    hookSystem?.dropApprovals(id) // 节点没了，挂着的审批也别留着
     await releasePty(id, false)
     await pendingSnapshots.get(id) // 等在飞的抓屏落完，否则下一行删了又被写回来
     // 快照必须删：否则删掉节点后，新节点若拿到同一个 id 会回灌已删除终端的内容
@@ -167,6 +223,32 @@ function createWindow(): BrowserWindow {
     for (const id of [...ptys.keys()]) void releasePty(id)
   })
 
+  /* ── 外壳收口（Electron 安全基线）──
+     主窗口的 preload 暴露了 pty/凭证等能力，一旦被导航到外站就等于把这些交出去。 */
+
+  // 画布浏览器节点的 <webview> 参数由主进程定，不信任 renderer 传的：
+  // guest 绝不允许带 preload 或开 node —— 那等于任意网页拿到 Node 权限
+  win.webContents.on('will-attach-webview', (_e, prefs, params) => {
+    delete prefs.preload
+    prefs.nodeIntegration = false
+    prefs.contextIsolation = true
+    const src = String(params.src ?? '')
+    if (!/^(https?:\/\/|about:blank)/i.test(src)) params.src = 'about:blank'
+  })
+
+  // 主窗口自身不许被导航走（dev 下放行 vite server，打包后放行 file://）
+  win.webContents.on('will-navigate', (e, url) => {
+    const dev = process.env['ELECTRON_RENDERER_URL']
+    if ((dev && url.startsWith(dev)) || url.startsWith('file://')) return
+    e.preventDefault()
+  })
+
+  // 新窗口一律不在应用内开，扔给系统浏览器
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) void shell.openExternal(url)
+    return { action: 'deny' }
+  })
+
   if (process.env['ELECTRON_RENDERER_URL']) {
     // TERMBOARD_PANEL=general 等：自检截图时直接展开设置面板
     const q = process.env['TERMBOARD_PANEL'] ? `?panel=${process.env['TERMBOARD_PANEL']}` : ''
@@ -188,6 +270,7 @@ interface SpawnOpts {
 ipcMain.handle(
   'pty:spawn',
   async (e, id: string, cols: number, rows: number, opts?: SpawnOpts) => {
+    if (!fromMainWin(e) || !okId(id)) return
     // 等该 id 上未收尾的 destroy（kill-session 是异步的，抢跑会杀掉马上要建的新会话）
     await idLocks.get(id)
     // 客户端是同步断开的；抓屏落盘不阻塞 spawn（否则每次重挂载都要等一次 capture-pane）
@@ -272,11 +355,14 @@ ipcMain.handle(
   })
 })
 
-ipcMain.on('pty:write', (_e, id: string, data: string) => {
+ipcMain.on('pty:write', (e, id: string, data: string) => {
+  if (!fromMainWin(e) || !okId(id)) return
+  if (typeof data !== 'string' || data.length > PTY_WRITE_LIMIT) return
   ptys.get(id)?.write(data)
 })
 
-ipcMain.on('pty:resize', (_e, id: string, cols: number, rows: number) => {
+ipcMain.on('pty:resize', (e, id: string, cols: number, rows: number) => {
+  if (!fromMainWin(e) || !okId(id)) return
   if (cols > 0 && rows > 0) {
     try {
       ptys.get(id)?.resize(cols, rows)
@@ -286,13 +372,29 @@ ipcMain.on('pty:resize', (_e, id: string, cols: number, rows: number) => {
   }
 })
 
-ipcMain.on('pty:kill', (_e, id: string) => {
+/**
+ * 审批决策：走 Claude 的 PermissionRequest hook 结构化应答，不是往 pty 里盲写 y。
+ * 盲写的问题是没法保证那一下落在正确的提示上（agent 可能早换轮或已退出）。
+ */
+ipcMain.handle('approval:decide', (e, id: string, allow: boolean) => {
+  if (!fromMainWin(e) || typeof id !== 'string') return { ok: false, error: '非法请求' }
+  const hit = hookSystem?.decideApproval(id, !!allow) ?? false
+  return hit
+    ? { ok: true }
+    : { ok: false, error: '该审批已失效（超时或 agent 已自行处理），请到终端确认' }
+})
+
+ipcMain.on('pty:kill', (e, id: string) => {
+  if (!fromMainWin(e) || !okId(id)) return
   // effect cleanup（remount/HMR/reload 前奏）→ 释放客户端，会话续存
   void releasePty(id)
 })
 
 // 节点 ✕ / 换身份 → 真杀会话。可 await：renderer 换身份时要等旧会话确实死透再 respawn
-ipcMain.handle('pty:destroy', (_e, id: string) => destroyPty(id))
+ipcMain.handle('pty:destroy', (e, id: string) => {
+  if (!fromMainWin(e) || !okId(id)) return Promise.resolve()
+  return destroyPty(id)
+})
 
 // ── Worker 操作 IPC（F7）──
 ipcMain.handle(
@@ -351,7 +453,8 @@ const ctxDir = (): string => path.join(app.getPath('userData'), 'contexts')
 const ctxFile = (nodeId: string): string =>
   path.join(ctxDir(), `${nodeId.replace(/[^a-zA-Z0-9_-]/g, '_')}.md`)
 
-ipcMain.handle('context:load', async (_e, nodeId: string) => {
+ipcMain.handle('context:load', async (e, nodeId: string) => {
+  if (!fromMainWin(e) || !okId(nodeId)) return ''
   // 简报现在按项目隔离（ctx-<projectId>）。找不到自己的文件就沿老版本回退取内容，
   // 保证从「全画布共用一份 ctx-hub」升上来时旧简报不丢；首次编辑即写进本项目自己的文件。
   const chain = [ctxFile(nodeId)]
@@ -368,7 +471,8 @@ ipcMain.handle('context:load', async (_e, nodeId: string) => {
   return ''
 })
 
-ipcMain.handle('context:save', async (_e, nodeId: string, text: string) => {
+ipcMain.handle('context:save', async (e, nodeId: string, text: string) => {
+  if (!fromMainWin(e) || !okId(nodeId)) return { ok: false, error: '非法节点 id' }
   try {
     await mkdir(ctxDir(), { recursive: true })
     const f = ctxFile(nodeId)
@@ -464,13 +568,24 @@ app.whenReady().then(async () => {
   // 设计系统 dark-first：vibrancy 跟随系统会在浅色模式下透白，先锁深色
   nativeTheme.themeSource = 'dark'
 
+  /* 权限收口：画布浏览器（webview guest）只用来看页面/做测试，摄像头麦克风定位通知一律不给。
+     但主窗口自己要读剪贴板 —— 终端粘贴走的就是 navigator.clipboard.readText()，别误伤。 */
+  const isMainWc = (wc: Electron.WebContents | null): boolean =>
+    !!wc && !!mainWin && !mainWin.isDestroyed() && wc === mainWin.webContents
+  session.defaultSession.setPermissionRequestHandler((wc, permission, cb) =>
+    cb(isMainWc(wc) && permission.startsWith('clipboard'))
+  )
+  session.defaultSession.setPermissionCheckHandler((wc, permission) =>
+    isMainWc(wc) && permission.startsWith('clipboard')
+  )
+
   // hook 系统先于窗口（pty spawn 需要 endpoint 路径）；失败不阻塞启动
   contextTail = createContextTail((u) => sendToWin('agent:context', u))
   try {
     hookSystem = await startHookSystem(
       (e) => {
         sendToWin('agent:status', e)
-        noteStatus(e.nodeId, e.state) // 派活等待判完成用
+        noteStatus(e.nodeId, e.state, e.event) // 派活等待判完成 + 会话存活判定
       },
       (nodeId, tp) => {
         contextTail?.track(nodeId, tp)
@@ -489,22 +604,47 @@ app.whenReady().then(async () => {
           const text = await loadSkill(name, dirs)
           return text ?? `未找到 skill「${name}」，先用 tb skills <关键词> 查名字。`
         },
-        agents: async () => {
-          if (!boardAgents.length) return '画布上暂无其他 agent 终端。'
-          return boardAgents
-            .map((a) => `${a.id}\t${a.title}\t${a.provider ?? 'shell'}\t${a.status}`)
+        agents: async (source) => {
+          const others = boardAgents.filter((a) => a.id !== source)
+          if (!others.length) return '画布上暂无其他 agent 终端。'
+          return others
+            .map((a) => {
+              const linked = boardLinks.has(`${source}>${a.id}`) ? '已连线' : '未连线'
+              const live = isAgentSession(a.id) ? 'agent' : 'shell'
+              return `${a.id}\t${a.title}\t${a.provider ?? 'shell'}\t${a.status}\t${live}\t${linked}`
+            })
             .join('\n')
         },
-        ask: (target, task) =>
+        ask: (source, target, task) =>
           delegate(
             {
               hasNode: (nid) => ptys.has(nid),
-              writeToPty: (nid, data) => ptys.get(nid)?.write(data)
+              writeToPty: (nid, data) => ptys.get(nid)?.write(data),
+              authorize: (s, t, task2) =>
+                authorizeLink(
+                  s,
+                  t,
+                  '把任务派给',
+                  `任务内容会被当作输入敲进 ${t} 的终端：\n${task2.slice(0, 300)}`
+                )
             },
+            source,
             target,
             task
           ),
-        browser: async (action, arg, nodeId) => {
+        browser: async (source, action, arg, nodeId) => {
+          // list 之外的动作都碰得到已登录页面的内容（text/shot 能读走邮箱、后台、token），
+          // 所以一律要授权。自己 open 出来的新节点由 addBrowser 侧自动授权（创建者即所有者）。
+          if (action !== 'list' && action !== 'open') {
+            const target = nodeId || '(默认浏览器节点)'
+            const ok = await authorizeLink(
+              source,
+              nodeId || 'browser',
+              '驱动浏览器节点',
+              `动作：${action} ${arg.slice(0, 200)}\n目标：${target}\n该页面可能持有你的登录态。`
+            )
+            if (!ok) return `已拒绝：${source} 未获授权驱动 ${target}。在画布上从该终端拉一条线到浏览器节点即可长期授权。`
+          }
           const r = await browserCommand(action, arg, nodeId)
           // 截图：把 data URL 落盘成 png，返回路径给 agent 读图
           if (action === 'shot' && r.startsWith('data:image')) {
@@ -521,7 +661,8 @@ app.whenReady().then(async () => {
           }
           return r
         }
-      }
+      },
+      (list) => sendToWin('approvals:update', list)
     )
   } catch (err) {
     console.error('hook system failed to start:', err)

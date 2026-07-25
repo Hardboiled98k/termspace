@@ -42,6 +42,16 @@ import {
 
 export type BoardNode = TermNode | GroupNodeT | WorkerNodeT | ContextNodeT | BrowserNodeT
 
+/** 挂起中的工具审批（Claude PermissionRequest hook，主进程把那次 HTTP 请求挂着等决定） */
+export interface PendingApproval {
+  id: string
+  nodeId: string
+  toolName: string
+  summary: string
+  toolUseId: string
+  createdAt: number
+}
+
 const nodeTypes = {
   terminal: TerminalNode,
   group: GroupNode,
@@ -584,6 +594,11 @@ function Board(): React.JSX.Element {
   const [saveTick, setSaveTick] = useState(0)
   // 落盘失败必须让用户看见：静默失败 = 用户以为存好了，关掉就没了
   const [saveErr, setSaveErr] = useState<string | null>(null)
+  // 一次性提示（审批失效等）
+  const [notice, setNotice] = useState<string | null>(null)
+  /** 挂起中的工具审批（来自 Claude PermissionRequest hook，主进程把请求挂着） */
+  const [approvals, setApprovals] = useState<PendingApproval[]>([])
+  useEffect(() => window.termscape.onApprovals(setApprovals), [])
   const [identities, setIdentities] = useState<IdentityMeta[]>([])
   const [presets, setPresets] = useState<Preset[]>([])
   const [defaultIdentity, setDefaultIdentity] = useState('')
@@ -626,11 +641,12 @@ function Board(): React.JSX.Element {
     [fitView]
   )
 
-  // 消息中心快捷应答：不切终端直接发 y/回车/Esc 给对应会话
-  const quickReply = useCallback((id: string, key: string) => {
-    if (key === 'approve') window.termscape.write(id, 'y\r')
-    else if (key === 'enter') window.termscape.write(id, '\r')
-    else if (key === 'esc') window.termscape.write(id, '\x1b')
+  // 审批应答：走 Claude 的 PermissionRequest 结构化通道（主进程把那次 hook 请求挂着等这一下），
+  // 不再往 pty 盲写 y —— 盲写没法保证落在正确的提示上。
+  const decideApproval = useCallback((id: string, allow: boolean) => {
+    void window.termscape.decideApproval(id, allow).then((r) => {
+      if (!r.ok) setNotice(r.error ?? '应答失败')
+    })
   }, [])
 
   // F7：cdx worker 状态 → 卡片节点（upsert 保留用户拖过的位置；不持久化）
@@ -1038,10 +1054,20 @@ function Board(): React.JSX.Element {
         const { reqId, nodeId, action, arg } = req
         const done = (ok: boolean, result: string): void =>
           window.termscape.browserResult({ reqId, ok, result })
-        // nodeId 为空时取第一个浏览器节点（agent 常只开一个）
-        const wv =
-          (nodeId && browserViews.get(nodeId)) ||
-          (browserViews.size ? [...browserViews.values()][0] : null)
+        // nodeId 为空 → 取第一个浏览器节点（agent 常只开一个）；
+        // 但**指名了却找不到**必须报错，不能静默回退 —— 否则 goto/js 会打到另一个
+        // 浏览器节点上，而那个节点里可能是用户已登录的会话。
+        if (nodeId && !browserViews.has(nodeId)) {
+          return done(
+            false,
+            `找不到浏览器节点 ${nodeId}（tb browser list 看现有节点）。已拒绝，未回退到其他节点。`
+          )
+        }
+        const wv = nodeId
+          ? (browserViews.get(nodeId) ?? null)
+          : browserViews.size
+            ? [...browserViews.values()][0]
+            : null
         if (action === 'list') {
           return done(true, [...browserViews.keys()].join('\n') || '(画布上没有浏览器节点)')
         }
@@ -1076,19 +1102,23 @@ function Board(): React.JSX.Element {
     [addBrowser]
   )
 
-  // 把画布 agent 摘要同步给主进程（tb agents / 派活要用）
+  // 把画布 agent 摘要 + 授权连线同步给主进程（tb agents / 派活 / 浏览器驱动都要用）。
+  // 连线即授权：终端→终端 = 可派活，终端→浏览器 = 可驱动该浏览器。删线即撤销。
   useEffect(() => {
-    window.termscape.reportAgents(
-      nodes
+    window.termscape.reportAgents({
+      agents: nodes
         .filter((n): n is TermNode => n.type === 'terminal')
         .map((n) => ({
           id: n.id,
           title: n.data.title,
           provider: n.data.provider,
           status: n.data.status
-        }))
-    )
-  }, [nodes])
+        })),
+      links: edges
+        .filter((e) => (e.data?.kind ?? 'delegate') === 'delegate')
+        .map((e) => `${e.source}>${e.target}`)
+    })
+  }, [nodes, edges])
 
   // 右键菜单动作
   const menuNode = menu?.nodeId ? nodes.find((n) => n.id === menu.nodeId) : undefined
@@ -1190,12 +1220,15 @@ function Board(): React.JSX.Element {
             bgColor="transparent"
           />
           <Controls position="bottom-left" showInteractive={false} />
-          {saveErr && (
+          {(saveErr || notice) && (
             <Panel position="bottom-center" className="save-alert">
               <span className="save-alert-dot" />
-              画布未能保存：{saveErr}
-              <button className="save-alert-retry" onClick={() => setSaveTick((t) => t + 1)}>
-                重试
+              {saveErr ? `画布未能保存：${saveErr}` : notice}
+              <button
+                className="save-alert-retry"
+                onClick={() => (saveErr ? setSaveTick((t) => t + 1) : setNotice(null))}
+              >
+                {saveErr ? '重试' : '知道了'}
               </button>
             </Panel>
           )}
@@ -1231,7 +1264,12 @@ function Board(): React.JSX.Element {
             nodeStrokeWidth={3}
           />
           <BoardHUD nodes={nodes} ctxMap={ctxMap} onFocus={focusNode} />
-          <MessageCenter nodes={nodes} onFocus={focusNode} onQuickReply={quickReply} />
+          <MessageCenter
+            nodes={nodes}
+            approvals={approvals}
+            onFocus={focusNode}
+            onDecide={decideApproval}
+          />
           {/* 浏览器式顶部标签条：贴顶、满宽、横向滚动 */}
           <Panel position="top-center" className="project-tabbar">
             <div className="project-tabs">

@@ -81,25 +81,23 @@ function BrowserNodeImpl({ id, data, selected }: NodeProps<BrowserNodeT>): React
     updateNodeData(id, { url: u })
   }
 
-  if (zoom < FAR_ZOOM) {
-    return (
-      <div className="browser-node far far-context">
-        <FarChip zoom={zoom} dotClass="context" title={data.title || '浏览器'} state="web" />
-      </div>
-    )
-  }
+  // 远缩时**绝不能**把 <webview> 从 DOM 摘掉：那等于销毁浏览器会话（页面、登录态、
+  // 滚动位置全没），而且 browserViews 会留着一个已失效的引用，拉回来也不会重新注册。
+  // 学 TerminalNode：整棵树保持挂载，只是藏起来，另外叠一个远景色块。
+  const far = zoom < FAR_ZOOM
 
   return (
-    <div className={`browser-node${selected ? ' selected' : ''}`}>
+    <div className={`browser-node${selected ? ' selected' : ''}${far ? ' far far-context' : ''}`}>
+      {far && <FarChip zoom={zoom} dotClass="context" title={data.title || '浏览器'} state="web" />}
       <NodeResizer
         minWidth={360}
         minHeight={260}
-        isVisible
+        isVisible={!far}
         handleStyle={{ opacity: 0, width: 16, height: 16, border: 'none' }}
         lineStyle={{ opacity: 0, borderWidth: 8 }}
       />
       <Handle type="target" position={Position.Left} className="tb-handle in" />
-      <div className="browser-bar">
+      <div className="browser-bar" style={{ display: far ? 'none' : undefined }}>
         <button className="browser-nav" title="后退" onClick={() => wvRef.current?.goBack()}>
           ‹
         </button>
@@ -131,7 +129,11 @@ function BrowserNodeImpl({ id, data, selected }: NodeProps<BrowserNodeT>): React
           ✕
         </button>
       </div>
-      <div className="browser-body nodrag nowheel" onWheelCapture={(e) => pinchZoom(e)}>
+      <div
+        className="browser-body nodrag nowheel"
+        onWheelCapture={(e) => pinchZoom(e)}
+        style={{ visibility: far ? 'hidden' : 'visible' }}
+      >
         <Webview
           ref={wvRef}
           src={data.url || 'about:blank'}

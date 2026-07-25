@@ -471,6 +471,7 @@ body {
 /* ── 极远缩放：节点退化成状态色块 + 恒定尺寸标签 ─────── */
 .term-node.far,
 .worker-node.far,
+.browser-node.far,
 .context-node.far {
   border-width: 0;
   box-shadow: none;
@@ -1591,6 +1592,27 @@ body {
 }
 .react-flow__resize-control.line {
   border-color: rgba(10, 132, 255, 0.35);
+}
+
+/* 审批卡片里的工具名与命令摘要 */
+.msg-tool {
+  margin-left: auto;
+  padding: 1px 6px;
+  font: 500 10px/1.5 var(--tb-font-mono);
+  color: var(--tb-orange);
+  background: rgba(255, 159, 10, 0.14);
+  border-radius: 4px;
+  white-space: nowrap;
+}
+.msg-detail {
+  margin: 5px 0 7px;
+  font: 400 11px/1.45 var(--tb-font-mono);
+  color: var(--tb-muted);
+  word-break: break-all;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 /* 落盘失败警示条：只在真出事时出现，不做常驻状态噪音 */

@@ -20,8 +20,8 @@ const api = {
   reapSessions: (knownIds: string[]): Promise<number> =>
     ipcRenderer.invoke('sessions:reap', knownIds),
   listSkills: (): Promise<unknown> => ipcRenderer.invoke('skills:list'),
-  reportAgents: (list: unknown): void => {
-    ipcRenderer.send('board:agents', list)
+  reportAgents: (payload: unknown): void => {
+    ipcRenderer.send('board:agents', payload)
   },
   onBrowserCmd: (
     cb: (req: { reqId: string; nodeId: string; action: string; arg: string }) => void
@@ -43,6 +43,13 @@ const api = {
     ipcRenderer.send('pty:kill', id)
   },
   destroy: (id: string): Promise<void> => ipcRenderer.invoke('pty:destroy', id),
+  onApprovals: (cb: (list: unknown[]) => void): (() => void) => {
+    const listener = (_e: IpcRendererEvent, list: unknown[]): void => cb(list)
+    ipcRenderer.on('approvals:update', listener)
+    return () => ipcRenderer.removeListener('approvals:update', listener)
+  },
+  decideApproval: (id: string, allow: boolean): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('approval:decide', id, allow),
   onData: (id: string, cb: (data: string) => void): (() => void) => {
     const listener = (_e: IpcRendererEvent, data: string): void => cb(data)
     ipcRenderer.on(`pty:data:${id}`, listener)
@@ -60,11 +67,11 @@ const api = {
   saveWorkspace: (data: unknown): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('workspace:save', data),
   onAgentStatus: (
-    cb: (e: { nodeId: string; agentId: string; state: string; newTurn: boolean }) => void
+    cb: (e: { nodeId: string; agentId: string; state: string; newTurn: boolean; nonce?: string }) => void
   ): (() => void) => {
     const listener = (
       _e: IpcRendererEvent,
-      ev: { nodeId: string; agentId: string; state: string; newTurn: boolean }
+      ev: { nodeId: string; agentId: string; state: string; newTurn: boolean; nonce?: string }
     ): void => cb(ev)
     ipcRenderer.on('agent:status', listener)
     return () => ipcRenderer.removeListener('agent:status', listener)
