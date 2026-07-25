@@ -108,7 +108,9 @@ interface TermscapeApi {
   write: (id: string, data: string) => void
   resize: (id: string, cols: number, rows: number) => void
   kill: (id: string) => void
-  destroy: (id: string) => Promise<void>
+  /** 返回销毁前抓到的屏幕内容，撤回删除时回灌 */
+  destroy: (id: string) => Promise<string>
+  seedScrollback: (id: string, text: string) => Promise<boolean>
   onData: (id: string, cb: (data: string) => void) => () => void
   onExit: (id: string, cb: (code: number) => void) => () => void
   loadContext: (nodeId: string) => Promise<string>

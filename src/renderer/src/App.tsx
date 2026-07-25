@@ -23,7 +23,7 @@ import GroupNode, { type GroupNodeT } from './nodes/GroupNode'
 import WorkerNode, { type WorkerNodeT } from './nodes/WorkerNode'
 import ContextNode, { type ContextNodeT } from './nodes/ContextNode'
 import BrowserNode, { type BrowserNodeT, browserViews } from './nodes/BrowserNode'
-import { IdentityContext, TmuxContext } from './identity-context'
+import { IdentityContext, TmuxContext, RequestDeleteContext } from './identity-context'
 import { SettingsPanel, type SettingsSection } from './SettingsPanel'
 import { MessageCenter } from './MessageCenter'
 import {
@@ -54,6 +54,16 @@ export interface PendingApproval {
   sessionId: string
   cwd: string
   inputHash: string
+}
+
+/** 一次删除操作的可撤回记录 */
+interface UndoEntry {
+  label: string
+  nodes: BoardNode[]
+  edges: Edge[]
+  /** nodeId → 销毁前抓到的屏幕内容（撤回时回灌，避免恢复出来是一片空白） */
+  screens: Record<string, string>
+  at: number
 }
 
 const nodeTypes = {
@@ -600,7 +610,14 @@ function Board(): React.JSX.Element {
   /** 最新 nodes 的同步镜像：给那些不该因 nodes 变化而重建的 callback 用 */
   const nodesRef = useRef<BoardNode[]>([])
   nodesRef.current = nodes
+  const edgesRef = useRef<Edge[]>([])
+  /* 撤回栈。删终端会真杀 tmux 会话 —— 进程救不回来，但布局、配置、连线和
+     最后一屏内容可以，够把"手滑删掉"从灾难降级成麻烦。 */
+  const undoRef = useRef<UndoEntry[]>([])
+  const [undoHint, setUndoHint] = useState<UndoEntry | null>(null)
+  const hintTimer = useRef(0)
   const [edges, setEdges] = useState<Edge[]>([])
+  edgesRef.current = edges
   const [loaded, setLoaded] = useState(false)
   const [saveTick, setSaveTick] = useState(0)
   // 落盘失败必须让用户看见：静默失败 = 用户以为存好了，关掉就没了
@@ -1247,21 +1264,85 @@ function Board(): React.JSX.Element {
     setEdges((es) => es.filter((e) => !ids.has(e.source) && !ids.has(e.target)))
   }, [])
 
+  /**
+   * 统一的删除入口：确认 → 收好可撤回记录 → destroy（拿回最后一屏）→ 移除节点与连线。
+   * 所有删除路径都走这里，别再各写各的 —— 之前就是散在四处才漏掉了连线和子节点。
+   */
+  const removeNodes = useCallback(
+    async (ids: string[], label: string, opts?: { skipConfirm?: boolean }): Promise<void> => {
+      const gone = new Set(ids)
+      const doomed = nodesRef.current.filter((n) => gone.has(n.id))
+      if (!doomed.length) return
+      const terms = doomed.filter((n) => n.type === 'terminal')
+      if (!opts?.skipConfirm) {
+        const what =
+          terms.length > 0
+            ? `${label}？其中 ${terms.length} 个终端的会话会被结束（跑着的进程无法恢复）。`
+            : `${label}？`
+        if (!window.confirm(`${what}\n\n删除后可以用 ⌘Z 撤回布局与配置。`)) return
+      }
+      // destroy 会返回销毁前的屏幕内容，留着撤回时回灌
+      const screens: Record<string, string> = {}
+      await Promise.all(
+        terms.map(async (n) => {
+          screens[n.id] = await window.termscape.destroy(n.id).catch(() => '')
+        })
+      )
+      const keptEdges = edgesRef.current.filter((e) => gone.has(e.source) || gone.has(e.target))
+      undoRef.current.push({ label, nodes: doomed, edges: keptEdges, screens, at: Date.now() })
+      if (undoRef.current.length > 20) undoRef.current.shift()
+      setNodes((ns) => ns.filter((n) => !gone.has(n.id)))
+      dropEdgesOf(gone)
+      setUndoHint(undoRef.current[undoRef.current.length - 1])
+      window.clearTimeout(hintTimer.current)
+      hintTimer.current = window.setTimeout(() => setUndoHint(null), 12_000)
+    },
+    [dropEdgesOf]
+  )
+
+  /** 撤回：先把屏幕内容写回快照文件，再放节点回画布（顺序反了就会先 spawn 后回灌，白屏） */
+  const requestDelete = useCallback(
+    (ids: string[], label: string): void => {
+      void removeNodes(ids, label)
+    },
+    [removeNodes]
+  )
+
+  const undoDelete = useCallback(async (): Promise<void> => {
+    const entry = undoRef.current.pop()
+    if (!entry) return
+    setUndoHint(null)
+    await Promise.all(
+      Object.entries(entry.screens).map(([id, text]) =>
+        text ? window.termscape.seedScrollback(id, text) : Promise.resolve(false)
+      )
+    )
+    setNodes((ns) => [...ns, ...entry.nodes.filter((n) => !ns.some((x) => x.id === n.id))])
+    setEdges((es) => [...es, ...entry.edges.filter((e) => !es.some((x) => x.id === e.id))])
+  }, [])
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'z' && !e.shiftKey) {
+        // 终端里 ⌘Z 有自己的语义，只在画布上生效
+        const t = e.target as HTMLElement | null
+        if (t?.closest('.term-node-body, input, textarea')) return
+        e.preventDefault()
+        void undoDelete()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [undoDelete])
+
   const deleteMenuNode = useCallback(() => {
     if (!menuNode) return
-    if (menuNode.type === 'terminal') void window.termscape.destroy(menuNode.id)
-    if (menuNode.type === 'group') {
-      const kids = nodes.filter((n) => n.parentId === menuNode.id)
-      for (const k of kids) void window.termscape.destroy(k.id)
-      setNodes((ns) => ns.filter((n) => n.id !== menuNode.id && n.parentId !== menuNode.id))
-      dropEdgesOf(new Set([menuNode.id, ...kids.map((k) => k.id)]))
-      setMenu(null)
-      return
-    }
-    setNodes((ns) => ns.filter((n) => n.id !== menuNode.id))
-    dropEdgesOf(new Set([menuNode.id]))
+    const kids = nodes.filter((n) => n.parentId === menuNode.id).map((n) => n.id)
+    const label =
+      menuNode.type === 'group' ? `删除集群及组内 ${kids.length} 个节点` : '删除该节点'
+    void removeNodes([menuNode.id, ...kids], label)
     setMenu(null)
-  }, [menuNode, nodes, dropEdgesOf])
+  }, [menuNode, nodes, removeNodes])
 
   const selectedCount = nodes.filter(
     (n) => n.type === 'terminal' && n.selected && !n.parentId
@@ -1270,6 +1351,7 @@ function Board(): React.JSX.Element {
   return (
     <IdentityContext.Provider value={identities}>
       <TmuxContext.Provider value={tmuxOk}>
+      <RequestDeleteContext.Provider value={requestDelete}>
       <div className={`h-screen w-screen mode-${canvasMode}`}>
         {settingsOpen && (
           <SettingsPanel
@@ -1341,6 +1423,22 @@ function Board(): React.JSX.Element {
             bgColor="transparent"
           />
           <Controls position="bottom-left" showInteractive={false} />
+          {undoHint && !saveErr && !notice && (
+            <Panel position="bottom-center" className="undo-toast">
+              已{undoHint.label}
+              <button
+                className="undo-btn"
+                onClick={() => {
+                  void undoDelete()
+                }}
+              >
+                撤回（⌘Z）
+              </button>
+              <button className="undo-dismiss" onClick={() => setUndoHint(null)}>
+                ✕
+              </button>
+            </Panel>
+          )}
           {(saveErr || notice) && (
             <Panel position="bottom-center" className="save-alert">
               <span className="save-alert-dot" />
@@ -1583,16 +1681,10 @@ function Board(): React.JSX.Element {
                       // 选中里若有集群，子节点要一起删 —— 否则组没了、子节点还留着
                       // parentId 和 hidden:true，变成永远看不见也删不掉的孤儿
                       const selIds = new Set(nodes.filter((n) => n.selected).map((n) => n.id))
-                      const gone = new Set(
-                        nodes.filter((n) => n.selected || (n.parentId && selIds.has(n.parentId))).map((n) => n.id)
-                      )
-                      for (const n of nodes) {
-                        if (gone.has(n.id) && n.type === 'terminal') {
-                          void window.termscape.destroy(n.id)
-                        }
-                      }
-                      setNodes((ns) => ns.filter((n) => !gone.has(n.id)))
-                      dropEdgesOf(gone)
+                      const gone = nodes
+                        .filter((n) => n.selected || (n.parentId && selIds.has(n.parentId)))
+                        .map((n) => n.id)
+                      void removeNodes(gone, `删除选中的 ${gone.length} 个节点`)
                       setMenu(null)
                     }}
                   >
@@ -1697,6 +1789,7 @@ function Board(): React.JSX.Element {
           )}
         </ReactFlow>
       </div>
+      </RequestDeleteContext.Provider>
       </TmuxContext.Provider>
     </IdentityContext.Provider>
   )

@@ -1,5 +1,5 @@
 import { memo, useCallback, useContext, useEffect, useRef, useState } from 'react'
-import { IdentityContext } from '../identity-context'
+import { IdentityContext, RequestDeleteContext } from '../identity-context'
 import { FarChip, FAR_ZOOM } from './FarChip'
 import { usePinchZoom } from '../usePinchZoom'
 import {
@@ -86,8 +86,9 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
       .sort()
       .join(',')
   )
-  const { deleteElements, updateNodeData } = useReactFlow()
+  const { updateNodeData } = useReactFlow()
   const identities = useContext(IdentityContext)
+  const requestDelete = useContext(RequestDeleteContext)
   const [editing, setEditing] = useState(false)
   const [ctxPct, setCtxPct] = useState<number | null>(null)
   const [fontHint, setFontHint] = useState(false)
@@ -315,8 +316,8 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
           title="关闭终端（结束会话）"
           onClick={(e) => {
             e.stopPropagation()
-            void window.termscape.destroy(id) // 真杀 tmux 会话（unmount cleanup 只释放客户端）
-            void deleteElements({ nodes: [{ id }] })
+            // 走画布统一删除入口：带确认、可撤回、连线一并处理
+            requestDelete([id], `关闭终端「${data.title}」`)
           }}
         >
           ✕

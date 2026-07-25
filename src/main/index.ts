@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme, session, shell } from 'electron'
-import { readFile, writeFile, rename, mkdir, unlink } from 'node:fs/promises'
+import { readFile, writeFile, rename, mkdir, unlink, readdir } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
@@ -240,21 +240,29 @@ function releasePty(id: string, snapshot = true): Promise<void> {
   return done
 }
 
-/** 真结束：kill-session + 客户端 + 清快照（节点 ✕ / 换身份重生成）*/
-function destroyPty(id: string): Promise<void> {
+/**
+ * 真结束：kill-session + 客户端 + 清快照（节点 ✕ / 换身份重生成）。
+ * 返回销毁前抓到的屏幕内容 —— 撤回删除时拿它回灌，让恢复出来的终端不是一片空白。
+ * （进程本身救不回来，这一点在 UI 上要说清楚。）
+ */
+function destroyPty(id: string): Promise<string> {
   return serialize(id, async () => {
     contextTail?.untrack(id)
     dropNode(id)
     hookSystem?.dropApprovals(id) // 节点没了，挂着的审批也别留着
+    await hookSystem?.revokeNodeToken(id) // 吊销身份，别让重建的同 id 节点继承
     // 一次性授权也要清：id 会被新节点复用，留着等于把授权传给了陌生人
     for (const g of [...grants]) {
       if (g.startsWith(`${id}>`) || g.endsWith(`>${id}`)) grants.delete(g)
     }
+    // 先抓一份屏幕内容交给调用方（撤回删除时回灌），再动手杀
+    const farewell = await capturePane(id).catch(() => '')
     await releasePty(id, false)
     await pendingSnapshots.get(id) // 等在飞的抓屏落完，否则下一行删了又被写回来
     // 快照必须删：否则删掉节点后，新节点若拿到同一个 id 会回灌已删除终端的内容
     await unlink(scrollbackFile(id)).catch(() => undefined)
     await killSession(id)
+    return farewell
   })
 }
 
@@ -378,6 +386,10 @@ ipcMain.handle(
     env['TERMBOARD_AGENT_ID'] = opts?.provider ?? 'claude'
     if (hookSystem) {
       env['TERMBOARD_HOOK_ENDPOINT'] = hookSystem.endpointFile
+      /* 每个节点一个 token，服务端据此反查"是谁在调"，不再采信请求里自报的 nodeId。
+         每次 spawn 换新：老 token 立即失效，同 id 重建不会继承旧身份。
+         env 里这份是给新会话用的；tmux 接回的老会话靠 endpoint 文件现查（-e 会被忽略）。 */
+      env['TERMBOARD_HOOK_TOKEN'] = await hookSystem.issueNodeToken(id)
       // F8：tb 命令挂到 PATH 最前，agent 直接可用
       env['PATH'] = `${hookSystem.binDir}:${env['PATH'] ?? ''}`
     }
@@ -502,8 +514,26 @@ ipcMain.on('pty:kill', (e, id: string) => {
 
 // 节点 ✕ / 换身份 → 真杀会话。可 await：renderer 换身份时要等旧会话确实死透再 respawn
 ipcMain.handle('pty:destroy', (e, id: string) => {
-  if (!fromMainWin(e) || !okId(id)) return Promise.resolve()
+  if (!fromMainWin(e) || !okId(id)) return Promise.resolve('')
   return destroyPty(id)
+})
+
+/**
+ * 撤回删除时回灌屏幕内容：写进 cold-restore 用的快照文件，
+ * 节点重建后 spawn 走 fresh 分支就会把它显示出来。
+ * 进程本身救不回来 —— 这只是让恢复出来的终端不是一片空白。
+ */
+ipcMain.handle('session:seedScrollback', async (e, id: string, text: string) => {
+  if (!fromMainWin(e) || !okId(id)) return false
+  if (typeof text !== 'string' || !text.trim()) return false
+  try {
+    const f = scrollbackFile(id)
+    await mkdir(path.dirname(f), { recursive: true })
+    await writeFile(f, text.slice(0, 512 * 1024))
+    return true
+  } catch {
+    return false
+  }
 })
 
 // ── Worker 操作 IPC（F7）──
@@ -753,6 +783,24 @@ ipcMain.handle('workspace:load', async () => {
   return null
 })
 
+/* 定期存档：.bak 只防"文件写坏"，防不了"内容被合法地写坏"——
+   误删一堆节点后，接下来几次防抖保存就把 .bak 也覆盖成删除后的状态了（真实发生过）。
+   所以每小时另留一份带时间戳的存档，保留最近 24 份，纯兜底不参与正常加载。 */
+const ARCHIVE_EVERY_MS = 60 * 60 * 1000
+const ARCHIVE_KEEP = 24
+let lastArchiveAt = 0
+
+async function archiveWorkspace(json: string): Promise<void> {
+  const dir = path.join(app.getPath('userData'), 'workspace-archive')
+  await mkdir(dir, { recursive: true })
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+  await writeFile(path.join(dir, `workspace-${stamp}.json`), json)
+  const files = (await readdir(dir)).filter((f) => f.startsWith('workspace-')).sort()
+  for (const old of files.slice(0, Math.max(0, files.length - ARCHIVE_KEEP))) {
+    await unlink(path.join(dir, old)).catch(() => undefined)
+  }
+}
+
 ipcMain.handle('workspace:save', async (_e, data: unknown) => {
   const f = workspacePath()
   try {
@@ -761,6 +809,10 @@ ipcMain.handle('workspace:save', async (_e, data: unknown) => {
     // 先把上一版转成备份再换新：这中间被杀，load 会从 .bak 恢复
     if (existsSync(f)) await rename(f, workspaceBak())
     await rename(`${f}.tmp`, f)
+    if (Date.now() - lastArchiveAt > ARCHIVE_EVERY_MS) {
+      lastArchiveAt = Date.now()
+      await archiveWorkspace(json).catch(() => undefined) // 存档失败不影响主保存
+    }
     return { ok: true }
   } catch (err) {
     console.error('workspace save failed:', err)

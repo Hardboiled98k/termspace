@@ -8,8 +8,8 @@
  */
 import { app } from 'electron'
 import http from 'node:http'
-import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
-import { chmod, copyFile, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { createHash, randomUUID } from 'node:crypto'
+import { chmod, copyFile, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
@@ -264,6 +264,10 @@ async function installClaudeHooks(scriptPath: string): Promise<void> {
 
 export interface HookSystem {
   endpointFile: string
+  /** 为该节点签发 token（spawn 时调）。返回值注入 env，同时落盘供老会话现查 */
+  issueNodeToken: (nodeId: string) => Promise<string>
+  /** 节点销毁时吊销 */
+  revokeNodeToken: (nodeId: string) => Promise<void>
   binDir: string // 注入 PATH 的目录（内含 tb 命令）
   /** 用户在画布上批准/拒绝一次工具调用；返回是否命中一个仍然挂着的请求 */
   decideApproval: (id: string, allow: boolean) => boolean
@@ -286,28 +290,27 @@ function buildTbScript(): string {
 if [ -z "$TERMBOARD_HOOK_PORT" ]; then echo "tb: Termscape 服务不可用（请在 Termscape 终端内使用）" >&2; exit 1; fi
 BASE="http://127.0.0.1:$TERMBOARD_HOOK_PORT"
 H="X-Termboard-Token: $TERMBOARD_HOOK_TOKEN"
-# 调用方节点 id：让主进程知道"是谁在调"，用于连线授权与提示（自报，属产品护栏非安全边界）
-N="X-Termscape-Node: $TERMBOARD_NODE_ID"
+# 调用方身份由 token 反查，不再自报节点 id
 cmd="$1"; shift 2>/dev/null
 case "$cmd" in
   skills|search)
-    curl -s -H "$H" -H "$N" --get --data-urlencode "q=$*" "$BASE/tb/skills" ;;
+    curl -s -H "$H" --get --data-urlencode "q=$*" "$BASE/tb/skills" ;;
   load|skill)
-    curl -s -H "$H" -H "$N" --get --data-urlencode "name=$*" "$BASE/tb/load" ;;
+    curl -s -H "$H" --get --data-urlencode "name=$*" "$BASE/tb/load" ;;
   agents|ls)
-    curl -s -H "$H" -H "$N" "$BASE/tb/agents" ;;
+    curl -s -H "$H" "$BASE/tb/agents" ;;
   ask|delegate)
     target="$1"; shift 2>/dev/null
     if [ -z "$target" ] || [ -z "$*" ]; then echo "用法: tb ask <节点id> <任务>" >&2; exit 2; fi
     # 派活是同步等待（可能几分钟），拉长超时
-    curl -s -m 300 -H "$H" -H "$N" --get \
+    curl -s -m 300 -H "$H" --get \
       --data-urlencode "target=$target" --data-urlencode "task=$*" "$BASE/tb/ask" ;;
   browser|web)
     action="$1"; shift 2>/dev/null
     node=""
     # 可选 --node <id> 指定目标浏览器节点
     if [ "$1" = "--node" ]; then node="$2"; shift 2; fi
-    curl -s -m 40 -H "$H" -H "$N" --get \
+    curl -s -m 40 -H "$H" --get \
       --data-urlencode "action=$action" --data-urlencode "arg=$*" \
       --data-urlencode "node=$node" "$BASE/tb/browser" ;;
   ""|help|-h|--help)
@@ -360,8 +363,20 @@ export async function startHookSystem(
   await chmod(scriptPath, 0o755)
   if (installHooks) await installClaudeHooks(scriptPath)
 
-  const token = randomUUID()
-  const tokenBuf = Buffer.from(token)
+  /* ── per-node token ──
+     此前是一个全局 token，请求里的 nodeId 完全自报：任何终端里的进程都能伪造
+     别的节点的 SessionStart / 审批卡片，而 SessionStart 在 delegate 的状态机里
+     先于墓碑、无条件置活 —— 于是那套 fail-closed 判定判的是一组可被写入的状态。
+
+     现在每个节点一个 token，服务端**按 token 反查节点，忽略请求体里的 nodeId**。
+     诚实说明：token 文件同 UID 可读，所以这仍是产品护栏（挡住误用与顺手伪造），
+     不是安全边界 —— 真隔离要不同 UID / 容器。 */
+  const tokenDir = path.join(dir, 'nodetokens')
+  await mkdir(tokenDir, { recursive: true })
+  const tokenToNode = new Map<string, string>()
+  const nodeToToken = new Map<string, string>()
+  const tokenFile = (nodeId: string): string =>
+    path.join(tokenDir, nodeId.replace(/[^A-Za-z0-9_-]/g, '_'))
 
   /* 挂起中的审批：HTTP 响应一直不结束，Claude 就一直等；用户在画布上点了才回。
      回空 body = 不做决策 → Claude 回落到它自己的交互提示，绝不把 agent 卡死。 */
@@ -402,8 +417,12 @@ export async function startHookSystem(
       res.statusCode = 204
       res.end()
     }
-    const given = Buffer.from(String(req.headers['x-termboard-token'] ?? ''))
-    const authed = given.length === tokenBuf.length && timingSafeEqual(given, tokenBuf)
+    /* 按 token 反查是哪个节点在调。请求体/请求头里自报的 nodeId 一律不信。
+       token 是 128 位随机值且只走回环，这里用 Map 直查（同 UID 下 token 文件本就可读，
+       再做恒时比较没有实际收益）。 */
+    const given = String(req.headers['x-termboard-token'] ?? '')
+    const callerNode = given ? (tokenToNode.get(given) ?? '') : ''
+    const authed = !!callerNode
 
     // ── tb 工具中枢路由（GET，纯文本返回，给 agent 直接读）──
     if (req.url?.startsWith('/tb/')) {
@@ -420,8 +439,8 @@ export async function startHookSystem(
         res.end(text)
       }
       const route = u.pathname.slice(4)
-      // 调用方节点：脚本自报（同 UID 下无法强制），用于连线授权与提示
-      const source = String(req.headers['x-termscape-node'] ?? '').slice(0, 64)
+      // 调用方节点：由 token 反查得到，不再采信脚本自报的 X-Termscape-Node
+      const source = callerNode
       const run =
         route === 'skills'
           ? tb.skills(u.searchParams.get('q') ?? '')
@@ -464,7 +483,9 @@ export async function startHookSystem(
       try {
         if (!authed) return done()
         const body = new URLSearchParams(Buffer.concat(chunks).toString('utf8'))
-        const nodeId = body.get('nodeId') ?? ''
+        // nodeId 一律取 token 反查的结果，**不看请求体** ——
+        // 否则任一终端都能伪造别的节点的 SessionStart 把它判成活 agent
+        const nodeId = callerNode
         const event = body.get('event') ?? ''
         if (!nodeId || !event) return done()
         let payload: unknown = null
@@ -557,11 +578,39 @@ export async function startHookSystem(
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   const address = server.address()
   const port = typeof address === 'object' && address ? address.port : 0
-  await writeAtomic(endpointFile, `TERMBOARD_HOOK_PORT=${port}\nTERMBOARD_HOOK_TOKEN=${token}\n`)
+  /* 这个文件被 hook 脚本和 tb 每次调用时 source。token 必须在这里**按节点现查**：
+     tmux 会话跨 app 重启存活，而 `new-session -A` 接回已有会话时会忽略 -e，
+     所以 spawn 时注入的 env 对老会话是过期的，只有每次读文件才拿得到当前 token。 */
+  await writeAtomic(
+    endpointFile,
+    `TERMBOARD_HOOK_PORT=${port}\n` +
+      `TERMBOARD_TOKEN_DIR='${tokenDir}'\n` +
+      `if [ -n "$TERMBOARD_NODE_ID" ] && [ -f "$TERMBOARD_TOKEN_DIR/$TERMBOARD_NODE_ID" ]; then\n` +
+      `  TERMBOARD_HOOK_TOKEN=$(cat "$TERMBOARD_TOKEN_DIR/$TERMBOARD_NODE_ID")\n` +
+      `fi\n`
+  )
   await chmod(endpointFile, 0o600)
 
   return {
     endpointFile,
+    issueNodeToken: async (nodeId) => {
+      // 每次 spawn 换新 token：老 token 立即失效，节点重建不会继承旧身份
+      const prev = nodeToToken.get(nodeId)
+      if (prev) tokenToNode.delete(prev)
+      const t = randomUUID().replace(/-/g, '')
+      nodeToToken.set(nodeId, t)
+      tokenToNode.set(t, nodeId)
+      const f = tokenFile(nodeId)
+      await writeFile(f, t)
+      await chmod(f, 0o600)
+      return t
+    },
+    revokeNodeToken: async (nodeId) => {
+      const prev = nodeToToken.get(nodeId)
+      if (prev) tokenToNode.delete(prev)
+      nodeToToken.delete(nodeId)
+      await unlink(tokenFile(nodeId)).catch(() => undefined)
+    },
     binDir,
     decideApproval: (id, allow) => settle(id, allow ? ALLOW : DENY),
     // 脱敏：rawInput 只留在主进程，不进 renderer 也不过网络

@@ -1,6 +1,6 @@
 import { memo, useContext, useState } from 'react'
 import { useReactFlow, useStore, type Node, type NodeProps } from '@xyflow/react'
-import { TmuxContext } from '../identity-context'
+import { TmuxContext, RequestDeleteContext } from '../identity-context'
 
 export type GroupNodeT = Node<{ title: string; collapsed?: boolean }, 'group'>
 
@@ -9,9 +9,10 @@ export type GroupNodeT = Node<{ title: string; collapsed?: boolean }, 'group'>
 const COLLAPSED_H = 46
 
 function GroupNodeImpl({ id, data }: NodeProps<GroupNodeT>): React.JSX.Element {
-  const { setNodes, getNodes, deleteElements } = useReactFlow()
+  const { setNodes, getNodes } = useReactFlow()
   const [bcast, setBcast] = useState<string | null>(null)
   const tmuxOk = useContext(TmuxContext)
+  const requestDelete = useContext(RequestDeleteContext)
 
   // 聚合子节点状态（返回字符串保证 selector 相等性）
   const counts = useStore((s) => {
@@ -187,18 +188,12 @@ function GroupNodeImpl({ id, data }: NodeProps<GroupNodeT>): React.JSX.Element {
           title="删除集群及组内全部终端（会话结束）"
           onClick={(e) => {
             e.stopPropagation()
+            // 走画布统一入口：确认弹窗、撤回记录、连线一并处理都在那里
             const list = kids()
-            // 一次点击结束 N 个会话且不可撤销 → 必须确认。想留终端请用左边的「解组」
-            if (
-              list.length > 0 &&
-              !window.confirm(
-                `结束「${data.title}」下的 ${list.length} 个终端？会话会被真正杀掉，无法恢复。`
-              )
-            ) {
-              return
-            }
-            for (const k of list) void window.termscape.destroy(k.id) // 真杀 tmux 会话
-            void deleteElements({ nodes: [{ id }, ...list.map((k) => ({ id: k.id }))] })
+            requestDelete(
+              [id, ...list.map((k) => k.id)],
+              `删除集群「${data.title}」及组内 ${list.length} 个节点`
+            )
           }}
         >
           ✕

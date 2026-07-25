@@ -46,7 +46,9 @@ const api = {
   kill: (id: string): void => {
     ipcRenderer.send('pty:kill', id)
   },
-  destroy: (id: string): Promise<void> => ipcRenderer.invoke('pty:destroy', id),
+  destroy: (id: string): Promise<string> => ipcRenderer.invoke('pty:destroy', id),
+  seedScrollback: (id: string, text: string): Promise<boolean> =>
+    ipcRenderer.invoke('session:seedScrollback', id, text),
   onApprovals: (cb: (list: unknown[]) => void): (() => void) => {
     const listener = (_e: IpcRendererEvent, list: unknown[]): void => cb(list)
     ipcRenderer.on('approvals:update', listener)
