@@ -41,6 +41,7 @@ src/
 ```bash
 npm run dev        # 开发模式
 npm run typecheck  # tsc --noEmit
+npm test           # 派活准入 smoke test（Node 原生 type stripping，无框架依赖）
 npm run rebuild    # node-pty 重编译（换 Electron 版本后必跑）
 npm run dist       # 打包未签名 arm64 dmg → dist/Termscape-*.dmg（118MB）
 TERMBOARD_SHOT=/tmp/shot.png npm run dev  # 自检：6 秒后截图退出
@@ -56,14 +57,27 @@ TERMBOARD_PANEL=terminal npm run dev      # 自检：直接展开设置面板某
 - **pty 已 tmux 续存**：socket `termboard`、会话 `tb-<nodeId>`、conf 在 userData（`destroy-unattached off` 是命根）。reload/HMR/app 退出=releasePty（会话活）；节点 ✕/换身份=destroyPty（kill-session）。调试残留：`tmux -L termboard ls / kill-server`
 - deleteKeyCode=null：防误删节点杀 shell，删除走 ✕（已实现 destroy 语义）
 - 启动状态推送必须走 renderer:ready 握手（首推早于订阅会竞态丢失）
+- **workspace 落盘必须原子**：tmp+rename + `.bak` + 损坏隔离。裸 writeFile 写一半被杀 =
+  JSON 截断 → load 当成首次启动 → 画布归零，且随后 reap 把所有 tmux 会话当孤儿杀光
+- **删节点必须连带删连线**：连线是授权图，节点 id 又复用（`nextIdFrom` 取 max+1），
+  悬空连线 = 新节点白捡旧节点的授权
+- **pinch 缩放要用原生 non-passive wheel 监听**：React 的 wheel 是 passive 委托，
+  合成事件里 `preventDefault()` 是空操作
+- **`<webview>` 远缩时不能卸载**：摘出 DOM = 浏览器会话销毁 + 注册表留死引用。
+  学 TerminalNode：保持挂载 + `visibility:hidden`
+- **派活是最危险的一段**：注入 = 替用户敲回车。只接受当前活着的 agent 会话
+  （靠 session_id 挡 SessionEnd 之后的迟到事件），状态判定 fail-closed，改动后跑 `npm test`
 
-## 路线图（详见 PRD.md）
+## 授权模型（同 UID 前提，务必如实描述）
 
-1. ✅ POC：画布 + 双终端 + LOD + 状态 glow
-2. ✅ M1：节点 CRUD（✕关闭/双击重命名/＋新增）、布局+视口 JSON 持久化
-3. M2：hooks 真状态接入（**照 ARCHITECTURE-NOTES.md §3 设计**）+ context meter + 额度 HUD + 凭证管理
-4. M3：集群（编组/群发/聚合状态）、多项目 tab
-5. M4：tmux 续存（session 名约定已锁：socket `termboard` / `tb-<nodeId>`）、SSH 远程、打包
+跨节点动作（`tb ask` / `tb browser`）走「连线即授权」+ 弹窗兜底。但所有终端与 app 同 UID，
+任何进程都能 `tmux -L termboard send-keys` 直接驱动会话绕过全部检查 —— 所以这是**产品护栏
+不是安全边界**。写文档、写注释、答用户都要这么说，别把它说成安全机制。
+
+## 路线图（真实状态见 PRD.md「优先级排序」，那张表已重校）
+
+M1–M6 与 F1–F8 均有可用实现；明确未做的是 **MCP 形态**（F7/F8 现在走 `tb` + 回环 HTTP）、
+**非 Claude provider 的真状态与额度**、**记忆系统统筹**、**签名公证**。
 
 ## 参考
 
