@@ -97,7 +97,9 @@ function BrowserNodeImpl({ id, data, selected }: NodeProps<BrowserNodeT>): React
         lineStyle={{ opacity: 0, borderWidth: 8 }}
       />
       <Handle type="target" position={Position.Left} className="tb-handle in" />
-      <div className="browser-bar" style={{ display: far ? 'none' : undefined }}>
+      {/* 用 visibility 而不是 display:none —— 后者会改变 webview 高度，
+          跨 LOD 阈值时触发页面 reflow */}
+      <div className="browser-bar" style={{ visibility: far ? 'hidden' : 'visible' }}>
         <button className="browser-nav" title="后退" onClick={() => wvRef.current?.goBack()}>
           ‹
         </button>

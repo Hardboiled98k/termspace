@@ -10,6 +10,11 @@ export interface Settings {
   tmuxEnabled: boolean
   scrollback: number
   skillDirs: string[] // F8 工具中枢的 skill 库来源
+  /**
+   * 是否把托管 hook 写进用户全局的 ~/.claude/settings.json。
+   * 'ask' = 还没问过（首启会弹窗征得同意）。改用户全局配置这种事不能默默做。
+   */
+  claudeHooks: 'ask' | 'on' | 'off'
 }
 
 export const DEFAULTS: Settings = {
@@ -17,7 +22,8 @@ export const DEFAULTS: Settings = {
   defaultShell: '',
   tmuxEnabled: true,
   scrollback: 8000,
-  skillDirs: []
+  skillDirs: [],
+  claudeHooks: 'ask'
 }
 
 const file = (): string => path.join(app.getPath('userData'), 'settings.json')

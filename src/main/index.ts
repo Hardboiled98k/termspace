@@ -190,6 +190,10 @@ function destroyPty(id: string): Promise<void> {
     contextTail?.untrack(id)
     dropNode(id)
     hookSystem?.dropApprovals(id) // 节点没了，挂着的审批也别留着
+    // 一次性授权也要清：id 会被新节点复用，留着等于把授权传给了陌生人
+    for (const g of [...grants]) {
+      if (g.startsWith(`${id}>`) || g.endsWith(`>${id}`)) grants.delete(g)
+    }
     await releasePty(id, false)
     await pendingSnapshots.get(id) // 等在飞的抓屏落完，否则下一行删了又被写回来
     // 快照必须删：否则删掉节点后，新节点若拿到同一个 id 会回灌已删除终端的内容
@@ -236,17 +240,40 @@ function createWindow(): BrowserWindow {
     if (!/^(https?:\/\/|about:blank)/i.test(src)) params.src = 'about:blank'
   })
 
-  // 主窗口自身不许被导航走（dev 下放行 vite server，打包后放行 file://）
-  win.webContents.on('will-navigate', (e, url) => {
-    const dev = process.env['ELECTRON_RENDERER_URL']
-    if ((dev && url.startsWith(dev)) || url.startsWith('file://')) return
-    e.preventDefault()
-  })
+  /* 主窗口自身不许被导航走。用 origin/规范化路径比对，不能用 startsWith：
+     `http://localhost:5173.evil.test` 是能通过前缀检查的。 */
+  const devOrigin = process.env['ELECTRON_RENDERER_URL']
+    ? new URL(process.env['ELECTRON_RENDERER_URL']).origin
+    : null
+  const prodPage = path.join(__dirname, '../renderer/index.html')
+  const allowNav = (raw: string): boolean => {
+    try {
+      const u = new URL(raw)
+      if (devOrigin) return u.origin === devOrigin
+      return u.protocol === 'file:' && path.normalize(decodeURIComponent(u.pathname)) === prodPage
+    } catch {
+      return false
+    }
+  }
+  const blockNav = (e: Electron.Event, url: string): void => {
+    if (!allowNav(url)) e.preventDefault()
+  }
+  win.webContents.on('will-navigate', blockNav)
+  win.webContents.on('will-redirect', blockNav)
 
   // 新窗口一律不在应用内开，扔给系统浏览器
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//i.test(url)) void shell.openExternal(url)
     return { action: 'deny' }
+  })
+
+  // 画布浏览器里的 target="_blank" / window.open：guest 有自己的 handler，
+  // 不装的话这类链接是直接失效（点了没反应），而不是"被安全地拦下"
+  win.webContents.on('did-attach-webview', (_e, guest) => {
+    guest.setWindowOpenHandler(({ url }) => {
+      if (/^https?:\/\//i.test(url)) void shell.openExternal(url)
+      return { action: 'deny' }
+    })
   })
 
   if (process.env['ELECTRON_RENDERER_URL']) {
@@ -585,7 +612,8 @@ app.whenReady().then(async () => {
     hookSystem = await startHookSystem(
       (e) => {
         sendToWin('agent:status', e)
-        noteStatus(e.nodeId, e.state, e.event) // 派活等待判完成 + 会话存活判定
+        // 派活等待判完成 + 会话存活判定（sessionId 用来挡已结束会话的迟到事件）
+        noteStatus(e.nodeId, e.state, e.event, e.sessionId)
       },
       (nodeId, tp) => {
         contextTail?.track(nodeId, tp)
@@ -633,19 +661,38 @@ app.whenReady().then(async () => {
             task
           ),
         browser: async (source, action, arg, nodeId) => {
-          // list 之外的动作都碰得到已登录页面的内容（text/shot 能读走邮箱、后台、token），
-          // 所以一律要授权。自己 open 出来的新节点由 addBrowser 侧自动授权（创建者即所有者）。
-          if (action !== 'list' && action !== 'open') {
-            const target = nodeId || '(默认浏览器节点)'
-            const ok = await authorizeLink(
-              source,
-              nodeId || 'browser',
-              '驱动浏览器节点',
-              `动作：${action} ${arg.slice(0, 200)}\n目标：${target}\n该页面可能持有你的登录态。`
-            )
-            if (!ok) return `已拒绝：${source} 未获授权驱动 ${target}。在画布上从该终端拉一条线到浏览器节点即可长期授权。`
+          // list 之外的动作都碰得到已登录页面的内容（text/shot 同样能读走邮箱、后台、token），
+          // 所以一律要授权；open 是新建一个空白节点，创建者当场获授权。
+          if (action !== 'list') {
+            // 省略 --node 时必须先解析出**真实**的默认节点 id 再授权，
+            // 否则拿一个虚构 key 去比对连线，永远匹配不上（授权形同虚设）
+            let target = nodeId
+            if (!target && action !== 'open') {
+              const ids = (await browserCommand('list', '', ''))
+                .split('\n')
+                .map((s) => s.trim())
+                .filter((s) => /^[A-Za-z0-9_-]+$/.test(s))
+              if (!ids.length) return '画布上没有浏览器节点，先 tb browser open <url>'
+              target = ids[0]
+            }
+            if (action !== 'open') {
+              const ok = await authorizeLink(
+                source,
+                target,
+                '驱动浏览器节点',
+                `动作：${action} ${arg.slice(0, 200)}\n目标：${target}\n该页面可能持有你的登录态。`
+              )
+              if (!ok) {
+                return `已拒绝：${source} 未获授权驱动 ${target}。在画布上从该终端拉一条线到该浏览器节点即可长期授权。`
+              }
+            }
+            nodeId = target
           }
           const r = await browserCommand(action, arg, nodeId)
+          // open 出来的节点归创建者：直接给一条授权，后续 goto/js/text 不再打扰用户
+          if (action === 'open' && source && /^[A-Za-z0-9_-]+$/.test(r.trim().split('\n')[0])) {
+            grants.add(`${source}>${r.trim().split('\n')[0]}`)
+          }
           // 截图：把 data URL 落盘成 png，返回路径给 agent 读图
           if (action === 'shot' && r.startsWith('data:image')) {
             try {
@@ -691,6 +738,9 @@ app.whenReady().then(async () => {
   ipcMain.on('renderer:ready', () => {
     void pushQuota()
     workerWatch?.refresh()
+    // 审批只有增量推送，reload/HMR 后既有的挂起审批就再也不显示了 → 重放一次快照
+    const pend = hookSystem?.listApprovals() ?? []
+    if (pend.length) sendToWin('approvals:update', pend)
   })
 
   // 自检模式：TERMBOARD_SHOT=/path/x.png 启动 → 6 秒后截图退出

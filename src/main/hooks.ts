@@ -23,6 +23,8 @@ export interface AgentStatusEvent {
   newTurn: boolean
   /** 原始 hook 事件名。SessionStart/SessionEnd 用来判会话是否还活着（派活要用） */
   event?: string
+  /** Claude 的 session_id：并行 hook 会晚到，靠它区分"迟到的旧会话事件"与"新会话" */
+  sessionId?: string
 }
 
 const CLAUDE_EVENTS = [
@@ -180,6 +182,8 @@ export interface HookSystem {
   binDir: string // 注入 PATH 的目录（内含 tb 命令）
   /** 用户在画布上批准/拒绝一次工具调用；返回是否命中一个仍然挂着的请求 */
   decideApproval: (id: string, allow: boolean) => boolean
+  /** 当前挂起的审批快照（renderer reload 后要重放，否则既有审批一直不可见直到超时） */
+  listApprovals: () => PendingApproval[]
   /** 节点没了/会话结束 → 丢弃它挂着的审批（放行为空 = Claude 回落原生提示） */
   dropApprovals: (nodeId: string) => void
   dispose: () => void
@@ -280,7 +284,7 @@ export async function startHookSystem(
   function settle(id: string, body: string): boolean {
     const h = pending.get(id)
     if (!h) return false
-    pending.delete(id)
+    pending.delete(id) // 先出表再 end：res 的 close 回调看到表里没有就不会重复清理
     clearTimeout(h.timer)
     try {
       h.res.statusCode = 200
@@ -379,10 +383,19 @@ export async function startHookSystem(
         }
         const tp = (payload as { transcript_path?: unknown } | null)?.transcript_path
         if (typeof tp === 'string' && tp) onTranscript?.(nodeId, tp)
+        const sidRaw = (payload as { session_id?: unknown } | null)?.session_id
+        const sid = typeof sidRaw === 'string' ? sidRaw : undefined
 
         if (isPermission) {
           // 状态先照常推（节点变橙），再把这次请求挂起等用户决定
-          onStatus({ nodeId, agentId: 'claude', state: 'blocked', newTurn: false, event })
+          onStatus({
+            nodeId,
+            agentId: 'claude',
+            state: 'blocked',
+            newTurn: false,
+            event,
+            sessionId: sid
+          })
           const p = (payload ?? {}) as Record<string, unknown>
           const id = randomUUID()
           const rec: PendingApproval = {
@@ -395,12 +408,16 @@ export async function startHookSystem(
           }
           const timer = setTimeout(() => settle(id, ''), PERMISSION_HOLD_SEC * 1000)
           pending.set(id, { rec, res, timer })
-          // agent 那头断了（Ctrl-C / 退出）就别留着僵尸卡片
-          req.on('close', () => {
-            if (pending.delete(id)) {
-              clearTimeout(timer)
-              publish()
-            }
+          // agent 那头断了（Ctrl-C / 退出）就别留着僵尸卡片。
+          // 必须监听 res 而不是 req：req 的 'close' 在请求体正常读完时就会触发，
+          // 挂在它上面等于审批刚进 pending 就被自己删掉（整个功能失效）。
+          res.once('close', () => {
+            if (res.writableEnded) return // 我们自己 end 的，settle 里已清理
+            const h = pending.get(id)
+            if (!h) return
+            pending.delete(id)
+            clearTimeout(h.timer)
+            publish()
           })
           publish()
           return // 不调 done()：响应故意挂着
@@ -413,7 +430,8 @@ export async function startHookSystem(
             agentId: 'claude',
             state,
             newTurn: event === 'UserPromptSubmit',
-            event
+            event,
+            sessionId: sid
           })
         }
       } catch {
@@ -441,6 +459,7 @@ export async function startHookSystem(
     endpointFile,
     binDir,
     decideApproval: (id, allow) => settle(id, allow ? ALLOW : DENY),
+    listApprovals: () => [...pending.values()].map((h) => h.rec),
     dropApprovals: (nodeId) => {
       for (const [id, h] of [...pending]) {
         if (h.rec.nodeId === nodeId) settle(id, '') // 空 = 不决策，Claude 回落原生提示

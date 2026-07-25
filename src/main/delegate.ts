@@ -16,7 +16,13 @@ interface NodeRuntime {
    */
   live: boolean
   lastEventAt: number
+  /** 当前会话 id；已收到 SessionEnd 的那个 id 记在 endedSession，用来挡迟到事件 */
+  sessionId?: string
+  endedSession?: string
 }
+
+/** 可以接单的状态白名单 —— fail-closed：不在名单里一律拒，别用黑名单 */
+const ACCEPTING = new Set(['idle', 'done', 'session'])
 
 const runtime = new Map<string, NodeRuntime>()
 
@@ -33,14 +39,32 @@ export function noteTranscript(id: string, path: string): void {
   rt(id).transcriptPath = path
 }
 
-export function noteStatus(id: string, state: string, event?: string): void {
+export function noteStatus(id: string, state: string, event?: string, sessionId?: string): void {
   const r = rt(id)
   // 归一化后的 state：working=运行；done/session=一轮结束
   if (state === 'done' || state === 'session') r.lastStopAt = Date.now()
   r.status = state
   r.lastEventAt = Date.now()
-  // SessionEnd = agent 退出，之后这个终端就是普通 shell 了
-  r.live = event !== 'SessionEnd'
+
+  /* 会话存活判定。并行 hook 会晚到：SessionEnd 之后仍可能收到同一会话的
+     PostToolUse/Notification，若无条件置活，派活就会把任务直接执行进普通 shell。
+     所以按 session_id 记住"已结束的那个会话"，它的迟到事件一律不复活。 */
+  if (event === 'SessionEnd') {
+    r.live = false
+    r.endedSession = sessionId ?? r.sessionId ?? 'unknown'
+    return
+  }
+  if (sessionId) {
+    if (sessionId === r.endedSession) return // 已结束会话的迟到事件，忽略
+    r.sessionId = sessionId
+    r.endedSession = undefined
+    r.live = true
+    return
+  }
+  // 没有 session_id 可依据时保守处理：只有 SessionStart 能把死会话拉回活
+  if (r.endedSession && event !== 'SessionStart') return
+  if (event === 'SessionStart') r.endedSession = undefined
+  r.live = true
 }
 
 /** 该节点当前是否是活着的 agent 会话 */
@@ -127,22 +151,34 @@ export async function delegate(
 tb ask 只能派给正在跑 agent 的终端 —— 往普通 shell 注入文本等于直接执行任意命令。
 用 tb agents 看哪些节点在跑 agent。`
   }
-  if (r.status === 'working') {
-    return `派活被拒：${targetId} 正在运行中，此刻注入会把文字敲进它正在处理的输入流。等它空闲再试。`
+  // fail-closed：只有明确在接单状态才放行。working / blocked（正在等审批）/ waiting
+  // 都意味着有别的输入正在被处理，这时注入就是往输入流里插字。
+  if (!ACCEPTING.has(r.status)) {
+    return `派活被拒：${targetId} 当前状态是 ${r.status}，不接受注入（正在运行、或在等你回应）。等它空闲再试。`
   }
   if (busy.has(targetId)) {
     return `派活被拒：${targetId} 上已有一次派活在进行中，等它结束再来。`
   }
 
+  const epoch = r.sessionId
   if (!(await deps.authorize(sourceId, targetId, task))) {
     return `派活被拒：${sourceId} → ${targetId} 未获授权。
 在画布上从你的节点拉一条线到目标终端（终端→终端 = 派活通道），或在弹窗里批准本次调用。`
   }
-  // 授权与状态检查之后再占位：中间有 await，必须重新确认目标没被别人抢走
+
+  /* 弹窗期间目标可能已退出、开始干活、或被同 id 重建 —— 全部复查一遍再占位。
+     只查 busy 是不够的（授权那一刻的判断已经过时了）。 */
+  const now = rt(targetId)
+  if (now !== r || !deps.hasNode(targetId)) {
+    return `派活被拒：${targetId} 在你批准期间已经变了（节点被重建或移除），未注入。`
+  }
+  if (!now.live || !ACCEPTING.has(now.status) || now.sessionId !== epoch) {
+    return `派活被拒：${targetId} 在你批准期间状态变成了 ${now.live ? now.status : '会话已结束'}，未注入。`
+  }
   if (busy.has(targetId)) return `派活被拒：${targetId} 上已有一次派活在进行中。`
   busy.add(targetId)
   try {
-    return await runDelegation(deps, r, targetId, task, timeoutMs)
+    return await runDelegation(deps, now, targetId, task, timeoutMs)
   } finally {
     busy.delete(targetId)
   }

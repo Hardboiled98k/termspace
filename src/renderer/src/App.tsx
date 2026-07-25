@@ -593,6 +593,9 @@ function nextId(nodes: BoardNode[], prefix: string): string {
 
 function Board(): React.JSX.Element {
   const [nodes, setNodes] = useState<BoardNode[]>([])
+  /** 最新 nodes 的同步镜像：给那些不该因 nodes 变化而重建的 callback 用 */
+  const nodesRef = useRef<BoardNode[]>([])
+  nodesRef.current = nodes
   const [edges, setEdges] = useState<Edge[]>([])
   const [loaded, setLoaded] = useState(false)
   const [saveTick, setSaveTick] = useState(0)
@@ -856,7 +859,7 @@ function Board(): React.JSX.Element {
     []
   )
 
-  // 连线规则：简报→终端=上下文注入；终端→终端=派活通道；其余拒绝
+  // 连线规则：简报→终端=上下文注入；终端→终端=派活通道；终端→浏览器=允许驱动该浏览器；其余拒绝
   const onConnect = useCallback(
     (c: Connection) => {
       const src = nodes.find((n) => n.id === c.source)
@@ -864,7 +867,9 @@ function Board(): React.JSX.Element {
       if (!src || !tgt || src.id === tgt.id) return
       let kind: 'context' | 'delegate' | null = null
       if (src.type === 'context' && tgt.type === 'terminal') kind = 'context'
-      else if (src.type === 'terminal' && tgt.type === 'terminal') kind = 'delegate'
+      else if (src.type === 'terminal' && (tgt.type === 'terminal' || tgt.type === 'browser')) {
+        kind = 'delegate'
+      }
       if (!kind) return
       setEdges((es) => addEdge({ ...c, ...edgeStyle(kind) }, es))
     },
@@ -971,15 +976,19 @@ function Board(): React.JSX.Element {
     [defaultIdentity, projectCwd, defaultFontSize]
   )
 
+  /** 返回新节点 id：tb browser open 要靠它把「创建者即所有者」的授权落到实处 */
   const addBrowser = useCallback(
-    (url?: string) => {
+    (url?: string): string => {
+      // id 在更新器外算：setNodes 的更新器不是同步跑的，拿不到返回值。
+      // 同一 tick 连开两个浏览器会撞 id，但这条路径由 IPC 串行驱动，实际不会发生。
+      const newId = nextId(nodesRef.current, 'b')
       setNodes((ns) => {
-        const id = nextId(ns, 'b')
+        if (ns.some((n) => n.id === newId)) return ns
         const n = ns.length
         return [
           ...ns,
           {
-            id,
+            id: newId,
             type: 'browser' as const,
             position: { x: 200 + (n % 4) * 120, y: 200 + (n % 3) * 100 },
             width: 640,
@@ -988,6 +997,7 @@ function Board(): React.JSX.Element {
           }
         ]
       })
+      return newId
     },
     []
   )
@@ -1092,8 +1102,10 @@ function Board(): React.JSX.Element {
           return done(true, [...browserViews.keys()].join('\n') || '(画布上没有浏览器节点)')
         }
         if (action === 'open') {
-          addBrowser(arg)
-          return done(true, `已打开浏览器：${arg}`)
+          // 首行是裸 id：主进程据此把「创建者即所有者」的授权落到真实节点上，
+          // agent 也能拿它做后续的 --node 参数
+          const newId = addBrowser(arg)
+          return done(true, `${newId}\n已打开浏览器节点 ${newId}：${arg}`)
         }
         if (!wv) return done(false, '画布上没有浏览器节点，先 tb browser open <url>')
         try {
@@ -1155,6 +1167,12 @@ function Board(): React.JSX.Element {
     },
     [menu]
   )
+  /** 删节点必须连带删它的连线：连线就是授权图，而节点 id 会复用
+      （nextIdFrom 取 max+1），留下悬空连线等于让新节点白捡旧节点的授权 */
+  const dropEdgesOf = useCallback((ids: Set<string>) => {
+    setEdges((es) => es.filter((e) => !ids.has(e.source) && !ids.has(e.target)))
+  }, [])
+
   const deleteMenuNode = useCallback(() => {
     if (!menuNode) return
     if (menuNode.type === 'terminal') void window.termscape.destroy(menuNode.id)
@@ -1162,12 +1180,14 @@ function Board(): React.JSX.Element {
       const kids = nodes.filter((n) => n.parentId === menuNode.id)
       for (const k of kids) void window.termscape.destroy(k.id)
       setNodes((ns) => ns.filter((n) => n.id !== menuNode.id && n.parentId !== menuNode.id))
+      dropEdgesOf(new Set([menuNode.id, ...kids.map((k) => k.id)]))
       setMenu(null)
       return
     }
     setNodes((ns) => ns.filter((n) => n.id !== menuNode.id))
+    dropEdgesOf(new Set([menuNode.id]))
     setMenu(null)
-  }, [menuNode, nodes])
+  }, [menuNode, nodes, dropEdgesOf])
 
   const selectedCount = nodes.filter(
     (n) => n.type === 'terminal' && n.selected && !n.parentId
@@ -1432,7 +1452,9 @@ function Board(): React.JSX.Element {
                     onClick={() => {
                       const sel = nodes.filter((n) => n.type === 'terminal' && n.selected)
                       for (const s of sel) void window.termscape.destroy(s.id)
+                      const gone = new Set(nodes.filter((n) => n.selected).map((n) => n.id))
                       setNodes((ns) => ns.filter((n) => !n.selected))
+                      dropEdgesOf(gone)
                       setMenu(null)
                     }}
                   >
