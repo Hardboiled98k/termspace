@@ -8,6 +8,7 @@ import {
   type NodeProps
 } from '@xyflow/react'
 import { FarChip, FAR_ZOOM, useZoom } from './FarChip'
+import { usePinchZoom } from '../usePinchZoom'
 
 /* 画布内浏览器：agent 要测网页时优先在这里开，实时可见不用切应用 */
 export type BrowserNodeT = Node<{ url: string; title?: string }, 'browser'>
@@ -49,6 +50,7 @@ function BrowserNodeImpl({ id, data, selected }: NodeProps<BrowserNodeT>): React
   const { deleteElements, updateNodeData } = useReactFlow()
   const zoom = useZoom()
   const wvRef = useRef<WebviewEl | null>(null)
+  const pinchZoom = usePinchZoom()
   const [addr, setAddr] = useState(data.url || 'about:blank')
   const [loading, setLoading] = useState(false)
 
@@ -129,7 +131,7 @@ function BrowserNodeImpl({ id, data, selected }: NodeProps<BrowserNodeT>): React
           ✕
         </button>
       </div>
-      <div className="browser-body nodrag nowheel">
+      <div className="browser-body nodrag nowheel" onWheelCapture={(e) => pinchZoom(e)}>
         <Webview
           ref={wvRef}
           src={data.url || 'about:blank'}

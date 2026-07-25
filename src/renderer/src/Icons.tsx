@@ -77,3 +77,15 @@ export const IconGlobe = (): React.JSX.Element => (
     <path d="M3 12h18M12 3c2.5 2.5 3.8 5.7 3.8 9s-1.3 6.5-3.8 9c-2.5-2.5-3.8-5.7-3.8-9S9.5 5.5 12 3z" />
   </svg>
 )
+
+export const IconHand = (): React.JSX.Element => (
+  <svg {...S} width={15} height={15}>
+    <path d="M18 11V6a1.5 1.5 0 00-3 0m0 0V4.5a1.5 1.5 0 00-3 0V11m3-5v5m-3-6.5a1.5 1.5 0 00-3 0V12m0-4a1.5 1.5 0 00-3 0v5.5c0 3 2.5 5.5 5.5 5.5S18 21.5 18 18.5V11" />
+  </svg>
+)
+
+export const IconCursor = (): React.JSX.Element => (
+  <svg {...S} width={15} height={15}>
+    <path d="M5 3l7 18 2.5-7L21 11.5 5 3z" />
+  </svg>
+)

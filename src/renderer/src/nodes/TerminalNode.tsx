@@ -1,6 +1,7 @@
 import { memo, useContext, useEffect, useRef, useState } from 'react'
 import { IdentityContext } from '../identity-context'
 import { FarChip, FAR_ZOOM } from './FarChip'
+import { usePinchZoom } from '../usePinchZoom'
 import {
   Handle,
   NodeResizer,
@@ -87,6 +88,7 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
   const [editing, setEditing] = useState(false)
   const [ctxPct, setCtxPct] = useState<number | null>(null)
   const [fontHint, setFontHint] = useState(false)
+  const pinchZoom = usePinchZoom()
 
   // per-node 订阅，避免高频 usage 更新走 setNodes 触发全画布 rerender
   useEffect(
@@ -297,17 +299,18 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
             void navigator.clipboard.readText().then((t) => window.termboard.write(id, t))
           }
         }}
-        onWheel={(e) => {
-          // ⌥+滚轮 = 调字号（不动画布，不动会话）
+        onWheelCapture={(e) => {
+          // ⌥+滚轮 = 调字号
           if (e.altKey) {
             e.stopPropagation()
             e.preventDefault()
             stepFont(e.deltaY < 0 ? 1 : -1)
             return
           }
-          // 普通滚轮留给终端回滚（拦住画布 pan）；
-          // pinch 缩放（macOS 上是 ctrlKey+wheel）放行给画布 zoom
-          if (!e.ctrlKey) e.stopPropagation()
+          // pinch = 手动缩放画布（xterm 会吞 wheel，故 capture 阶段自己处理）
+          if (pinchZoom(e)) return
+          // 普通滚轮留给终端回滚，拦住画布 pan
+          e.stopPropagation()
         }}
       />
       {lod && !far && (

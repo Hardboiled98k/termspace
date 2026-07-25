@@ -610,11 +610,10 @@ body {
 }
 .project-tab {
   display: flex;
-  align-items: baseline;
-  gap: 6px;
-  min-width: 92px;
-  max-width: 200px;
-  padding: 6px 12px;
+  align-items: center;
+  gap: 7px;
+  max-width: 220px;
+  padding: 6px 10px 6px 13px;
   border: 0.5px solid transparent;
   border-bottom: none;
   border-radius: 9px 9px 0 0;
@@ -632,6 +631,7 @@ body {
 .project-tab .project-tab-name {
   overflow: hidden;
   text-overflow: ellipsis;
+  max-width: 120px;
 }
 .project-tab:hover {
   background: rgba(255, 255, 255, 0.05);
@@ -655,16 +655,26 @@ body {
   text-overflow: ellipsis;
 }
 .project-tab-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
   font-size: 9px;
   opacity: 0;
-  padding: 0 2px;
-  transition: opacity 0.15s ease;
+  flex-shrink: 0;
+  transition:
+    opacity 0.15s ease,
+    background 0.15s ease;
 }
-.project-tab:hover .project-tab-close {
-  opacity: 0.6;
+.project-tab:hover .project-tab-close,
+.project-tab.active .project-tab-close {
+  opacity: 0.55;
 }
 .project-tab-close:hover {
   opacity: 1;
+  background: rgba(255, 255, 255, 0.12);
   color: var(--tb-red);
 }
 .project-tab.add {
@@ -825,6 +835,56 @@ body {
   height: 0.5px;
   background: var(--tb-hairline);
   margin: 4px 2px;
+}
+
+/* 画布光标随模式变（React Flow 默认强制 grab，需覆盖到 pane） */
+.mode-select .react-flow__pane {
+  cursor: default !important;
+}
+.mode-select .react-flow__pane.dragging {
+  cursor: crosshair !important;
+}
+.mode-pan .react-flow__pane {
+  cursor: grab !important;
+}
+.mode-pan .react-flow__pane.dragging {
+  cursor: grabbing !important;
+}
+
+/* ── 手/框选 模式切换（左下，Controls 上方）──────────── */
+.mode-switch {
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  margin-bottom: 92px !important; /* 让开缩放 Controls */
+  background: var(--tb-panel-glass);
+  backdrop-filter: blur(24px) saturate(180%);
+  border: 0.5px solid var(--tb-hairline);
+  border-radius: 9px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+}
+.mode-btn {
+  width: 28px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--tb-muted);
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
+}
+.mode-btn:hover {
+  color: var(--tb-text);
+  background: rgba(255, 255, 255, 0.06);
+}
+.mode-btn.active {
+  background: rgba(10, 132, 255, 0.9);
+  color: #fff;
 }
 
 /* minimap 自动隐藏：移动时浮现，静止淡出 */

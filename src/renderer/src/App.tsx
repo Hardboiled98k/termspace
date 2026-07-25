@@ -25,6 +25,7 @@ import ContextNode, { type ContextNodeT } from './nodes/ContextNode'
 import BrowserNode, { type BrowserNodeT, browserViews } from './nodes/BrowserNode'
 import { IdentityContext } from './identity-context'
 import { SettingsPanel, type SettingsSection } from './SettingsPanel'
+import { MessageCenter } from './MessageCenter'
 import {
   IconTerminal,
   IconAgent,
@@ -34,7 +35,9 @@ import {
   IconSettings,
   IconGroup,
   IconChevron,
-  IconGlobe
+  IconGlobe,
+  IconHand,
+  IconCursor
 } from './Icons'
 
 export type BoardNode = TermNode | GroupNodeT | WorkerNodeT | ContextNodeT | BrowserNodeT
@@ -587,8 +590,14 @@ function Board(): React.JSX.Element {
     new URLSearchParams(location.search).get('panel') as SettingsSection | null
   )
   const [showAgentMenu, setShowAgentMenu] = useState(false)
-  const [menu, setMenu] = useState<{ x: number; y: number; nodeId?: string } | null>(null)
+  const [menu, setMenu] = useState<{
+    x: number
+    y: number
+    nodeId?: string
+    selection?: boolean
+  } | null>(null)
   const [mapActive, setMapActive] = useState(false)
+  const [canvasMode, setCanvasMode] = useState<'pan' | 'select'>('pan')
   const mapTimer = useRef(0)
   const [ctxMap, setCtxMap] = useState<Record<string, NodeCtx>>({})
   const [projects, setProjects] = useState<Project[]>([])
@@ -614,6 +623,13 @@ function Board(): React.JSX.Element {
     },
     [fitView]
   )
+
+  // 消息中心快捷应答：不切终端直接发 y/回车/Esc 给对应会话
+  const quickReply = useCallback((id: string, key: string) => {
+    if (key === 'approve') window.termboard.write(id, 'y\r')
+    else if (key === 'enter') window.termboard.write(id, '\r')
+    else if (key === 'esc') window.termboard.write(id, '\x1b')
+  }, [])
 
   // F7：cdx worker 状态 → 卡片节点（upsert 保留用户拖过的位置；不持久化）
   useEffect(
@@ -1098,7 +1114,7 @@ function Board(): React.JSX.Element {
 
   return (
     <IdentityContext.Provider value={identities}>
-      <div className="h-screen w-screen">
+      <div className={`h-screen w-screen mode-${canvasMode}`}>
         {settingsOpen && (
           <SettingsPanel
             initial={settingsOpen}
@@ -1128,6 +1144,11 @@ function Board(): React.JSX.Element {
             e.preventDefault()
             setMenu({ x: e.clientX, y: e.clientY, nodeId: n.id })
           }}
+          onSelectionContextMenu={(e) => {
+            // 框选后右键：弹「成组」菜单
+            e.preventDefault()
+            setMenu({ x: e.clientX, y: e.clientY, selection: true })
+          }}
           nodeTypes={nodeTypes}
           colorMode="dark"
           minZoom={0.02} /* 真·无限：能缩到极远看全局分布 */
@@ -1143,6 +1164,9 @@ function Board(): React.JSX.Element {
           panOnScroll
           zoomOnScroll={false}
           deleteKeyCode={null}
+          panOnDrag={canvasMode === 'pan'}
+          selectionOnDrag={canvasMode === 'select'}
+          selectionKeyCode={canvasMode === 'pan' ? 'Shift' : null}
           edgesReconnectable={false}
           connectionLineStyle={{ stroke: '#0A84FF', strokeWidth: 2 }}
           proOptions={{ hideAttribution: true }}
@@ -1155,6 +1179,19 @@ function Board(): React.JSX.Element {
             bgColor="transparent"
           />
           <Controls position="bottom-left" showInteractive={false} />
+          <Panel position="bottom-left" className="mode-switch">
+            <button
+              className={`mode-btn active ${canvasMode}`}
+              title={
+                canvasMode === 'pan'
+                  ? '当前：拖拽平移（Shift 框选）· 点击切到框选'
+                  : '当前：拖拽框选（空格平移）· 点击切到平移'
+              }
+              onClick={() => setCanvasMode((m) => (m === 'pan' ? 'select' : 'pan'))}
+            >
+              {canvasMode === 'pan' ? <IconHand /> : <IconCursor />}
+            </button>
+          </Panel>
           <MiniMap
             className={mapActive ? 'map-visible' : 'map-hidden'}
             pannable
@@ -1174,6 +1211,7 @@ function Board(): React.JSX.Element {
             nodeStrokeWidth={3}
           />
           <BoardHUD nodes={nodes} ctxMap={ctxMap} onFocus={focusNode} />
+          <MessageCenter nodes={nodes} onFocus={focusNode} onQuickReply={quickReply} />
           {/* 浏览器式顶部标签条：贴顶、满宽、横向滚动 */}
           <Panel position="top-center" className="project-tabbar">
             <div className="project-tabs">
@@ -1299,7 +1337,32 @@ function Board(): React.JSX.Element {
               style={{ left: menu.x, top: menu.y }}
               onMouseLeave={() => setMenu(null)}
             >
-              {!menu.nodeId && (
+              {menu.selection && (
+                <>
+                  <button
+                    className="ctx-menu-item"
+                    onClick={() => {
+                      groupSelected()
+                      setMenu(null)
+                    }}
+                  >
+                    <IconGroup />
+                    成组（{selectedCount}）
+                  </button>
+                  <button
+                    className="ctx-menu-item danger"
+                    onClick={() => {
+                      const sel = nodes.filter((n) => n.type === 'terminal' && n.selected)
+                      for (const s of sel) window.termboard.destroy(s.id)
+                      setNodes((ns) => ns.filter((n) => !n.selected))
+                      setMenu(null)
+                    }}
+                  >
+                    删除选中（{selectedCount}）
+                  </button>
+                </>
+              )}
+              {!menu.nodeId && !menu.selection && (
                 <>
                   <button
                     className="ctx-menu-item"

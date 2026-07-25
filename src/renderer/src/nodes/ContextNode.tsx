@@ -8,6 +8,7 @@ import {
   type NodeProps
 } from '@xyflow/react'
 import { FarChip, FAR_ZOOM, useZoom } from './FarChip'
+import { usePinchZoom } from '../usePinchZoom'
 
 /* F2：共享上下文 Hub — 编辑单一事实源文件（userData/board-context.md）
    注入路径：所有终端 env TERMBOARD_CONTEXT_FILE；
@@ -17,6 +18,7 @@ export type ContextNodeT = Node<{ title: string }, 'context'>
 function ContextNodeImpl({ id, selected }: NodeProps<ContextNodeT>): React.JSX.Element {
   const { deleteElements } = useReactFlow()
   const zoom = useZoom()
+  const pinchZoom = usePinchZoom()
   const [text, setText] = useState('')
   const [loaded, setLoaded] = useState(false)
   const [dirty, setDirty] = useState(false)
@@ -81,6 +83,7 @@ function ContextNodeImpl({ id, selected }: NodeProps<ContextNodeT>): React.JSX.E
       <Handle type="source" position={Position.Right} className="tb-handle ctx" />
       <textarea
         className="context-node-body nodrag nowheel"
+        onWheelCapture={(e) => pinchZoom(e)}
         placeholder={
           loaded
             ? '写给全画布 agent 的共享上下文（markdown）：\n项目目标 / 约束 / 决策 / 术语…\n\n用「Claude ＋共享上下文」预设起的节点自动注入；\n其他终端可 cat $TERMBOARD_CONTEXT_FILE 自取。'
