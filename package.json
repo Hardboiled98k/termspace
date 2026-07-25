@@ -10,8 +10,9 @@
     "start": "electron-vite preview",
     "typecheck": "tsc --noEmit",
     "rebuild": "electron-rebuild -f -w node-pty",
-    "dist": "electron-vite build && electron-builder --mac --config electron-builder.yml",
-    "test": "node --test --experimental-strip-types test/*.test.ts"
+    "dist": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-vite build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --config electron-builder.yml",
+    "test": "node --test --experimental-strip-types test/*.test.ts",
+    "dist:signed": "electron-vite build && electron-builder --mac --config electron-builder.yml"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",
