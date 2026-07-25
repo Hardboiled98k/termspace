@@ -622,6 +622,7 @@ function Board(): React.JSX.Element {
     y: number
     nodeId?: string
     selection?: boolean
+    edgeId?: string
   } | null>(null)
   const [mapActive, setMapActive] = useState(false)
   const [canvasMode, setCanvasMode] = useState<'pan' | 'select'>('pan')
@@ -1123,6 +1124,21 @@ function Board(): React.JSX.Element {
           // 首行是裸 id：主进程据此把「创建者即所有者」的授权落到真实节点上，
           // agent 也能拿它做后续的 --node 参数
           const newId = addBrowser(arg)
+          // 谁开的就自动连一条线：授权在画布上看得见，想撤销直接删线
+          if (req.source) {
+            setEdges((es) =>
+              addEdge(
+                {
+                  source: req.source,
+                  target: newId,
+                  sourceHandle: null,
+                  targetHandle: null,
+                  ...edgeStyle('delegate')
+                },
+                es
+              )
+            )
+          }
           return done(true, `${newId}\n已打开浏览器节点 ${newId}：${arg}`)
         }
         if (!wv) return done(false, '画布上没有浏览器节点，先 tb browser open <url>')
@@ -1251,6 +1267,12 @@ function Board(): React.JSX.Element {
             e.preventDefault()
             setMenu({ x: e.clientX, y: e.clientY, selection: true })
           }}
+          onEdgeContextMenu={(e, edge) => {
+            // 连线右键 → 删除。连线即授权，所以必须能撤销
+            e.preventDefault()
+            e.stopPropagation()
+            setMenu({ x: e.clientX, y: e.clientY, edgeId: edge.id })
+          }}
           nodeTypes={nodeTypes}
           colorMode="dark"
           minZoom={0.02} /* 真·无限：能缩到极远看全局分布 */
@@ -1367,28 +1389,62 @@ function Board(): React.JSX.Element {
           </Panel>
           <Panel position="top-left" className="board-top">
             <div className="toolbar">
-            <button className="toolbar-btn" title="新建终端" onClick={() => addTerminal()}>
-              <IconTerminal />
-              <span>终端</span>
-            </button>
-            <span className="agent-menu-wrap">
+            {/* 拆分按钮：最高频的「新建终端」保持一键，其余节点类型收进下拉。
+                此前 4 个带文字 + 3 个纯图标混排，没有主次，视觉也乱。 */}
+            <span className="agent-menu-wrap split">
               <button
-                className="toolbar-btn"
-                title="按预设新建 agent 终端（自动启动 claude/codex/gemini）"
+                className="toolbar-btn split-main"
+                title="新建终端"
+                onClick={() => addTerminal()}
+              >
+                <IconTerminal />
+                <span>新建终端</span>
+              </button>
+              <button
+                className="toolbar-btn split-caret"
+                title="新建其他节点：agent 预设 / 简报 / 浏览器"
                 onClick={() => setShowAgentMenu((s) => !s)}
               >
-                <IconAgent />
-                <span>Agent</span>
                 <IconChevron />
               </button>
               {showAgentMenu && (
                 <div className="agent-menu">
+                  <div className="agent-menu-label">Agent 预设</div>
                   {presets.map((p) => (
-                    <button key={p.id} className="agent-menu-item" onClick={() => addTerminal(p)}>
+                    <button
+                      key={p.id}
+                      className="agent-menu-item"
+                      onClick={() => {
+                        setShowAgentMenu(false)
+                        addTerminal(p)
+                      }}
+                    >
                       <span className={`identity-provider ${p.provider}`}>{p.provider}</span>
                       {p.name}
                     </button>
                   ))}
+                  <div className="ctx-menu-sep" />
+                  <button
+                    className="agent-menu-item"
+                    onClick={() => {
+                      setShowAgentMenu(false)
+                      openContextHub()
+                    }}
+                  >
+                    <IconBrief />
+                    项目简报（共享上下文）
+                  </button>
+                  <button
+                    className="agent-menu-item"
+                    onClick={() => {
+                      setShowAgentMenu(false)
+                      addBrowser()
+                    }}
+                  >
+                    <IconGlobe />
+                    画布内浏览器
+                  </button>
+                  <div className="ctx-menu-sep" />
                   <button
                     className="agent-menu-item manage"
                     onClick={() => {
@@ -1422,14 +1478,7 @@ function Board(): React.JSX.Element {
                 ))}
               </select>
             )}
-            <button className="toolbar-btn" title="项目简报（共享上下文）" onClick={openContextHub}>
-              <IconBrief />
-              <span>简报</span>
-            </button>
-            <button className="toolbar-btn" title="画布内浏览器" onClick={() => addBrowser()}>
-              <IconGlobe />
-              <span>浏览器</span>
-            </button>
+            <span className="toolbar-sep" />
             <button
               className="toolbar-btn icon-only"
               title="缩放到全部节点"
@@ -1460,6 +1509,24 @@ function Board(): React.JSX.Element {
               style={{ left: menu.x, top: menu.y }}
               onMouseLeave={() => setMenu(null)}
             >
+              {menu.edgeId && (
+                <>
+                  <div className="ctx-menu-title">
+                    {edges.find((e) => e.id === menu.edgeId)?.data?.kind === 'context'
+                      ? '上下文注入连线'
+                      : '派活 / 驱动授权连线'}
+                  </div>
+                  <button
+                    className="ctx-menu-item danger"
+                    onClick={() => {
+                      setEdges((es) => es.filter((e) => e.id !== menu.edgeId))
+                      setMenu(null)
+                    }}
+                  >
+                    删除连线（撤销该授权）
+                  </button>
+                </>
+              )}
               {menu.selection && (
                 <>
                   <button
@@ -1495,7 +1562,7 @@ function Board(): React.JSX.Element {
                   </button>
                 </>
               )}
-              {!menu.nodeId && !menu.selection && (
+              {!menu.nodeId && !menu.selection && !menu.edgeId && (
                 <>
                   <button
                     className="ctx-menu-item"

@@ -211,16 +211,27 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
 
   /* 内容区滚轮分流（原生 non-passive 监听，见 usePinchZoom 注释）：
      pinch → 缩放画布；⌥+滚轮 → 调字号；普通滚轮 → 留给终端回滚，拦住画布 pan */
+  /* 滚轮分流。终端里滚动有两个都合理的诉求：回滚历史 vs 平移画布。
+     用滚动链解决：终端还能滚就归终端，滚到头了就交给画布 —— 和浏览器里
+     嵌套滚动容器的行为一致，不用记额外快捷键。 */
   const attachWheel = usePinchZoom((e) => {
     if (e.altKey) {
       e.preventDefault()
       e.stopPropagation()
       stepFont(e.deltaY < 0 ? 1 : -1)
-      return
+      return true
     }
-    // 普通滚轮**不能**在这里 stopPropagation：这是祖先元素的 capture 阶段，
-    // 拦下来 xterm（监听在子元素 .xterm 上）就收不到，终端回滚直接失效。
-    // 挡住画布 pan 靠容器上的 nowheel class，不靠拦事件。
+    const term = termRef.current
+    if (!term) return false
+    const buf = term.buffer.active
+    const canUp = buf.viewportY > 0
+    const canDown = buf.viewportY < buf.baseY
+    if ((e.deltaY < 0 && canUp) || (e.deltaY > 0 && canDown)) {
+      // 归终端。**不能** stopPropagation：这是祖先的 capture 阶段，
+      // 拦下来 xterm（监听在子元素 .xterm 上）就收不到了
+      return true
+    }
+    return false // 滚到头 → 让画布接手平移
   })
   const setHolder = useCallback(
     (el: HTMLDivElement | null): void => {

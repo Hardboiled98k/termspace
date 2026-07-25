@@ -18,7 +18,14 @@ export type ContextNodeT = Node<{ title: string }, 'context'>
 function ContextNodeImpl({ id, selected }: NodeProps<ContextNodeT>): React.JSX.Element {
   const { deleteElements } = useReactFlow()
   const zoom = useZoom()
-  const pinchZoom = usePinchZoom()
+  // 同终端的滚动链：编辑区还能滚就归它，滚到头交给画布平移
+  const pinchZoom = usePinchZoom((e) => {
+    const el = e.currentTarget as HTMLTextAreaElement | null
+    if (!el) return false
+    const canUp = el.scrollTop > 0
+    const canDown = el.scrollTop + el.clientHeight < el.scrollHeight - 1
+    return (e.deltaY < 0 && canUp) || (e.deltaY > 0 && canDown)
+  })
   const [text, setText] = useState('')
   const [loaded, setLoaded] = useState(false)
   const [dirty, setDirty] = useState(false)

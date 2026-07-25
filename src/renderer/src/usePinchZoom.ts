@@ -15,7 +15,11 @@ const MAX = 1.5
  * onOther 收非 pinch 的滚轮事件，交给调用方决定（比如 ⌥+滚轮 调字号、普通滚轮留给终端回滚）。
  */
 export function usePinchZoom(
-  onOther?: (e: WheelEvent) => void
+  /**
+   * 非 pinch 的滚轮交给调用方。返回 true = 已消费（比如终端还能回滚）；
+   * 返回 false/undefined = 没人要，就用它平移画布 —— 这样鼠标停在节点上也能滑动画布。
+   */
+  onOther?: (e: WheelEvent) => boolean | void
 ): (el: HTMLElement | null) => void {
   const { getViewport, setViewport } = useReactFlow()
   const otherRef = useRef(onOther)
@@ -43,7 +47,11 @@ export function usePinchZoom(
           setViewport({ x: e.clientX - fx * next, y: e.clientY - fy * next, zoom: next })
           return
         }
-        otherRef.current?.(e)
+        if (otherRef.current?.(e)) return // 调用方消费了（终端回滚等）
+        // 没人要 → 平移画布。节点内容区挂了 nowheel，React Flow 不会自己动，这里补上
+        e.preventDefault()
+        const vp = getViewport()
+        setViewport({ x: vp.x - e.deltaX, y: vp.y - e.deltaY, zoom: vp.zoom })
       }
 
       el.addEventListener('wheel', onWheel, { passive: false, capture: true })

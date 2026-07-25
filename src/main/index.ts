@@ -126,7 +126,12 @@ ipcMain.handle('sessions:reap', async (e, knownIds: string[]) => {
 // tb browser：主进程 ↔ renderer 往返（renderer 持有 webview）
 const browserPending = new Map<string, (r: { ok: boolean; result: string }) => void>()
 let browserReqSeq = 0
-function browserCommand(action: string, arg: string, nodeId: string): Promise<string> {
+function browserCommand(
+  action: string,
+  arg: string,
+  nodeId: string,
+  source = ''
+): Promise<string> {
   return new Promise((resolve) => {
     if (!mainWin || mainWin.isDestroyed()) return resolve('窗口不可用')
     const reqId = `br${++browserReqSeq}`
@@ -138,7 +143,9 @@ function browserCommand(action: string, arg: string, nodeId: string): Promise<st
       clearTimeout(timer)
       resolve(r.ok ? r.result : `失败：${r.result}`)
     })
-    mainWin.webContents.send('browser:cmd', { reqId, nodeId, action, arg })
+    // source 传给 renderer：open 时自动画一条 终端→浏览器 的连线，
+    // 让"谁能驱动这个浏览器"在画布上看得见、也能靠删线撤销
+    mainWin.webContents.send('browser:cmd', { reqId, nodeId, action, arg, source })
   })
 }
 ipcMain.on('browser:result', (_e, r: { reqId: string; ok: boolean; result: string }) => {
@@ -437,6 +444,38 @@ ipcMain.handle('approval:decide', (e, id: string, allow: boolean) => {
   return hit
     ? { ok: true }
     : { ok: false, error: '该审批已失效（超时或 agent 已自行处理），请到终端确认' }
+})
+
+/**
+ * 抓某个终端当前屏的尾部若干行 —— 消息中心用它把"终端到底在问什么"直接显示出来。
+ * 只有看得见问题，就地回答才是安全的；否则就是盲按。
+ */
+ipcMain.handle('agent:peek', async (e, id: string, lines = 8) => {
+  if (!fromMainWin(e) || !okId(id)) return ''
+  const raw = await capturePane(id)
+  if (!raw) return ''
+  return raw
+    .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '') // 去掉 ANSI 转义，纯文本给 UI
+    .split('\n')
+    .map((l) => l.replace(/\s+$/, ''))
+    .filter((l, i, arr) => l !== '' || (i > 0 && arr[i - 1] !== '')) // 压掉连续空行
+    .slice(-Math.max(1, Math.min(20, lines)))
+    .join('\n')
+    .trim()
+})
+
+/**
+ * 就地回答：把用户在消息中心敲的内容写进该终端。
+ * 与"盲发 y"的区别是 —— 上面 peek 已经把问题原文显示出来了，用户看着回答，
+ * 等价于自己在终端里敲，不是替他猜。
+ */
+ipcMain.handle('agent:reply', (e, id: string, text: string) => {
+  if (!fromMainWin(e) || !okId(id)) return { ok: false, error: '非法请求' }
+  if (typeof text !== 'string' || text.length > 4096) return { ok: false, error: '内容不合法' }
+  const p = ptys.get(id)
+  if (!p) return { ok: false, error: '终端已不存在' }
+  p.write(text)
+  return { ok: true }
 })
 
 ipcMain.on('pty:kill', (e, id: string) => {
@@ -794,8 +833,9 @@ app.whenReady().then(async () => {
             }
             nodeId = target
           }
-          const r = await browserCommand(action, arg, nodeId)
-          // open 出来的节点归创建者：直接给一条授权，后续 goto/js/text 不再打扰用户
+          const r = await browserCommand(action, arg, nodeId, source)
+          // open 出来的节点归创建者：renderer 侧已自动连线，这里再补一条 grant 兜底
+          // （连线是渲染态，落盘前主进程还没收到 links 上报）
           if (action === 'open' && source && /^[A-Za-z0-9_-]+$/.test(r.trim().split('\n')[0])) {
             grants.add(`${source}>${r.trim().split('\n')[0]}`)
           }

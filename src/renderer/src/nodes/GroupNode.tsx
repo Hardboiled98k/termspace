@@ -81,12 +81,17 @@ function GroupNodeImpl({ id, data }: NodeProps<GroupNodeT>): React.JSX.Element {
     })
   }
 
+  const closeBcast = (): void => {
+    setBcast(null)
+    setNodes((ns) => ns.map((n) => (n.id === id ? { ...n, zIndex: undefined } : n)))
+  }
+
   const sendBroadcast = (): void => {
     const cmd = (bcast ?? '').trim()
     const list = terms()
     if (!cmd || !list.length) return
     for (const n of list) window.termscape.write(n.id, `${cmd}\r`)
-    setBcast(null)
+    closeBcast()
   }
 
   /** 批量重启：真杀会话再以相同身份/目录/预设重开（restartTick 驱动 spawn effect 重跑） */
@@ -151,7 +156,13 @@ function GroupNodeImpl({ id, data }: NodeProps<GroupNodeT>): React.JSX.Element {
               title="向组内所有终端群发一条命令"
               onClick={(e) => {
                 e.stopPropagation()
-                setBcast(bcast === null ? '' : null)
+                const open = bcast === null
+                setBcast(open ? '' : null)
+                // 抬 z-index：React Flow 按 zIndex 排序渲染，不抬的话
+                // 浮在组框上方的输入条会被相邻节点压住
+                setNodes((ns) =>
+                  ns.map((n) => (n.id === id ? { ...n, zIndex: open ? 1000 : undefined } : n))
+                )
               }}
             >
               群发
@@ -193,6 +204,7 @@ function GroupNodeImpl({ id, data }: NodeProps<GroupNodeT>): React.JSX.Element {
           ✕
         </button>
       </div>
+      {/* 浮在组头**上方**：子终端节点渲染在父组之上，放组内会被整个盖住 */}
       {bcast !== null && !data.collapsed && (
         <div className="group-bcast nodrag">
           <input
@@ -203,7 +215,7 @@ function GroupNodeImpl({ id, data }: NodeProps<GroupNodeT>): React.JSX.Element {
             onChange={(e) => setBcast(e.currentTarget.value)}
             onKeyDown={(e) => {
               if (e.key === 'Enter') sendBroadcast()
-              if (e.key === 'Escape') setBcast(null)
+              if (e.key === 'Escape') closeBcast()
             }}
             spellCheck={false}
           />

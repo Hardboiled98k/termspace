@@ -27,7 +27,7 @@ const api = {
     ipcRenderer.send('board:agents', payload)
   },
   onBrowserCmd: (
-    cb: (req: { reqId: string; nodeId: string; action: string; arg: string }) => void
+    cb: (req: { reqId: string; nodeId: string; action: string; arg: string; source: string }) => void
   ): (() => void) => {
     const listener = (_e: IpcRendererEvent, req: Parameters<typeof cb>[0]): void => cb(req)
     ipcRenderer.on('browser:cmd', listener)
@@ -53,6 +53,10 @@ const api = {
   },
   decideApproval: (id: string, allow: boolean): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('approval:decide', id, allow),
+  peek: (id: string, lines?: number): Promise<string> =>
+    ipcRenderer.invoke('agent:peek', id, lines),
+  reply: (id: string, text: string): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('agent:reply', id, text),
   onData: (id: string, cb: (data: string) => void): (() => void) => {
     const listener = (_e: IpcRendererEvent, data: string): void => cb(data)
     ipcRenderer.on(`pty:data:${id}`, listener)

@@ -1218,6 +1218,7 @@ body {
 
 /* ── 集群（组）节点 ─────────────────────────────────── */
 .group-node {
+  position: relative; /* 群发条要绝对定位到组框外 */
   width: 100%;
   height: 100%;
   border: 1px dashed var(--tb-hairline-strong);
@@ -1272,11 +1273,23 @@ body {
   border-color: transparent;
   white-space: nowrap;
 }
+/* 群发输入条：绝对定位到组框上方。子终端节点在 DOM 里渲染于父组之上，
+   放在组内部一定被盖住（用户实测到的问题）。 */
 .group-bcast {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 20;
   display: flex;
   gap: 8px;
   align-items: center;
-  padding: 0 16px 12px;
+  padding: 8px 10px;
+  background: var(--tb-panel-glass);
+  backdrop-filter: blur(24px) saturate(180%);
+  border: 0.5px solid var(--tb-hairline-strong);
+  border-radius: 10px;
+  box-shadow: var(--tb-shadow-card);
 }
 .group-bcast-input {
   flex: 1;
@@ -1676,6 +1689,55 @@ body {
   white-space: nowrap;
 }
 
+/* 工具栏：主动作用拆分按钮（一键新建终端 / 下拉选其他类型），工具类纯图标 */
+.agent-menu-wrap.split {
+  display: inline-flex;
+}
+.toolbar-btn.split-main {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  padding-right: 8px;
+}
+.toolbar-btn.split-caret {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  padding-left: 5px;
+  padding-right: 7px;
+  margin-left: 1px;
+}
+.toolbar-sep {
+  width: 1px;
+  height: 16px;
+  margin: 0 3px;
+  background: var(--tb-hairline-strong);
+  flex-shrink: 0;
+}
+.agent-menu-label {
+  padding: 4px 10px 2px;
+  font: 600 9.5px/1 var(--tb-font-ui);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--tb-muted);
+}
+
+/* 连线：选中/悬停时加粗高亮，让人看清右键对的是哪一根 */
+.react-flow__edge:hover .react-flow__edge-path,
+.react-flow__edge.selected .react-flow__edge-path {
+  stroke-width: 3.2 !important;
+  filter: drop-shadow(0 0 6px currentColor);
+}
+.react-flow__edge {
+  cursor: pointer;
+}
+.ctx-menu-title {
+  padding: 4px 10px 6px;
+  font: 600 10px/1 var(--tb-font-ui);
+  letter-spacing: 0.04em;
+  color: var(--tb-muted);
+  border-bottom: 0.5px solid var(--tb-hairline);
+  margin-bottom: 4px;
+}
+
 /* ── 右上角栏：额度 HUD + 消息中心竖排（两个 top-right Panel 会叠在同一点） ── */
 .right-rail {
   display: flex;
@@ -1821,6 +1883,68 @@ body {
   background: rgba(255, 159, 10, 0.14);
   border-radius: 4px;
   white-space: nowrap;
+}
+/* 终端原文预览：先看见问题，再就地回答 */
+.msg-peek {
+  margin: 6px 0;
+  padding: 6px 8px;
+  max-height: 108px;
+  overflow: auto;
+  font: 400 10.5px/1.5 var(--tb-font-mono);
+  color: #d8d8dd;
+  background: rgba(0, 0, 0, 0.42);
+  border-radius: 6px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+/* 编号选项 → 可点按钮（TUI 菜单本身是键盘驱动的，点不了） */
+.msg-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 7px;
+}
+.msg-choice {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 5px 8px;
+  font: 500 11.5px/1.3 var(--tb-font-ui);
+  color: var(--tb-text);
+  text-align: left;
+  background: rgba(10, 132, 255, 0.1);
+  border: 0.5px solid rgba(10, 132, 255, 0.3);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.msg-choice:hover {
+  background: rgba(10, 132, 255, 0.22);
+}
+.msg-choice-key {
+  flex-shrink: 0;
+  width: 15px;
+  height: 15px;
+  display: grid;
+  place-items: center;
+  font: 600 9.5px/1 var(--tb-font-mono);
+  color: #fff;
+  background: var(--tb-blue);
+  border-radius: 4px;
+}
+.msg-reply {
+  flex: 1;
+  min-width: 90px;
+  padding: 4px 8px;
+  font: 400 11px/1.3 var(--tb-font-mono);
+  color: var(--tb-text);
+  background: rgba(0, 0, 0, 0.35);
+  border: 0.5px solid var(--tb-hairline-strong);
+  border-radius: 6px;
+  outline: none;
+}
+.msg-reply:focus {
+  border-color: rgba(10, 132, 255, 0.6);
 }
 .msg-detail {
   margin: 5px 0 7px;

@@ -71,12 +71,18 @@ interface TermscapeApi {
     ) => void
   ) => () => void
   decideApproval: (id: string, allow: boolean) => Promise<{ ok: boolean; error?: string }>
+  /** 抓终端当前屏尾部若干行（消息中心显示"它在问什么"） */
+  peek: (id: string, lines?: number) => Promise<string>
+  /** 就地把内容写进该终端 */
+  reply: (id: string, text: string) => Promise<{ ok: boolean; error?: string }>
   onBrowserCmd: (
     cb: (req: {
       reqId: string
       nodeId: string
       action: string
       arg: string
+      /** 发起这条指令的终端节点 id（open 时用来自动连线） */
+      source: string
     }) => void | Promise<void>
   ) => () => void
   browserResult: (r: { reqId: string; ok: boolean; result: string }) => void
