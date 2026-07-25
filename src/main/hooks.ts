@@ -8,7 +8,7 @@
  */
 import { app } from 'electron'
 import http from 'node:http'
-import { randomUUID, timingSafeEqual } from 'node:crypto'
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
 import { chmod, copyFile, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
@@ -103,14 +103,29 @@ exit 0
 /** 审批请求最多挂多久（秒）。到点回空 = Claude 回落到自己的原生提示，不会永远卡着。 */
 const PERMISSION_HOLD_SEC = 120
 
+/** 给 UI / 远程端看的脱敏审批卡片 —— 摘要是截断的，**不可用于安全判定** */
 export interface PendingApproval {
   id: string
   nodeId: string
   toolName: string
-  /** tool_input 的单行摘要，够用户判断该不该批 */
+  /** tool_input 的单行摘要，够用户判断该不该批；已截断，见 PendingApprovalFull */
   summary: string
   toolUseId: string
   createdAt: number
+  /** 判定用的关键上下文（做规则引擎时要绑它，不能只绑 toolUseId —— 官方不保证该字段存在） */
+  sessionId: string
+  cwd: string
+  /** 完整 tool_input 的 sha256，用于"批准的确实是当时看到的那一个" */
+  inputHash: string
+}
+
+/**
+ * 主进程内部保留的完整记录。
+ * **摘要截断到 300 字，危险内容可以藏在截断之后** —— 任何自动放行的规则判定
+ * 必须读这里的 rawInput，绝不能拿 summary 去匹配。
+ */
+export interface PendingApprovalFull extends PendingApproval {
+  rawInput: unknown
 }
 
 /** 把 tool_input 压成一行给人看：命令/路径/URL 这类关键信息优先 */
@@ -246,6 +261,8 @@ export interface HookSystem {
   decideApproval: (id: string, allow: boolean) => boolean
   /** 当前挂起的审批快照（renderer reload 后要重放，否则既有审批一直不可见直到超时） */
   listApprovals: () => PendingApproval[]
+  /** 完整记录（含未截断的 rawInput），**只在主进程内使用**：安全判定必须看它 */
+  getApprovalFull: (id: string) => PendingApprovalFull | undefined
   /** 节点没了/会话结束 → 丢弃它挂着的审批（放行为空 = Claude 回落原生提示） */
   dropApprovals: (nodeId: string) => void
   /** 用户事后同意写入时调用（首启询问不阻塞启动，同意了再装） */
@@ -341,7 +358,7 @@ export async function startHookSystem(
   /* 挂起中的审批：HTTP 响应一直不结束，Claude 就一直等；用户在画布上点了才回。
      回空 body = 不做决策 → Claude 回落到它自己的交互提示，绝不把 agent 卡死。 */
   interface Held {
-    rec: PendingApproval
+    rec: PendingApprovalFull
     res: http.ServerResponse
     timer: NodeJS.Timeout
   }
@@ -465,13 +482,22 @@ export async function startHookSystem(
           })
           const p = (payload ?? {}) as Record<string, unknown>
           const id = randomUUID()
-          const rec: PendingApproval = {
+          const rawInput = p['tool_input']
+          const rec: PendingApprovalFull = {
             id,
             nodeId,
             toolName: String(p['tool_name'] ?? '未知工具'),
-            summary: summarizeToolInput(String(p['tool_name'] ?? ''), p['tool_input']),
+            summary: summarizeToolInput(String(p['tool_name'] ?? ''), rawInput),
+            // 官方不保证 PermissionRequest 一定带 tool_use_id，别把它当唯一绑定键
             toolUseId: String(p['tool_use_id'] ?? ''),
-            createdAt: Date.now()
+            createdAt: Date.now(),
+            sessionId: sid ?? '',
+            cwd: String(p['cwd'] ?? ''),
+            inputHash: createHash('sha256')
+              .update(JSON.stringify(rawInput ?? null))
+              .digest('hex'),
+            // 完整输入只留在主进程：摘要是截断的，拿它做安全判定会被"藏在后面"的内容绕过
+            rawInput
           }
           const timer = setTimeout(() => settle(id, ''), PERMISSION_HOLD_SEC * 1000)
           pending.set(id, { rec, res, timer })
@@ -526,7 +552,15 @@ export async function startHookSystem(
     endpointFile,
     binDir,
     decideApproval: (id, allow) => settle(id, allow ? ALLOW : DENY),
-    listApprovals: () => [...pending.values()].map((h) => h.rec),
+    // 脱敏：rawInput 只留在主进程，不进 renderer 也不过网络
+    listApprovals: () =>
+      [...pending.values()].map(({ rec }) => {
+        const { rawInput: _drop, ...safe } = rec
+        void _drop
+        return safe
+      }),
+    /** 完整记录，只给主进程内的规则引擎用（未来的低档管家） */
+    getApprovalFull: (id) => pending.get(id)?.rec,
     enableHooks: () => installClaudeHooks(scriptPath),
     dropApprovals: (nodeId) => {
       for (const [id, h] of [...pending]) {

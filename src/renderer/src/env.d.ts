@@ -81,6 +81,9 @@ interface TermscapeApi {
         summary: string
         toolUseId: string
         createdAt: number
+        sessionId: string
+        cwd: string
+        inputHash: string
       }[]
     ) => void
   ) => () => void

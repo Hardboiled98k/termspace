@@ -47,9 +47,13 @@ export interface PendingApproval {
   id: string
   nodeId: string
   toolName: string
+  /** 已截断的展示用摘要 —— 完整输入只在主进程，安全判定不能用这个 */
   summary: string
   toolUseId: string
   createdAt: number
+  sessionId: string
+  cwd: string
+  inputHash: string
 }
 
 const nodeTypes = {
