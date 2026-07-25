@@ -17,6 +17,9 @@ const api = {
   getSettings: (): Promise<unknown> => ipcRenderer.invoke('settings:get'),
   setSettings: (patch: unknown): Promise<unknown> => ipcRenderer.invoke('settings:set', patch),
   hooksStatus: (): Promise<unknown> => ipcRenderer.invoke('hooks:status'),
+  uninstallHooks: (): Promise<{ ok: boolean; changed?: boolean }> =>
+    ipcRenderer.invoke('hooks:uninstall'),
+  doctor: (): Promise<unknown[]> => ipcRenderer.invoke('app:doctor'),
   reapSessions: (knownIds: string[]): Promise<number> =>
     ipcRenderer.invoke('sessions:reap', knownIds),
   listSkills: (): Promise<unknown> => ipcRenderer.invoke('skills:list'),

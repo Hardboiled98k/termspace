@@ -1666,6 +1666,17 @@ body {
   border-color: rgba(10, 132, 255, 0.35);
 }
 
+.settings-doctor-detail {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--tb-muted);
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* 审批卡片里的工具名与命令摘要 */
 .msg-tool {
   margin-left: auto;

@@ -39,7 +39,16 @@ interface TermscapeApi {
   pickFolder: () => Promise<string | null>
   getSettings: () => Promise<AppSettings>
   setSettings: (patch: Partial<AppSettings>) => Promise<AppSettings>
-  hooksStatus: () => Promise<{ installed: boolean; endpoint: string; settingsPath: string }>
+  hooksStatus: () => Promise<{
+    installed: boolean
+    endpoint: string
+    settingsPath: string
+    consent: 'ask' | 'on' | 'off'
+  }>
+  uninstallHooks: () => Promise<{ ok: boolean; changed?: boolean }>
+  doctor: () => Promise<
+    { key: string; label: string; ok: boolean; detail: string; hint: string }[]
+  >
   reapSessions: (knownIds: string[]) => Promise<number>
   listSkills: () => Promise<{ name: string; description: string; source: string }[]>
   reportAgents: (payload: {

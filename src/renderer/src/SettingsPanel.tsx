@@ -23,13 +23,21 @@ export function SettingsPanel({
 }): React.JSX.Element {
   const [section, setSection] = useState<Section>(initial)
   const [s, setS] = useState<AppSettings | null>(null)
-  const [hooks, setHooks] = useState<{ installed: boolean; settingsPath: string } | null>(null)
+  const [hooks, setHooks] = useState<{
+    installed: boolean
+    settingsPath: string
+    consent: 'ask' | 'on' | 'off'
+  } | null>(null)
   const [skills, setSkills] = useState<{ name: string; description: string }[]>([])
+  const [doctor, setDoctor] = useState<
+    { key: string; label: string; ok: boolean; detail: string; hint: string }[]
+  >([])
 
   useEffect(() => {
     void window.termscape.getSettings().then(setS)
     void window.termscape.hooksStatus().then(setHooks)
     void window.termscape.listSkills().then(setSkills)
+    void window.termscape.doctor().then(setDoctor)
   }, [])
 
   const patch = (p: Partial<AppSettings>): void => {
@@ -145,12 +153,47 @@ export function SettingsPanel({
                   {hooks?.installed ? '运行中' : '未启动'}
                 </span>
               </div>
+              <div className="settings-row">
+                <span>写入 ~/.claude/settings.json</span>
+                <span className={`status-chip ${hooks?.consent === 'on' ? 'running' : 'idle'}`}>
+                  {hooks?.consent === 'on' ? '已授权' : hooks?.consent === 'off' ? '未授权' : '未询问'}
+                </span>
+                {hooks?.consent === 'on' && (
+                  <button
+                    className="group-act"
+                    title="从 ~/.claude/settings.json 摘掉 Termscape 的 hook 条目"
+                    onClick={() => {
+                      void window.termscape.uninstallHooks().then(() => {
+                        void window.termscape.hooksStatus().then(setHooks)
+                      })
+                    }}
+                  >
+                    卸载
+                  </button>
+                )}
+              </div>
               <p className="settings-note">
                 Termscape 在本机回环端口跑一个 hook 服务，Claude Code 通过它上报运行状态
-                （运行中 / 需要你 / 空闲）。配置已合并进 <code>{hooks?.settingsPath}</code>
-                ，原文件备份为同名 <code>.termboard-backup</code>。
+                （运行中 / 需要你 / 空闲），工具调用审批也走这条通道回到画布上。配置合并进{' '}
+                <code>{hooks?.settingsPath}</code>，原文件首次备份为同名{' '}
+                <code>.termboard-backup</code>。
                 托管脚本对非 Termscape 终端会立即退出，不影响你在别处正常使用 Claude Code。
+                卸载后需重启应用才会完全停止上报。
               </p>
+
+              <h3 className="settings-h">依赖体检</h3>
+              {doctor.map((d) => (
+                <div className="settings-row" key={d.key}>
+                  <span>{d.label}</span>
+                  <span className={`status-chip ${d.ok ? 'running' : 'attention'}`}>
+                    {d.ok ? '正常' : '缺失'}
+                  </span>
+                  <span className="settings-doctor-detail" title={d.hint}>
+                    {d.ok ? d.detail : d.hint}
+                  </span>
+                </div>
+              ))}
+
               <h3 className="settings-h">数据位置</h3>
               <p className="settings-note">
                 画布布局、简报、预设、凭证密文均在

@@ -19,13 +19,29 @@ Termscape 当前处于 **alpha** 阶段。已有功能可以本地使用，但�
 - **简报连线注入上下文**：每个项目可建立一份 Markdown 简报；从简报节点连线到终端后，内容会合并到该终端的 `TERMBOARD_CONTEXT_FILE`。内置“Claude ＋共享上下文”预设会通过 `--append-system-prompt` 注入该文件，其他终端可自行读取环境变量指向的文件。
 - **`tb` 工具中枢**：Termscape 终端的 `PATH` 中会注入本地 `tb` 命令，可按需搜索/加载 `~/.claude/skills` 中的 Skill、列出画布 Agent、向其他终端派活，以及控制画布浏览器。服务只监听回环地址并使用会话令牌鉴权。
 - **画布内浏览器节点**：基于 Electron `<webview>`，支持地址输入、前进、后退和刷新。Agent 也可通过 `tb browser` 打开或导航页面、读取可见文本、执行 JavaScript 和截图。
+- **集群操作**：框选成组后自动网格排列；组级可群发命令、批量重启（保留身份/目录/启动命令）、折叠（会话保持存活）；组状态取组内最坏情况 `error > attention > running > idle`。
+- **工具调用审批接到画布**：Claude 的 `PermissionRequest` hook 请求被主进程挂起，消息中心直接显示**它要做什么**（工具名 + 命令/路径摘要），批准/拒绝走结构化应答而不是往终端里发按键。超时（120 秒）自动回落到 Claude 自己的交互提示，不会卡住 agent。
+
+## 授权模型（请先读这段）
+
+跨节点动作（`tb ask` 派活、`tb browser` 驱动浏览器）遵循 **连线即授权**：画布上存在
+`源终端 → 目标` 的连线才放行，否则弹窗让你当场批准；删掉连线即撤销授权。
+
+必须说清楚边界：Termscape 的所有终端与应用本身跑在**同一个用户身份**下。任何同 UID 的进程
+都可以直接 `tmux -L termboard send-keys` 驱动任意会话，绕过上述全部检查。因此这套机制的定位是
+**产品护栏**——防止 agent 自作主张、让画布连线成为真实语义——**不是安全边界**。真正的隔离需要
+不同 UID、容器或强制沙箱。
+
+在此前提下仍然做了这些收口：派活只接受**当前活着**的 agent 会话（普通 shell 一律拒绝注入）、
+目标必须处于可接单状态、同一目标并发派活互斥；浏览器除 `list` 外所有动作都要授权
+（`text`/`shot` 同样能读走已登录页面的内容）；指名了不存在的浏览器节点直接报错而不是回退到别的节点。
 
 ## 系统要求
 
 - macOS（当前打包目标仅为 Apple Silicon / `arm64`）。
 - Node.js 与 npm，用于本地开发和构建；仓库未声明固定 Node.js 版本。
 - tmux 可选，但强烈建议安装。缺少 tmux 时终端仍可运行，但进程不会跨应用重载或退出续存。
-- Claude Code 及其 hooks：只有在需要 Claude Agent 真实状态、上下文占用和简报自动注入时需要。Termscape 启动时会把托管 hook 合并到 `~/.claude/settings.json`，并保留已有 hook 条目。
+- Claude Code 及其 hooks：只有在需要 Claude Agent 真实状态、上下文占用、审批接管和简报自动注入时需要。**首次启动会先征得同意**才把托管 hook 合并进 `~/.claude/settings.json`（保留已有条目，原文件备份为 `.termboard-backup`），拒绝也能正常使用，只是节点状态不反映 agent 真实情况。设置 →「Hooks 与状态」里可随时卸载，同处有依赖体检，缺 tmux / Claude Code / cdx 时会明说缺什么、影响什么。
 
 ## 开发与构建
 
@@ -40,8 +56,15 @@ npm install
 ```bash
 npm run dev        # 启动 electron-vite 开发环境
 npm run typecheck  # 运行 TypeScript 类型检查，不产出文件
+npm test           # 派活准入的 smoke test（Node 原生 type stripping，无测试框架依赖）
 npm run rebuild    # 按当前 Electron ABI 重编译 node-pty
 npm run dist       # 构建未签名的 macOS arm64 DMG 到 dist/
+```
+
+自检截图（不进交互也能确认启动链路正常）：
+
+```bash
+TERMBOARD_SHOT=/tmp/shot.png npm run dev   # 6 秒后截图并退出
 ```
 
 升级 Electron 或遇到 `node-pty` ABI 不匹配时，先运行 `npm run rebuild`。
@@ -66,7 +89,8 @@ npm run dist       # 构建未签名的 macOS arm64 DMG 到 dist/
 ## 已知限制
 
 - 当前为 alpha，功能和本地数据格式仍可能变化。
-- 生成的 macOS 应用未签名、未公证，不能视为正式发布包。
+- **生成的 macOS 应用未签名、未公证**，Gatekeeper 会拦下，只适合本机自用或定向测试，不能视为正式发布包。补签名需要 Apple Developer 账号，并在 `electron-builder.yml` 里把 `identity: null` 换成 Developer ID、开启 hardened runtime 后走 notarization。
+- 上述「授权模型」是产品护栏而非安全边界，同 UID 进程可绕过。
 - 当前只配置了 macOS `arm64` 构建，不提供 Intel macOS、Windows 或 Linux 包。
 - Agent 状态 hooks 目前只支持 Claude Code；Codex、Gemini 和普通 shell 节点不会获得同等的真实状态检测。
 - 额度 HUD 当前只读取 Claude 数据，不提供 Codex、Gemini 或其他供应商额度。

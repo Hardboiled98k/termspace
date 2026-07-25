@@ -4,7 +4,12 @@ import { existsSync } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import * as pty from 'node-pty'
-import { startHookSystem, type HookSystem } from './hooks'
+import {
+  startHookSystem,
+  uninstallClaudeHooks,
+  claudeHooksPresent,
+  type HookSystem
+} from './hooks'
 import { createContextTail, type ContextTail } from './context-tail'
 import {
   listIdentities,
@@ -445,11 +450,84 @@ ipcMain.handle('skills:list', async () => {
     source: s.source
   }))
 })
-ipcMain.handle('hooks:status', () => ({
+ipcMain.handle('hooks:status', async () => ({
   installed: !!hookSystem,
   endpoint: hookSystem?.endpointFile ?? '',
-  settingsPath: path.join(os.homedir(), '.claude', 'settings.json')
+  settingsPath: path.join(os.homedir(), '.claude', 'settings.json'),
+  consent: (await getSettings()).claudeHooks
 }))
+
+/** 设置面板「卸载 hook」：摘掉写进用户 settings.json 的条目并记住选择 */
+ipcMain.handle('hooks:uninstall', async (e) => {
+  if (!fromMainWin(e)) return { ok: false }
+  const changed = await uninstallClaudeHooks()
+  await setSettings({ claudeHooks: 'off' })
+  return { ok: true, changed }
+})
+
+/* ── 首启体检：缺依赖时明确说"缺什么、影响什么、怎么补"，
+   而不是让人对着一个"看起来开着但某些功能不生效"的应用猜。 ── */
+export interface DoctorItem {
+  key: string
+  label: string
+  ok: boolean
+  detail: string
+  hint: string
+}
+
+function which(bin: string): string {
+  for (const d of ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin']) {
+    const p = path.join(d, bin)
+    if (existsSync(p)) return p
+  }
+  return ''
+}
+
+ipcMain.handle('app:doctor', async (e): Promise<DoctorItem[]> => {
+  if (!fromMainWin(e)) return []
+  const s = await getSettings()
+  const present = await claudeHooksPresent()
+  const tmux = which('tmux')
+  const claude = which('claude') || existsSync(path.join(os.homedir(), '.claude')) ? 'ok' : ''
+  const items: DoctorItem[] = [
+    {
+      key: 'tmux',
+      label: 'tmux 会话续存',
+      ok: !!tmux,
+      detail: tmux ? tmux : '未找到 tmux',
+      hint: '装了才能让终端跨应用重启存活：brew install tmux'
+    },
+    {
+      // 报实情：真去 settings.json 里找条目，而不是只看我们自己记的授权开关
+      key: 'hooks',
+      label: 'Claude 状态 hook',
+      ok: !!hookSystem && present,
+      detail: !hookSystem
+        ? 'hook 服务未启动'
+        : present
+          ? s.claudeHooks === 'on'
+            ? '已接入'
+            : '条目在（早前版本装的），但当前未授权'
+          : '未写入 ~/.claude/settings.json',
+      hint: '没有它，节点状态只是占位，不反映 agent 真实情况'
+    },
+    {
+      key: 'claude',
+      label: 'Claude Code',
+      ok: !!claude,
+      detail: claude ? '已安装' : '未检测到 ~/.claude',
+      hint: 'agent 节点与上下文占用依赖它'
+    },
+    {
+      key: 'cdx',
+      label: 'worker 引擎 cdx',
+      ok: !!which('cdx'),
+      detail: which('cdx') || '未找到 cdx',
+      hint: '仅影响 F7 worker 卡片，其余功能不受影响'
+    }
+  ]
+  return items
+})
 
 // ── 选择项目文件夹 ──
 ipcMain.handle('dialog:pickFolder', async () => {
@@ -606,6 +684,11 @@ app.whenReady().then(async () => {
     isMainWc(wc) && permission.startsWith('clipboard')
   )
 
+  /* 写用户全局的 ~/.claude/settings.json 有侵入性，必须先问过 —— 但不能在这里问：
+     对话框会把启动整个卡住（窗口都还没建）。先按已有选择起服务，窗口起来之后再问。 */
+  const st = await getSettings()
+  const installHooks = st.claudeHooks === 'on'
+
   // hook 系统先于窗口（pty spawn 需要 endpoint 路径）；失败不阻塞启动
   contextTail = createContextTail((u) => sendToWin('agent:context', u))
   try {
@@ -709,7 +792,8 @@ app.whenReady().then(async () => {
           return r
         }
       },
-      (list) => sendToWin('approvals:update', list)
+      (list) => sendToWin('approvals:update', list),
+      installHooks
     )
   } catch (err) {
     console.error('hook system failed to start:', err)
@@ -738,6 +822,30 @@ app.whenReady().then(async () => {
   ipcMain.on('renderer:ready', () => {
     void pushQuota()
     workerWatch?.refresh()
+    // 首启征求 hook 写入同意：放在窗口起来之后问，别卡启动；自检截图模式下跳过
+    if (st.claudeHooks === 'ask' && !process.env['TERMBOARD_SHOT']) {
+      void dialog
+        .showMessageBox(win, {
+          type: 'question',
+          buttons: ['暂不', '允许写入'],
+          defaultId: 1,
+          cancelId: 0,
+          message: 'Termscape 需要写入 ~/.claude/settings.json',
+          detail:
+            '用于接收 Claude Code 的运行状态（节点发光、谁在等你审批、上下文占用），' +
+            '以及把工具调用审批接到画布上。\n\n' +
+            '已有 hook 条目会保留，原文件首次备份为 settings.json.termboard-backup，' +
+            '随时可在「设置 → Hooks 与状态」里卸载。\n\n' +
+            '选「暂不」也能正常使用，只是节点状态不反映 agent 真实情况。'
+        })
+        .then(async ({ response }) => {
+          const yes = response === 1
+          await setSettings({ claudeHooks: yes ? 'on' : 'off' })
+          // 说「暂不」时要把早前版本装进去的条目也摘掉，否则嘴上拒绝、文件里还留着
+          if (yes) await hookSystem?.enableHooks()
+          else await uninstallClaudeHooks()
+        })
+    }
     // 审批只有增量推送，reload/HMR 后既有的挂起审批就再也不显示了 → 重放一次快照
     const pend = hookSystem?.listApprovals() ?? []
     if (pend.length) sendToWin('approvals:update', pend)

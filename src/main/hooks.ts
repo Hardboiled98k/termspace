@@ -140,9 +140,57 @@ interface HookGroup {
   hooks?: { type?: string; command?: string }[]
 }
 
+const claudeSettingsPath = (): string => path.join(os.homedir(), '.claude', 'settings.json')
+
+/** 托管 hook 条目此刻是否真的在用户 settings.json 里（体检要报实情，不能只看我们自己的开关） */
+export async function claudeHooksPresent(): Promise<boolean> {
+  const p = claudeSettingsPath()
+  if (!existsSync(p)) return false
+  try {
+    const settings = JSON.parse(await readFile(p, 'utf8')) as {
+      hooks?: Record<string, HookGroup[]>
+    }
+    return Object.values(settings.hooks ?? {}).some((arr) =>
+      (Array.isArray(arr) ? arr : []).some((g) =>
+        g.hooks?.some((h) => typeof h.command === 'string' && h.command.includes(MARKER))
+      )
+    )
+  } catch {
+    return false
+  }
+}
+
+/** 把托管 hook 从用户 settings.json 里摘掉（设置面板「卸载」用），返回是否有改动 */
+export async function uninstallClaudeHooks(): Promise<boolean> {
+  const p = claudeSettingsPath()
+  if (!existsSync(p)) return false
+  let settings: Record<string, unknown>
+  try {
+    settings = JSON.parse(await readFile(p, 'utf8'))
+  } catch {
+    return false // 损坏时绝不覆写
+  }
+  const hooks = settings['hooks'] as Record<string, HookGroup[]> | undefined
+  if (!hooks) return false
+  let changed = false
+  for (const ev of Object.keys(hooks)) {
+    const arr = Array.isArray(hooks[ev]) ? hooks[ev] : []
+    const kept = arr.filter(
+      (g) => !g.hooks?.some((h) => typeof h.command === 'string' && h.command.includes(MARKER))
+    )
+    if (kept.length !== arr.length) {
+      changed = true
+      if (kept.length) hooks[ev] = kept
+      else delete hooks[ev]
+    }
+  }
+  if (changed) await writeAtomic(p, JSON.stringify(settings, null, 2) + '\n')
+  return changed
+}
+
 /** 把托管 hook 合并进 ~/.claude/settings.json（幂等，marker 识别，保留用户条目，首次备份） */
 async function installClaudeHooks(scriptPath: string): Promise<void> {
-  const settingsPath = path.join(os.homedir(), '.claude', 'settings.json')
+  const settingsPath = claudeSettingsPath()
   let settings: Record<string, unknown> = {}
   if (existsSync(settingsPath)) {
     try {
@@ -186,6 +234,8 @@ export interface HookSystem {
   listApprovals: () => PendingApproval[]
   /** 节点没了/会话结束 → 丢弃它挂着的审批（放行为空 = Claude 回落原生提示） */
   dropApprovals: (nodeId: string) => void
+  /** 用户事后同意写入时调用（首启询问不阻塞启动，同意了再装） */
+  enableHooks: () => Promise<void>
   dispose: () => void
 }
 
@@ -257,7 +307,10 @@ export async function startHookSystem(
   onStatus: (e: AgentStatusEvent) => void,
   onTranscript?: (nodeId: string, transcriptPath: string) => void,
   tb?: TbHandlers,
-  onApprovals?: (list: PendingApproval[]) => void
+  onApprovals?: (list: PendingApproval[]) => void,
+  /** 是否把托管 hook 写进用户的 ~/.claude/settings.json。false 时服务照常起（tb 仍可用），
+      只是不碰用户全局配置 —— 改别人的全局配置这件事必须先问过。 */
+  installHooks = true
 ): Promise<HookSystem> {
   const dir = app.getPath('userData')
   const hooksDir = path.join(dir, 'hooks')
@@ -266,7 +319,7 @@ export async function startHookSystem(
   const scriptPath = path.join(hooksDir, 'claude-status.sh')
   await writeAtomic(scriptPath, buildScript())
   await chmod(scriptPath, 0o755)
-  await installClaudeHooks(scriptPath)
+  if (installHooks) await installClaudeHooks(scriptPath)
 
   const token = randomUUID()
   const tokenBuf = Buffer.from(token)
@@ -460,6 +513,7 @@ export async function startHookSystem(
     binDir,
     decideApproval: (id, allow) => settle(id, allow ? ALLOW : DENY),
     listApprovals: () => [...pending.values()].map((h) => h.rec),
+    enableHooks: () => installClaudeHooks(scriptPath),
     dropApprovals: (nodeId) => {
       for (const [id, h] of [...pending]) {
         if (h.rec.nodeId === nodeId) settle(id, '') // 空 = 不决策，Claude 回落原生提示
