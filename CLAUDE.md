@@ -43,7 +43,8 @@ npm run dev        # 开发模式
 npm run typecheck  # tsc --noEmit
 npm test           # 派活准入 smoke test（Node 原生 type stripping，无框架依赖）
 npm run rebuild    # node-pty 重编译（换 Electron 版本后必跑）
-npm run dist       # 打包未签名 arm64 dmg → dist/Termscape-*.dmg（118MB）
+npm run dist       # 未签名 arm64 dmg（本机自用，随时可打）
+npm run dist:signed  # 签名 + 公证正式包（需下面四个环境变量）
 TERMBOARD_SHOT=/tmp/shot.png npm run dev  # 自检：6 秒后截图退出
 TERMBOARD_PANEL=terminal npm run dev      # 自检：直接展开设置面板某分区
 ```
@@ -67,6 +68,27 @@ TERMBOARD_PANEL=terminal npm run dev      # 自检：直接展开设置面板某
   学 TerminalNode：保持挂载 + `visibility:hidden`
 - **派活是最危险的一段**：注入 = 替用户敲回车。只接受当前活着的 agent 会话
   （靠 session_id 挡 SessionEnd 之后的迟到事件），状态判定 fail-closed，改动后跑 `npm test`
+
+## 打包签名（已就绪，2026-07-26）
+
+证书 `Developer ID Application: Nanjing Lonely Island Network Technology Co., Ltd. (85V88J2F3F)`
+已装进登录钥匙串，有效期至 2031-07。公证走 App Store Connect API 密钥。
+
+```bash
+export APPLE_API_KEY=~/.appstoreconnect/private_keys/AuthKey_APPLE_KEY_ID.p8
+export APPLE_API_KEY_ID=APPLE_KEY_ID
+export APPLE_API_ISSUER=APPLE_ISSUER_ID
+export APPLE_TEAM_ID=85V88J2F3F
+npm run dist:signed
+```
+
+坑：
+- **hardened runtime 必须配 entitlements**（`build/entitlements.mac.plist`），
+  放行 V8 的 JIT 和 node-pty，否则签完能过公证但**一启动就崩**
+- electron-builder 26 的 `notarize` 只收布尔值，teamId 走环境变量（写成对象直接 schema 报错）
+- DMG 要单独 `notarytool submit` + `stapler staple`，electron-builder 只公证 .app
+- 验收三连：`codesign --verify --deep --strict` / `spctl --assess --type execute`
+  （要看到 `source=Notarized Developer ID`）/ `stapler validate`
 
 ## 授权模型（同 UID 前提，务必如实描述）
 
