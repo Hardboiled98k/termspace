@@ -47,8 +47,9 @@ const PTY_WRITE_LIMIT = 256 * 1024
 
 /** 本次运行是否已经问过 hook 写入同意（renderer:ready 会被 reload 反复触发） */
 let askedConsent = false
-/** 远程端能否写入终端。设置里改了要立刻生效，所以单独缓存一份 */
+/** 远程端能否写入终端 / 批准工具调用。设置里改了要立刻生效，所以单独缓存 */
 let remoteAllowInput = false
+let remoteAllowApprove = false
 
 const ptys = new Map<string, pty.IPty>()
 let hookSystem: HookSystem | null = null
@@ -521,6 +522,7 @@ ipcMain.handle('settings:get', () => getSettings())
 ipcMain.handle('settings:set', async (_e, patch: Partial<Settings>) => {
   const next = await setSettings(patch)
   remoteAllowInput = next.remoteAllowInput // 立刻生效，不用重启
+  remoteAllowApprove = next.remoteAllowApprove
   return next
 })
 
@@ -531,6 +533,7 @@ ipcMain.handle('remote:status', async (e) => {
   return {
     enabled: s.remoteEnabled,
     allowInput: s.remoteAllowInput,
+    allowApprove: s.remoteAllowApprove,
     running: !!remoteApi,
     port: remoteApi?.port ?? s.remotePort,
     token: remoteApi?.token ?? '',
@@ -785,6 +788,7 @@ app.whenReady().then(async () => {
   const st = await getSettings()
   const installHooks = st.claudeHooks === 'on'
   remoteAllowInput = st.remoteAllowInput
+  remoteAllowApprove = st.remoteAllowApprove
 
   // hook 系统先于窗口（pty spawn 需要 endpoint 路径）；失败不阻塞启动
   contextTail = createContextTail((u) => sendToWin('agent:context', u))
@@ -912,6 +916,7 @@ app.whenReady().then(async () => {
         tokenFile: path.join(app.getPath('userData'), 'remote-token'),
         port: st.remotePort,
         allowInput: () => remoteAllowInput,
+        allowApprove: () => remoteAllowApprove,
         getBoard: () => boardSnapshot,
         listApprovals: () => hookSystem?.listApprovals() ?? [],
         decideApproval: (id, allow) => hookSystem?.decideApproval(id, allow) ?? false,

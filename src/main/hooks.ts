@@ -158,6 +158,14 @@ interface HookGroup {
 
 const claudeSettingsPath = (): string => path.join(os.homedir(), '.claude', 'settings.json')
 
+/** transcript 必须是 ~/.claude/projects 下的 .jsonl —— 它是"agent 说了什么"的真相源 */
+function isSafeTranscript(p: string): boolean {
+  if (!p.endsWith('.jsonl')) return false
+  const root = path.join(os.homedir(), '.claude', 'projects') + path.sep
+  const resolved = path.resolve(p)
+  return resolved.startsWith(root) && !resolved.includes('..')
+}
+
 const isOurs = (cmd: unknown): boolean => typeof cmd === 'string' && cmd.includes(MARKER)
 
 /**
@@ -465,8 +473,12 @@ export async function startHookSystem(
         } catch {
           // payload 解析失败不影响状态事件本身
         }
+        /* transcript_path 直接决定我们去读哪个文件当"agent 说了什么"的真相源。
+           payload 是 hook 脚本发来的，同 UID 下可被构造 —— 不校验就等于让人指定
+           任意文件当 transcript（派活取结果、上下文占用、未来的管家都吃这个）。
+           限定必须落在 ~/.claude/projects/ 下的 .jsonl。 */
         const tp = (payload as { transcript_path?: unknown } | null)?.transcript_path
-        if (typeof tp === 'string' && tp) onTranscript?.(nodeId, tp)
+        if (typeof tp === 'string' && tp && isSafeTranscript(tp)) onTranscript?.(nodeId, tp)
         const sidRaw = (payload as { session_id?: unknown } | null)?.session_id
         const sid = typeof sidRaw === 'string' ? sidRaw : undefined
 

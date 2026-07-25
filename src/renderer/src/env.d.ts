@@ -9,6 +9,7 @@ interface AppSettings {
   claudeHooks: 'ask' | 'on' | 'off'
   remoteEnabled: boolean
   remoteAllowInput: boolean
+  remoteAllowApprove: boolean
   remotePort: number
 }
 
@@ -53,6 +54,7 @@ interface TermscapeApi {
   remoteStatus: () => Promise<{
     enabled: boolean
     allowInput: boolean
+    allowApprove: boolean
     running: boolean
     port: number
     token: string

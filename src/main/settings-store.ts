@@ -19,6 +19,8 @@ export interface Settings {
   remoteEnabled: boolean
   /** 远程端能否往终端写入。默认只读 —— 写入是把 shell 交出去，必须显式开 */
   remoteAllowInput: boolean
+  /** 远程端能否批准工具调用。默认关 —— 批一次 rm -rf 比敲一行字危险得多 */
+  remoteAllowApprove: boolean
   remotePort: number
 }
 
@@ -31,6 +33,7 @@ export const DEFAULTS: Settings = {
   claudeHooks: 'ask',
   remoteEnabled: false,
   remoteAllowInput: false,
+  remoteAllowApprove: false,
   remotePort: 7333
 }
 

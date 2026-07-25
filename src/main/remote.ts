@@ -18,6 +18,8 @@ export interface RemoteDeps {
   tokenFile: string
   port: number
   allowInput: () => boolean
+  /** 远程能否批准工具调用。和 allowInput 分开：批准一次 rm -rf 比敲一行字危险得多 */
+  allowApprove: () => boolean
   /** 画布快照（由 renderer 上报，主进程缓存） */
   getBoard: () => unknown
   listApprovals: () => unknown[]
@@ -138,6 +140,11 @@ export async function startRemoteApi(deps: RemoteDeps): Promise<RemoteApi> {
       }
       const decide = path.match(/^\/api\/approvals\/([A-Za-z0-9-]{1,64})$/)
       if (decide && req.method === 'POST') {
+        /* 必须单独门控。此前只查 token 就放行，而写入终端反倒要开关——语义是倒挂的：
+           批准一次工具调用（可能是 rm -rf / git push --force）比敲一行字危险得多。 */
+        if (!deps.allowApprove()) {
+          return json(res, 403, { error: '远程审批未开启（设置 → 远程访问）' })
+        }
         const body = (await readBody(req)) as { allow?: unknown }
         const hit = deps.decideApproval(decide[1], body.allow === true)
         return json(res, hit ? 200 : 409, hit ? { ok: true } : { error: '该审批已失效' })

@@ -243,6 +243,22 @@ export function SettingsPanel({
               </p>
 
               <label className="settings-row">
+                <span>允许远程批准工具调用</span>
+                <input
+                  type="checkbox"
+                  checked={s.remoteAllowApprove}
+                  onChange={(e) => patch({ remoteAllowApprove: e.currentTarget.checked })}
+                />
+                <span className={`status-chip ${s.remoteAllowApprove ? 'attention' : 'idle'}`}>
+                  {s.remoteAllowApprove ? '可批准' : '不可批准'}
+                </span>
+              </label>
+              <p className="settings-note">
+                和"写入终端"分开控制：批准一次工具调用（可能是 rm -rf / git push --force）
+                比敲一行字危险得多。关闭时远程端只能看审批内容，决定权留在这台机器上。
+              </p>
+
+              <label className="settings-row">
                 <span>端口</span>
                 <input
                   type="number"
