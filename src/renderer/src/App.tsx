@@ -606,6 +606,7 @@ function Board(): React.JSX.Element {
   const [identities, setIdentities] = useState<IdentityMeta[]>([])
   const [presets, setPresets] = useState<Preset[]>([])
   const [defaultIdentity, setDefaultIdentity] = useState('')
+  const [defaultFontSize, setDefaultFontSize] = useState(13)
   const [settingsOpen, setSettingsOpen] = useState<SettingsSection | null>(
     // 自检截图模式下直接展开设置面板
     new URLSearchParams(location.search).get('panel') as SettingsSection | null
@@ -698,6 +699,10 @@ function Board(): React.JSX.Element {
   useEffect(() => {
     void window.termscape.listIdentities().then(setIdentities)
     void window.termscape.listPresets().then(setPresets)
+    void window.termscape.getSettings().then((s) => {
+      const n = (s as { defaultFontSize?: number } | null)?.defaultFontSize
+      if (typeof n === 'number' && n > 0) setDefaultFontSize(n)
+    })
   }, [])
 
   const applyBoard = useCallback(
@@ -956,13 +961,14 @@ function Board(): React.JSX.Element {
               identityId: preset?.identityId || defaultIdentity || undefined,
               command: preset?.command || undefined,
               provider: preset?.provider,
-              cwd: projectCwd // 新终端落在当前项目目录
+              cwd: projectCwd, // 新终端落在当前项目目录
+              fontSize: defaultFontSize // 设置里的默认字号（此前存了但没人读，改了不生效）
             }
           }
         ]
       })
     },
-    [defaultIdentity, projectCwd]
+    [defaultIdentity, projectCwd, defaultFontSize]
   )
 
   const addBrowser = useCallback(

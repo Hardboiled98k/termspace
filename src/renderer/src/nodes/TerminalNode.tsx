@@ -1,4 +1,4 @@
-import { memo, useContext, useEffect, useRef, useState } from 'react'
+import { memo, useCallback, useContext, useEffect, useRef, useState } from 'react'
 import { IdentityContext } from '../identity-context'
 import { FarChip, FAR_ZOOM } from './FarChip'
 import { usePinchZoom } from '../usePinchZoom'
@@ -91,7 +91,6 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
   const [editing, setEditing] = useState(false)
   const [ctxPct, setCtxPct] = useState<number | null>(null)
   const [fontHint, setFontHint] = useState(false)
-  const pinchZoom = usePinchZoom()
 
   // per-node 订阅，避免高频 usage 更新走 setNodes 触发全画布 rerender
   useEffect(
@@ -208,6 +207,26 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
     window.clearTimeout(hintTimer.current)
     hintTimer.current = window.setTimeout(() => setFontHint(false), 1200)
   }
+  useEffect(() => () => window.clearTimeout(hintTimer.current), [])
+
+  /* 内容区滚轮分流（原生 non-passive 监听，见 usePinchZoom 注释）：
+     pinch → 缩放画布；⌥+滚轮 → 调字号；普通滚轮 → 留给终端回滚，拦住画布 pan */
+  const attachWheel = usePinchZoom((e) => {
+    if (e.altKey) {
+      e.preventDefault()
+      e.stopPropagation()
+      stepFont(e.deltaY < 0 ? 1 : -1)
+      return
+    }
+    e.stopPropagation()
+  })
+  const setHolder = useCallback(
+    (el: HTMLDivElement | null): void => {
+      holderRef.current = el
+      attachWheel(el)
+    },
+    [attachWheel]
+  )
 
   return (
     <div
@@ -291,7 +310,7 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
         </button>
       </div>
       <div
-        ref={holderRef}
+        ref={setHolder}
         className="term-node-body nodrag"
         style={{ visibility: lod ? 'hidden' : 'visible' }}
         onContextMenu={(e) => {
@@ -304,19 +323,6 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
           } else {
             void navigator.clipboard.readText().then((t) => window.termscape.write(id, t))
           }
-        }}
-        onWheelCapture={(e) => {
-          // ⌥+滚轮 = 调字号
-          if (e.altKey) {
-            e.stopPropagation()
-            e.preventDefault()
-            stepFont(e.deltaY < 0 ? 1 : -1)
-            return
-          }
-          // pinch = 手动缩放画布（xterm 会吞 wheel，故 capture 阶段自己处理）
-          if (pinchZoom(e)) return
-          // 普通滚轮留给终端回滚，拦住画布 pan
-          e.stopPropagation()
         }}
       />
       {lod && !far && (

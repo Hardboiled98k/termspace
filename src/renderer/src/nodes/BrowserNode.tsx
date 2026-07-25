@@ -131,7 +131,7 @@ function BrowserNodeImpl({ id, data, selected }: NodeProps<BrowserNodeT>): React
       </div>
       <div
         className="browser-body nodrag nowheel"
-        onWheelCapture={(e) => pinchZoom(e)}
+        ref={pinchZoom}
         style={{ visibility: far ? 'hidden' : 'visible' }}
       >
         <Webview
