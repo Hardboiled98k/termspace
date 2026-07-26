@@ -266,9 +266,21 @@ function BoardHUD({
       </button>
       {!collapsed && (
         <>
-          {providers.map((p) => (
-            <ProviderBlock key={p.name} name={p.name} pools={p.pools} />
-          ))}
+          {providers.length > 0 && (
+            <>
+              {/* 必须写清楚这是**账号级**的量。它读的是 ~/.claude/claude-usage.json ——
+                  Claude Code 自己维护的本机全局文件，跟这张画布上有没有 Claude 终端无关。
+                  以前只写一个「用量」，画布上一个 Claude 节点都没有时照样显示百分比，
+                  用户会以为这是画布用掉的。 */}
+              <span className="quota-title" title="读本机 ~/.claude/claude-usage.json，与画布内容无关">
+                账号额度 · 本机全局
+              </span>
+              {providers.map((p) => (
+                <ProviderBlock key={p.name} name={p.name} pools={p.pools} />
+              ))}
+              <span className="quota-foot">含画布之外的 Claude（终端、IDE、其他窗口）</span>
+            </>
+          )}
           {agentRows.length > 0 && (
         <>
           <div className="hud-divider" />

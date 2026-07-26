@@ -8,6 +8,7 @@ import {
   startHookSystem,
   uninstallClaudeHooks,
   claudeHooksPresent,
+  codexHooksPresent,
   type HookSystem,
   type PendingApproval
 } from './hooks'
@@ -457,6 +458,17 @@ ipcMain.handle(
       }
     }
 
+    /* codex 的状态灯：把托管 hook 装进这个节点实际使用的 CODEX_HOME。
+       每个订阅账号一个目录，所以只能在 spawn 时按需装，不能像 Claude 那样一次装全局。
+       ⚠️ 装了不等于会跑 —— codex 对 hook 有授信机制，未授信时**静默跳过**。
+       体检里有一条探针专门验这个，别在这里假设成功。 */
+    if (opts?.provider === 'codex' && hookSystem && settings.claudeHooks === 'on') {
+      const codexHome = env['CODEX_HOME'] || path.join(os.homedir(), '.codex')
+      await hookSystem.enableCodexHooks(codexHome).catch((e) => {
+        console.warn('codex hook 安装失败:', e)
+      })
+    }
+
   const tmux = settings.tmuxEnabled ? await ensureTmux(settings.scrollback) : null
   // fresh 判定：无可接会话 = 冷启动，才写入预设启动命令（重接不能重复敲）
   const fresh = tmux ? !(await hasSession(id)) : true
@@ -688,6 +700,54 @@ function which(bin: string): string {
   return ''
 }
 
+/**
+ * codex 状态 hook 的体检。
+ *
+ * 有两道关，缺一不可，而**第二道关失败时 codex 完全不吭声**：
+ *   1. `$CODEX_HOME/hooks.json` 里有我们的条目（spawn codex 节点时自动写）
+ *   2. codex 已经**授信**这些 hook —— 未授信时它静默跳过全部 hook，不报错不提示
+ *
+ * 第二道关没有公开的查询命令，只能看 config.toml 里有没有落下 trusted_hash。
+ * 判不准的时候宁可报"没确认"，也不要给一个绿灯让用户对着不亮的状态灯干瞪眼 ——
+ * 这个项目已经栽过两次静默失败了。
+ */
+async function codexHookCheck(): Promise<DoctorItem> {
+  const home = path.join(os.homedir(), '.codex')
+  const item = (ok: boolean, detail: string, hint: string): DoctorItem => ({
+    key: 'codex-hooks',
+    label: 'Codex 状态 hook',
+    ok,
+    detail,
+    hint
+  })
+  if (!which('codex') && !existsSync(home)) {
+    return item(true, '未安装 codex，不适用', '装了 codex 后，codex 节点也会有状态灯')
+  }
+  const installed = await codexHooksPresent(home).catch(() => false)
+  if (!installed) {
+    return item(
+      false,
+      '尚未写入 ~/.codex/hooks.json',
+      '在画布上开一个 codex 预设的终端即可自动写入（需先在设置里授权 hook 写入）'
+    )
+  }
+  let trusted = false
+  try {
+    const toml = await readFile(path.join(home, 'config.toml'), 'utf8')
+    trusted = /trusted_hash/.test(toml)
+  } catch {
+    // 没有 config.toml = 肯定没授信过
+  }
+  return trusted
+    ? item(true, '已写入并已授信', '')
+    : item(
+        false,
+        '条目已写入，但 codex 里查不到授信记录 —— 此时它会静默跳过全部 hook',
+        '在这个 codex 终端里跑一次交互式 `codex` 并按提示信任 hook；' +
+          '之后状态灯才会亮。用了多个订阅账号的话，每个 CODEX_HOME 都要各授信一次'
+      )
+}
+
 ipcMain.handle('app:doctor', async (e): Promise<DoctorItem[]> => {
   if (!fromMainWin(e)) return []
   const s = await getSettings()
@@ -723,6 +783,7 @@ ipcMain.handle('app:doctor', async (e): Promise<DoctorItem[]> => {
       detail: claude ? '已安装' : '未检测到 ~/.claude',
       hint: 'agent 节点与上下文占用依赖它'
     },
+    await codexHookCheck(),
     {
       key: 'cdx',
       label: 'worker 引擎 cdx',

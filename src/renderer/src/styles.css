@@ -2091,3 +2091,14 @@ body {
 .save-alert-retry:hover {
   background: rgba(255, 255, 255, 0.2);
 }
+
+/* 额度 HUD 的脚注：说明这是账号级、不是画布级 —— 画布上没有 Claude 节点时
+   照样显示百分比，不写清楚会被当成"这张画布用掉的" */
+.quota-foot {
+  display: block;
+  margin: 2px 0 4px;
+  font-size: 9.5px;
+  line-height: 1.4;
+  color: var(--tb-muted);
+  opacity: 0.75;
+}

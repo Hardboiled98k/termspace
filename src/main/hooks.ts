@@ -40,6 +40,29 @@ const CLAUDE_EVENTS = [
   'SessionEnd'
 ] as const
 
+/**
+ * codex 的 hook 事件（0.145 实测）。
+ *
+ * 惊喜：**codex 的 hooks 与 Claude Code 同构** —— 配置文件是 `$CODEX_HOME/hooks.json`，
+ * schema 就是 Claude settings.json 里 `hooks` 那一段；payload 的键也一样
+ * （session_id / transcript_path / cwd / hook_event_name / permission_mode /
+ * tool_name / tool_input / tool_use_id），还多给了 model 和 turn_id。
+ * 实测触发顺序：SessionStart → UserPromptSubmit → PreToolUse → PostToolUse → Stop → SessionEnd。
+ * 所以下面的 normalize 一套通吃，不需要为 codex 另写一份状态机。
+ *
+ * codex 没有 Notification / StopFailure，多一个 SubagentStop。
+ */
+const CODEX_EVENTS = [
+  'SessionStart',
+  'SessionEnd',
+  'UserPromptSubmit',
+  'PreToolUse',
+  'PostToolUse',
+  'Stop',
+  'SubagentStop',
+  'PermissionRequest'
+] as const
+
 const MARKER = 'termboard' // settings.json 里识别我方 hook 条目的标记（含于脚本路径）
 const BODY_LIMIT = 1024 * 1024
 
@@ -62,6 +85,8 @@ function normalizeClaude(event: string, payload: unknown): AgentState | null {
       if (/permission/i.test(msg)) return 'blocked'
       return 'waiting'
     }
+    case 'SubagentStop': // codex 的子 agent 结束；主 agent 仍在跑
+      return 'working'
     case 'SessionStart':
     case 'SessionEnd':
       return 'session'
@@ -86,6 +111,7 @@ if [ "$1" = "PermissionRequest" ]; then
   curl -s -m ${PERMISSION_HOLD_SEC + 15} \\
     -H "X-Termboard-Token: $TERMBOARD_HOOK_TOKEN" \\
     --data-urlencode "nodeId=$TERMBOARD_NODE_ID" \\
+    --data-urlencode "agent=$TERMBOARD_AGENT_ID" \\
     --data-urlencode "event=$1" \\
     --data-urlencode "payload=$payload" \\
     "http://127.0.0.1:$TERMBOARD_HOOK_PORT/hook/permission" 2>/dev/null || true
@@ -94,6 +120,7 @@ fi
 curl -s -m 2 -o /dev/null \\
   -H "X-Termboard-Token: $TERMBOARD_HOOK_TOKEN" \\
   --data-urlencode "nodeId=$TERMBOARD_NODE_ID" \\
+  --data-urlencode "agent=$TERMBOARD_AGENT_ID" \\
   --data-urlencode "event=$1" \\
   --data-urlencode "payload=$payload" \\
   "http://127.0.0.1:$TERMBOARD_HOOK_PORT/hook/claude" 2>/dev/null || true
@@ -139,12 +166,25 @@ interface HookGroup {
 
 const claudeSettingsPath = (): string => path.join(os.homedir(), '.claude', 'settings.json')
 
-/** transcript 必须是 ~/.claude/projects 下的 .jsonl —— 它是"agent 说了什么"的真相源 */
+/**
+ * transcript 是"agent 说了什么"的真相源，payload 由 hook 脚本发来、同 UID 可构造，
+ * 所以必须限定它只能指向已知的两种位置：
+ *   Claude → `~/.claude/projects` 下的 .jsonl
+ *   codex  → `<CODEX_HOME>/sessions/…/rollout-*.jsonl`（CODEX_HOME 随订阅账号变，
+ *            写不死路径，改为按形状匹配并要求落在用户家目录内）
+ */
 function isSafeTranscript(p: string): boolean {
   if (!p.endsWith('.jsonl')) return false
-  const root = path.join(os.homedir(), '.claude', 'projects') + path.sep
   const resolved = path.resolve(p)
-  return resolved.startsWith(root) && !resolved.includes('..')
+  if (resolved.includes('..')) return false
+  const home = os.homedir()
+  if (resolved.startsWith(path.join(home, '.claude', 'projects') + path.sep)) return true
+  // codex：必须在用户目录下、走 sessions/ 且文件名是 rollout-
+  return (
+    resolved.startsWith(home + path.sep) &&
+    resolved.includes(`${path.sep}sessions${path.sep}`) &&
+    path.basename(resolved).startsWith('rollout-')
+  )
 }
 
 const isOurs = (cmd: unknown): boolean => typeof cmd === 'string' && cmd.includes(MARKER)
@@ -243,6 +283,62 @@ async function installClaudeHooks(scriptPath: string): Promise<void> {
   }
 }
 
+/** `$CODEX_HOME/hooks.json` —— codex 的 hook 配置（与 Claude 的 settings.json.hooks 同构） */
+const codexHooksPath = (codexHome: string): string => path.join(codexHome, 'hooks.json')
+
+/** 托管 hook 是否**完整**装在该 CODEX_HOME 里（体检要报实情） */
+export async function codexHooksPresent(codexHome: string): Promise<boolean> {
+  const p = codexHooksPath(codexHome)
+  if (!existsSync(p)) return false
+  try {
+    const j = JSON.parse(await readFile(p, 'utf8')) as { hooks?: Record<string, HookGroup[]> }
+    const hooks = j.hooks ?? {}
+    return CODEX_EVENTS.every((ev) =>
+      (Array.isArray(hooks[ev]) ? hooks[ev] : []).some((g) => g.hooks?.some((h) => isOurs(h.command)))
+    )
+  } catch {
+    return false
+  }
+}
+
+/**
+ * 把托管 hook 合并进 `$CODEX_HOME/hooks.json`（幂等、保留用户条目、首次备份）。
+ *
+ * ⚠️ **写进去不等于会生效**：codex 对 hook 有「授信」机制（config 里存 trusted_hash），
+ * 没授信时 `codex exec` 会**静默跳过**所有 hook —— 不报错、不提示。实测确认。
+ * 所以体检里必须有一条探针去验它真的在跑，别让用户对着一个"已安装"的绿灯干等状态灯不亮。
+ */
+async function installCodexHooks(scriptPath: string, codexHome: string): Promise<void> {
+  const p = codexHooksPath(codexHome)
+  let doc: Record<string, unknown> = {}
+  if (existsSync(p)) {
+    try {
+      doc = JSON.parse(await readFile(p, 'utf8'))
+    } catch {
+      return // 用户配置损坏时绝不覆写
+    }
+    const backup = `${p}.termboard-backup`
+    if (!existsSync(backup)) await copyFile(p, backup)
+  } else {
+    await mkdir(codexHome, { recursive: true })
+  }
+
+  const hooks = (doc['hooks'] ??= {}) as Record<string, HookGroup[]>
+  let changed = false
+  for (const ev of CODEX_EVENTS) {
+    const cmd = `sh "${scriptPath}" ${ev}`
+    const arr = Array.isArray(hooks[ev]) ? hooks[ev] : []
+    const kept = arr.filter((g) => !g.hooks?.some((h) => isOurs(h.command)))
+    const already = arr.length === kept.length + 1 && arr.some((g) => g.hooks?.some((h) => h.command === cmd))
+    if (already) continue
+    // matcher 必填（空串 = 全匹配），codex 与 Claude 在这点上一致
+    kept.push({ matcher: '', hooks: [{ type: 'command', command: cmd }] })
+    hooks[ev] = kept
+    changed = true
+  }
+  if (changed) await writeAtomic(p, JSON.stringify(doc, null, 2) + '\n')
+}
+
 export interface HookSystem {
   endpointFile: string
   /** 为该节点签发 token（spawn 时调）。返回值注入 env，同时落盘供老会话现查 */
@@ -260,6 +356,8 @@ export interface HookSystem {
   dropApprovals: (nodeId: string) => void
   /** 用户事后同意写入时调用（首启询问不阻塞启动，同意了再装） */
   enableHooks: () => Promise<void>
+  /** 把托管 hook 装进某个 CODEX_HOME（每个 codex 订阅账号一个目录，spawn 时按需装） */
+  enableCodexHooks: (codexHome: string) => Promise<void>
   dispose: () => void
 }
 
@@ -470,6 +568,11 @@ export async function startHookSystem(
         // 否则任一终端都能伪造别的节点的 SessionStart 把它判成活 agent
         const nodeId = callerNode
         const event = body.get('event') ?? ''
+        /* 哪家 agent 发来的。脚本从 TERMBOARD_AGENT_ID 带上来，spawn 时按预设写死，
+           所以它跟 nodeId 一样是我们自己注入的、不是 agent 自报的。
+           收窄到已知取值，防止脏值污染下游的 provider 判断。 */
+        const rawAgent = body.get('agent') ?? ''
+        const agentId = /^[a-z][a-z0-9-]{0,15}$/.test(rawAgent) ? rawAgent : 'claude'
         if (!nodeId || !event) return done()
         let payload: unknown = null
         try {
@@ -480,7 +583,7 @@ export async function startHookSystem(
         /* transcript_path 直接决定我们去读哪个文件当"agent 说了什么"的真相源。
            payload 是 hook 脚本发来的，同 UID 下可被构造 —— 不校验就等于让人指定
            任意文件当 transcript（派活取结果、上下文占用、未来的管家都吃这个）。
-           限定必须落在 ~/.claude/projects/ 下的 .jsonl。 */
+           限定必须落在已知位置（Claude 的 projects/ 或 codex 的 sessions/rollout-*）。 */
         const tp = (payload as { transcript_path?: unknown } | null)?.transcript_path
         if (typeof tp === 'string' && tp && isSafeTranscript(tp)) onTranscript?.(nodeId, tp)
         const sidRaw = (payload as { session_id?: unknown } | null)?.session_id
@@ -490,7 +593,7 @@ export async function startHookSystem(
           // 状态先照常推（节点变橙），再把这次请求挂起等用户决定
           onStatus({
             nodeId,
-            agentId: 'claude',
+            agentId,
             state: 'blocked',
             newTurn: false,
             event,
@@ -537,7 +640,7 @@ export async function startHookSystem(
         if (state) {
           onStatus({
             nodeId,
-            agentId: 'claude',
+            agentId,
             state,
             newTurn: event === 'UserPromptSubmit',
             event,
@@ -602,6 +705,7 @@ export async function startHookSystem(
     /** 完整记录，只给主进程内的规则引擎用（未来的低档管家） */
     getApprovalFull: (id) => pending.get(id)?.rec,
     enableHooks: () => installClaudeHooks(scriptPath),
+    enableCodexHooks: (codexHome) => installCodexHooks(scriptPath, codexHome),
     dropApprovals: (nodeId) => {
       for (const [id, h] of [...pending]) {
         if (h.rec.nodeId === nodeId) settle(id, '') // 空 = 不决策，Claude 回落原生提示
