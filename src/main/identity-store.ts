@@ -7,6 +7,11 @@ import { readFile, writeFile, rename } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
+import { materializeEnv, type ResolvedEnv } from './identity-env'
+
+// 展开规则搬到 identity-env.ts（不依赖 electron，才能被 node --test 覆盖）
+export { materializeEnv } from './identity-env'
+export type { ResolvedEnv } from './identity-env'
 
 export interface Identity {
   id: string
@@ -97,10 +102,8 @@ export async function deleteIdentity(id: string): Promise<IdentityMeta[]> {
 }
 
 /** pty spawn 时按 id 取 env 包（仅主进程内部使用） */
-export async function resolveIdentityEnv(
-  id: string | undefined
-): Promise<Record<string, string> | null> {
+export async function resolveIdentityEnv(id: string | undefined): Promise<ResolvedEnv | null> {
   if (!id) return null
   const found = (await load()).find((i) => i.id === id)
-  return found ? { ...found.env } : null
+  return found ? materializeEnv(found.env, app.getPath('home')) : null
 }

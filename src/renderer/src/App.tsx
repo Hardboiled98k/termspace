@@ -324,6 +324,22 @@ function IdentityPanel({
   const [envText, setEnvText] = useState('')
   const [error, setError] = useState('')
 
+  /* 一键模板：多订阅账号是这个面板最主要的用途，但没人会自己想到
+     「原来隔离靠的是 CODEX_HOME」。实测过：换目录后 `codex login status`
+     确实报 Not logged in，两个号互不相干。
+     末尾那条空值是**删掉**继承来的 API key —— 不删的话 CLI 会优先走按量计费，
+     订阅号白开，而且账单不吭声。 */
+  const fillTemplate = (kind: 'codex' | 'claude'): void => {
+    const n = (identities.filter((i) => i.provider === kind).length + 1).toString()
+    setProvider(kind)
+    setName(`${kind === 'codex' ? 'Codex' : 'Claude'} 订阅号 ${n}`)
+    setEnvText(
+      kind === 'codex'
+        ? `CODEX_HOME=~/.codex-acct${n}\nOPENAI_API_KEY=`
+        : `CLAUDE_CONFIG_DIR=~/.claude-acct${n}\nANTHROPIC_API_KEY=`
+    )
+  }
+
   const save = async (): Promise<void> => {
     const env: Record<string, string> = {}
     for (const line of envText.split('\n')) {
@@ -368,6 +384,29 @@ function IdentityPanel({
         </div>
         <div className="identity-form">
           <div className="identity-form-row">
+            <button className="toolbar-btn" onClick={() => fillTemplate('codex')}>
+              ＋ Codex 订阅号
+            </button>
+            <button className="toolbar-btn" onClick={() => fillTemplate('claude')}>
+              ＋ Claude 订阅号
+            </button>
+          </div>
+          <p className="settings-note">
+            <b>同一台机器上挂多个订阅账号</b>：codex 认 <code>CODEX_HOME</code>、claude 认{' '}
+            <code>CLAUDE_CONFIG_DIR</code>，各指一个目录就是各自独立的登录态 ——
+            两个终端节点跑同一条 <code>codex</code> 命令，登的是两个号。
+            <br />
+            流程：上面点模板 → 保存 → 在节点的凭证下拉里选它（会重开会话）→
+            在那个终端里跑一次 <code>codex login</code>（claude 则是 <code>/login</code>）。
+            以后这个节点一直是这个号。
+            <br />
+            写 <code>KEY=</code>（等号后留空）表示<b>删掉</b>继承来的变量。模板里默认删
+            <code> OPENAI_API_KEY</code> / <code>ANTHROPIC_API_KEY</code> —— 你的 shell 里
+            export 过的话，CLI 会优先走按量计费，订阅号等于白开且账单不吭声。
+            值支持 <code>~/</code> 与 <code>$HOME/</code> 开头（env 不过 shell，不展开会
+            真的建一个叫 <code>~</code> 的目录）。
+          </p>
+          <div className="identity-form-row">
             <input
               placeholder="名称（如 Claude 工作号）"
               value={name}
@@ -386,7 +425,7 @@ function IdentityPanel({
           <textarea
             rows={4}
             placeholder={
-              '每行一条 KEY=VALUE，例如\nANTHROPIC_API_KEY=sk-ant-xxx\nCLAUDE_CONFIG_DIR=/Users/me/.claude-work'
+              '每行一条 KEY=VALUE，例如\nCODEX_HOME=~/.codex-work\nOPENAI_API_KEY=   ← 留空 = 删掉这个变量'
             }
             value={envText}
             onChange={(e) => setEnvText(e.currentTarget.value)}

@@ -74,6 +74,29 @@ TERMBOARD_PANEL=terminal npm run dev      # 自检：直接展开设置面板某
 - **派活是最危险的一段**：注入 = 替用户敲回车。只接受当前活着的 agent 会话
   （靠 session_id 挡 SessionEnd 之后的迟到事件），状态判定 fail-closed，改动后跑 `npm test`
 
+## 同机多订阅账号（2026-07-26）
+
+同一条 `codex` / `claude` 命令，两个终端节点登两个不同的订阅号 —— 靠 identity env 包：
+
+| CLI | 隔离开关 | 实测 |
+|-----|---------|------|
+| codex | `CODEX_HOME` | 换目录后 `codex login status` → `Not logged in` |
+| claude | `CLAUDE_CONFIG_DIR` | 换目录后 `claude -p` → `Not logged in · Please run /login` |
+
+流程：凭证面板点模板 → 保存 → 节点凭证下拉里选 → 在那个终端跑一次 `codex login`。
+
+三个坑，都已在代码里处理，改动前先看：
+
+- **`KEY=`（空值）语义是删掉这个变量**，不是设成空串。用户 shell 里 export 的
+  `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` 会被 app 继承，CLI 优先走按量计费 ——
+  订阅号白开且账单不吭声。真 unset 用 `/usr/bin/env -u`（tmux 的 `-e KEY=` 只给空串，实测）
+- **tmux server 长寿共享，没给 `-e` 的变量继承 server 启动时的环境**。所以转发范围
+  必须是「identity 显式声明的键 ∪ provider 前缀」，**不能只按前缀猜** ——
+  `OPENAI_*` 一度不在前缀表里，identity 里配 `OPENAI_API_KEY` 开着 tmux 就静默不生效
+- **env 值不过 shell**，`~/` 和 `$HOME/` 要自己展开，否则 codex 会真建一个叫 `~` 的目录
+- identity env **不许覆盖 `TERMBOARD_*`**（会让该节点的状态/派活哑掉）；若它改写了 `PATH`，
+  要把 `tb` 的目录重新顶回最前
+
 ## 手机端（2026-07-26）
 
 `mobile/` 是纯静态页，由主进程的远程 API 用**固定白名单表**直发（`STATIC` in `remote.ts`），

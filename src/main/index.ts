@@ -439,9 +439,23 @@ ipcMain.handle(
     }
     // F2 上下文 + F8 工具路由提示（合成一份文件，Claude 预设经 --append-system-prompt 注入）
     env['TERMBOARD_CONTEXT_FILE'] = await buildMergedContext(id, opts?.contextNodeIds ?? [])
-    // identity env 包注入（多账号/多 key，密文存储主进程解密）
+    /* identity env 包注入（多账号/多 key，密文存储主进程解密）。
+       典型用法不是 API key，而是 CODEX_HOME / CLAUDE_CONFIG_DIR ——
+       两个订阅账号各指一个目录，同一条 `codex` 命令在两个节点里登的就是两个号。 */
     const idEnv = await resolveIdentityEnv(opts?.identityId)
-    if (idEnv) Object.assign(env, idEnv)
+    if (idEnv) {
+      // 先删：继承下来的 OPENAI_API_KEY / ANTHROPIC_API_KEY 会让 CLI 绕过订阅走 key 计费
+      for (const k of idEnv.unset) delete env[k]
+      for (const [k, v] of Object.entries(idEnv.set)) {
+        // 不许覆盖自家门控：改了 TERMBOARD_HOOK_TOKEN 之类，这个节点的状态/派活就哑了
+        if (k.startsWith('TERMBOARD_')) continue
+        env[k] = v
+      }
+      // identity 若整个改写了 PATH，把 tb 的目录重新顶回最前，否则 agent 用不了 tb
+      if (idEnv.set['PATH'] && hookSystem) {
+        env['PATH'] = `${hookSystem.binDir}:${idEnv.set['PATH']}`
+      }
+    }
 
   const tmux = settings.tmuxEnabled ? await ensureTmux(settings.scrollback) : null
   // fresh 判定：无可接会话 = 冷启动，才写入预设启动命令（重接不能重复敲）
@@ -457,7 +471,12 @@ ipcMain.handle(
   }
   const cwd = opts?.cwd && existsSync(opts.cwd) ? opts.cwd : os.homedir()
   spawnedRoots.add(cwd)
-  const { file, args } = buildSpawnArgs(tmux, id, shell, cwd, env)
+  /* identity 的键要显式告诉 tmux 层转发 —— 按前缀猜会漏（见 buildSpawnArgs 注释），
+     unset 也只有它知道该删哪些（env 对象里已经没有那些键了，猜不出来）。 */
+  const { file, args } = buildSpawnArgs(tmux, id, shell, cwd, env, {
+    keys: Object.keys(idEnv?.set ?? {}),
+    unset: idEnv?.unset ?? []
+  })
   const p = pty.spawn(file, args, {
     name: 'xterm-256color',
     cols: cols > 0 ? cols : 80,

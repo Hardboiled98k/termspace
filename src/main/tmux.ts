@@ -11,7 +11,9 @@ import { existsSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
-const SOCKET = 'termboard'
+import { assembleSpawnArgs, TMUX_SOCKET as SOCKET, type IdentityEnvSpec } from './tmux-args'
+
+export type { IdentityEnvSpec } from './tmux-args'
 
 const conf = (scrollback: number): string => `# Termscape 托管 tmux 配置（自动生成，勿手改）
 set -g status off
@@ -154,21 +156,8 @@ export function buildSpawnArgs(
   nodeId: string,
   shell: string,
   cwd: string,
-  env: Record<string, string>
+  env: Record<string, string>,
+  identity?: IdentityEnvSpec
 ): { file: string; args: string[] } {
-  if (!tmux) return { file: shell, args: ['-l'] }
-  const args = ['-L', SOCKET, '-f', confPath(), 'new-session', '-A', '-D']
-  // tmux server 长寿共享，env 不能靠继承（首个 session 的值会泄漏给后续）→ -e 显式注入。
-  // 已存在的 session attach 时 -e 被忽略 = 会话保持自己的身份，语义正确。
-  for (const [k, v] of Object.entries(env)) {
-    if (k.startsWith('TERMBOARD_') || k === 'TERM' || k === 'COLORTERM') continue // TERM 由 tmux 管
-    if (k.startsWith('ANTHROPIC_') || k.startsWith('CLAUDE_') || k.startsWith('CODEX_') || k.startsWith('GEMINI_')) {
-      args.push('-e', `${k}=${v}`)
-    }
-  }
-  for (const [k, v] of Object.entries(env)) {
-    if (k.startsWith('TERMBOARD_')) args.push('-e', `${k}=${v}`)
-  }
-  args.push('-c', cwd, '-s', sessionName(nodeId), shell, '-l')
-  return { file: tmux, args }
+  return assembleSpawnArgs(tmux, sessionName(nodeId), confPath(), shell, cwd, env, identity)
 }
