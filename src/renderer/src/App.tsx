@@ -162,6 +162,28 @@ interface QuotaPool {
 interface Quota {
   five_hour?: QuotaPool
   seven_day?: QuotaPool
+  /** 快照时刻（unix 秒）。**必须校验新鲜度** —— 见下面 staleness 的注释 */
+  _captured_at?: number
+}
+
+/**
+ * 这份额度是**快照**，不是实时值。
+ *
+ * 数据来自 ~/.claude/claude-usage.json，写它的是 Claude Code 渲染状态栏时的 tee 脚本 ——
+ * 也就是说：**只有在某个 Claude Code 会话活着并刷新状态栏时，这个数才会更新**。
+ * 那个会话可以在画布之外（普通终端、IDE），这正是"画布上一个 Claude 节点都没有、
+ * HUD 却有数"的原因。反过来，一段时间没跑 Claude 的话，它会**冻在最后一次的值上**，
+ * 看起来跟实时数据一模一样 —— 这就是本项目栽过两次的那类静默失败。
+ * 所以超过 STALE_SEC 一律显式标"N 分钟前"，别让用户拿旧数做决定。
+ */
+const STALE_SEC = 5 * 60
+
+function ago(capturedAt?: number): string | null {
+  if (!capturedAt) return '来源未知'
+  const sec = Math.round(Date.now() / 1000 - capturedAt)
+  if (sec < STALE_SEC) return null // 够新，不打扰
+  const min = Math.round(sec / 60)
+  return min >= 60 ? `${Math.floor(min / 60)} 小时前的快照` : `${min} 分钟前的快照`
 }
 
 function zoneClass(pct: number): string {
@@ -251,6 +273,7 @@ function BoardHUD({
 
   // 折叠态：只留一行摘要（多订阅时最省地方）
   const peak = Math.max(0, ...claudePools.map((p) => Math.round(p.pool.used_percentage)))
+  const staleLabel = providers.length ? ago(quota?._captured_at) : null
 
   return (
     <div className={`quota-hud${collapsed ? ' collapsed' : ''}`}>
@@ -278,7 +301,11 @@ function BoardHUD({
               {providers.map((p) => (
                 <ProviderBlock key={p.name} name={p.name} pools={p.pools} />
               ))}
-              <span className="quota-foot">含画布之外的 Claude（终端、IDE、其他窗口）</span>
+              <span className="quota-foot">
+                {staleLabel
+                  ? `⚠ ${staleLabel} —— 有 Claude 在跑时才会刷新`
+                  : '含画布之外的 Claude（终端、IDE、其他窗口）'}
+              </span>
             </>
           )}
           {agentRows.length > 0 && (

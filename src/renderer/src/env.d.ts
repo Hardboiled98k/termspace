@@ -149,6 +149,8 @@ interface TermscapeApi {
     cb: (q: {
       five_hour?: { used_percentage: number; resets_at: number }
       seven_day?: { used_percentage: number; resets_at: number }
+      /** 快照时刻（unix 秒）。这份数据只在有 Claude 会话刷状态栏时更新，必须校验新鲜度 */
+      _captured_at?: number
     }) => void
   ) => () => void
   ready: () => void
