@@ -23,6 +23,7 @@ import GroupNode, { type GroupNodeT } from './nodes/GroupNode'
 import WorkerNode, { type WorkerNodeT } from './nodes/WorkerNode'
 import ContextNode, { type ContextNodeT } from './nodes/ContextNode'
 import BrowserNode, { type BrowserNodeT, browserViews } from './nodes/BrowserNode'
+import { CredentialNode, type CredentialNodeType } from './nodes/CredentialNode'
 import { IdentityContext, TmuxContext, RequestDeleteContext } from './identity-context'
 import { SettingsPanel, type SettingsSection } from './SettingsPanel'
 import { MessageCenter } from './MessageCenter'
@@ -40,7 +41,13 @@ import {
   IconCursor
 } from './Icons'
 
-export type BoardNode = TermNode | GroupNodeT | WorkerNodeT | ContextNodeT | BrowserNodeT
+export type BoardNode =
+  | TermNode
+  | GroupNodeT
+  | WorkerNodeT
+  | ContextNodeT
+  | BrowserNodeT
+  | CredentialNodeType
 
 /** 挂起中的工具审批（Claude PermissionRequest hook，主进程把那次 HTTP 请求挂着等决定） */
 export interface PendingApproval {
@@ -73,7 +80,8 @@ const nodeTypes = {
   group: GroupNode,
   worker: WorkerNode,
   context: ContextNode,
-  browser: BrowserNode
+  browser: BrowserNode,
+  credential: CredentialNode
 }
 
 const statusColor: Record<string, string> = {
@@ -92,7 +100,7 @@ interface SavedNode {
   width: number
   height: number
   title: string
-  type?: 'terminal' | 'group' | 'context' | 'browser'
+  type?: 'terminal' | 'group' | 'context' | 'browser' | 'credential'
   parentId?: string
   identityId?: string
   command?: string
@@ -410,7 +418,24 @@ function IdentityPanel({
           {identities.map((i) => (
             <div key={i.id} className="identity-row">
               <span className={`identity-provider ${i.provider}`}>{i.provider}</span>
-              <span className="identity-name">{i.name}</span>
+              {/* 就地改名。以前只能删了重建 —— 而 env 值渲染层拿不到（只有 envKeys），
+                  重建就得把所有密钥重新输一遍，等于根本不能改名。 */}
+              <input
+                className="identity-name-edit"
+                defaultValue={i.name}
+                title="改个名字，回车或点别处保存"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') e.currentTarget.blur()
+                }}
+                onBlur={async (e) => {
+                  const v = e.currentTarget.value.trim()
+                  if (!v || v === i.name) {
+                    e.currentTarget.value = i.name
+                    return
+                  }
+                  onChanged(await window.termscape.renameIdentity(i.id, v))
+                }}
+              />
               <span className="identity-keys">{i.envKeys.join(' · ')}</span>
               <button
                 className="identity-del"
@@ -447,7 +472,7 @@ function IdentityPanel({
           </p>
           <div className="identity-form-row">
             <input
-              placeholder="名称（如 Claude 工作号）"
+              placeholder="名称（留空自动叫 codex1 / claude2…）"
               value={name}
               onChange={(e) => setName(e.currentTarget.value)}
             />
@@ -651,13 +676,20 @@ function toSaved(n: Exclude<BoardNode, WorkerNodeT>): SavedNode {
     y: n.position.y,
     width: n.width ?? n.measured?.width ?? DEFAULT_SIZE.width,
     height: n.height ?? n.measured?.height ?? DEFAULT_SIZE.height,
-    title: n.type === 'browser' ? (n.data.title ?? '浏览器') : n.data.title,
+    title:
+      n.type === 'browser'
+        ? (n.data.title ?? '浏览器')
+        : n.type === 'credential'
+          ? (n.data.title ?? '凭证')
+          : n.data.title,
     type: n.type
   }
   if (n.type === 'browser') return { ...base, url: n.data.url }
   // 折叠态要持久化：不然重开后组身还是缩着、子终端却全冒出来
   if (n.type === 'group') return { ...base, collapsed: n.data.collapsed }
   if (n.type === 'context') return base
+  // 凭证节点只存"指向哪个凭证"；env 值一直在主进程加密着，画布文件里绝不出现
+  if (n.type === 'credential') return { ...base, identityId: n.data.identityId }
   return {
     ...base,
     parentId: n.parentId,
@@ -976,6 +1008,45 @@ function Board(): React.JSX.Element {
       const src = nodes.find((n) => n.id === c.source)
       const tgt = nodes.find((n) => n.id === c.target)
       if (!src || !tgt || src.id === tgt.id) return
+      /* 凭证 → 终端：这条线**不只是标注**，它会真的把该终端切到这个账号，
+         而切换凭证 = 杀掉 tmux 会话重开（identityId 变更即 destroy + respawn）。
+         拉一根线是很轻的手势，后果却是重启用户正在跑的活 —— 必须先确认。 */
+      if (src.type === 'credential' && tgt.type === 'terminal') {
+        const idn = (src.data as { identityId?: string }).identityId
+        if (!idn) return
+        const cred = identities.find((i) => i.id === idn)
+        if (tgt.data.identityId === idn) return // 已经是它了，不用重开
+        if (
+          !window.confirm(
+            `把「${tgt.data.title}」切到凭证「${cred?.name ?? idn}」？\n\n` +
+              '会关掉这个终端当前的会话并用新账号重开，正在跑的进程会结束。\n' +
+              '（凭证只负责隔离登录态，新账号第一次仍需在终端里跑一次 codex login）'
+          )
+        ) {
+          return
+        }
+        // 一个终端只能有一个凭证：先摘掉指向它的旧凭证连线，再连新的
+        setEdges((es) => [
+          ...es.filter(
+            (e) =>
+              !(
+                e.target === tgt.id &&
+                nodesRef.current.find((n) => n.id === e.source)?.type === 'credential'
+              )
+          ),
+          ...addEdge({ ...c, ...edgeStyle('context') }, [])
+        ])
+        void window.termscape.destroy(tgt.id)
+        setNodes((ns) =>
+          ns.map((n) =>
+            n.id === tgt.id && n.type === 'terminal'
+              ? { ...n, data: { ...n.data, identityId: idn } }
+              : n
+          )
+        )
+        return
+      }
+
       let kind: 'context' | 'delegate' | null = null
       if (src.type === 'context' && tgt.type === 'terminal') kind = 'context'
       else if (src.type === 'terminal' && (tgt.type === 'terminal' || tgt.type === 'browser')) {
@@ -986,6 +1057,27 @@ function Board(): React.JSX.Element {
     },
     [nodes]
   )
+
+  /* 连线是凭证的唯一真相源之一 —— 有线连过来时把节点头部的下拉锁掉，
+     否则同一件事两个入口，用户改了下拉却发现被连线覆盖，或反过来。 */
+  useEffect(() => {
+    const bound = new Set(
+      edges
+        .filter((e) => nodesRef.current.find((n) => n.id === e.source)?.type === 'credential')
+        .map((e) => e.target)
+    )
+    setNodes((ns) => {
+      let changed = false
+      const next = ns.map((n) => {
+        if (n.type !== 'terminal') return n
+        const b = bound.has(n.id)
+        if (!!n.data.credBound === b) return n
+        changed = true
+        return { ...n, data: { ...n.data, credBound: b } }
+      })
+      return changed ? next : ns
+    })
+  }, [edges])
 
   const onNodesChange = useCallback(
     (changes: NodeChange<BoardNode>[]) => setNodes((ns) => applyNodeChanges(changes, ns)),
@@ -1121,6 +1213,29 @@ function Board(): React.JSX.Element {
     },
     []
   )
+
+  /** 凭证节点：账号在画布上的实体。同一个凭证只放一个，重复点就聚焦已有的 */
+  const addCredential = useCallback((identityId: string) => {
+    setNodes((ns) => {
+      const existing = ns.find(
+        (n) => n.type === 'credential' && n.data.identityId === identityId
+      )
+      if (existing) return ns.map((n) => ({ ...n, selected: n.id === existing.id }))
+      const newId = nextId(ns, 'k')
+      const n = ns.length
+      return [
+        ...ns,
+        {
+          id: newId,
+          type: 'credential' as const,
+          position: { x: 120 + (n % 4) * 60, y: 420 + (n % 3) * 80 },
+          width: 220,
+          height: 132,
+          data: { identityId }
+        }
+      ]
+    })
+  }, [])
 
   // F2: 共享上下文 Hub — 无则建（一块板一个），有则聚焦。
   // id 必须带项目号：早期硬编码 'ctx-hub' 导致所有项目共用同一个磁盘文件，简报跨项目串板。
@@ -1660,6 +1775,25 @@ function Board(): React.JSX.Element {
                     <IconGlobe />
                     画布内浏览器
                   </button>
+                  {identities.length > 0 && (
+                    <>
+                      <div className="ctx-menu-sep" />
+                      <div className="agent-menu-label">凭证节点（连到终端 = 换账号）</div>
+                      {identities.map((i) => (
+                        <button
+                          key={i.id}
+                          className="agent-menu-item"
+                          onClick={() => {
+                            setShowAgentMenu(false)
+                            addCredential(i.id)
+                          }}
+                        >
+                          <span className={`identity-provider ${i.provider}`}>{i.provider}</span>
+                          {i.name}
+                        </button>
+                      ))}
+                    </>
+                  )}
                   <div className="ctx-menu-sep" />
                   <button
                     className="agent-menu-item manage"

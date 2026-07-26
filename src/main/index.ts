@@ -16,7 +16,9 @@ import { createContextTail, type ContextTail } from './context-tail'
 import {
   listIdentities,
   upsertIdentity,
+  renameIdentity,
   deleteIdentity,
+  identityLoginStatus,
   resolveIdentityEnv
 } from './identity-store'
 import { listPresets, upsertPreset, deletePreset } from './preset-store'
@@ -818,6 +820,13 @@ ipcMain.handle(
   (_e, input: Parameters<typeof upsertIdentity>[0]) => upsertIdentity(input)
 )
 ipcMain.handle('identity:delete', (_e, id: string) => deleteIdentity(id))
+ipcMain.handle('identity:rename', (e, id: string, name: string) =>
+  fromMainWin(e) ? renameIdentity(String(id), String(name)) : []
+)
+/** 凭证节点上的登录态。只读、不花额度；查不出来就如实报 unknown */
+ipcMain.handle('identity:loginStatus', (e, id: string) =>
+  fromMainWin(e) ? identityLoginStatus(String(id)) : { state: 'unknown', detail: '' }
+)
 
 // ── F2 上下文：每个简报节点一个文件，按画布连线决定注入给谁 ──
 const ctxDir = (): string => path.join(app.getPath('userData'), 'contexts')

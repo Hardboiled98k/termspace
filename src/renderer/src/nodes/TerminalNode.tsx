@@ -28,6 +28,8 @@ export type TermNode = Node<
     cwd?: string
     /** 自增即重开会话（集群批量重启用）；不持久化 */
     restartTick?: number
+    /** 凭证由画布上的连线决定（此时锁掉下拉，避免同一件事两个入口互相打架）；不持久化 */
+    credBound?: boolean
   },
   'terminal'
 >
@@ -286,7 +288,12 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
           <select
             className="identity-select nodrag"
             value={data.identityId ?? ''}
-            title="切换凭证会重开会话"
+            disabled={data.credBound}
+            title={
+              data.credBound
+                ? '凭证由画布上连过来的凭证节点决定 —— 想换就改连线（删线即回默认身份）'
+                : '切换凭证会重开会话'
+            }
             onChange={(e) => {
               // 换身份 = 新 env → 必须真杀旧会话（否则 tmux -A 会接回旧 env 的会话）
               void window.termscape.destroy(id)

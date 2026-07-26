@@ -183,6 +183,13 @@ interface TermscapeApi {
     env: Record<string, string>
   }) => Promise<IdentityMeta[]>
   deleteIdentity: (id: string) => Promise<IdentityMeta[]>
+  renameIdentity: (id: string, name: string) => Promise<IdentityMeta[]>
+  /** 凭证登录态。只有 codex 能真查（codex login status），其余如实报 unknown */
+  identityLoginStatus: (id: string) => Promise<{
+    state: 'in' | 'out' | 'unknown'
+    detail: string
+    home?: string
+  }>
 }
 
 declare interface Window {

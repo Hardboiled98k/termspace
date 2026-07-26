@@ -120,6 +120,10 @@ const api = {
   upsertIdentity: (input: unknown): Promise<unknown> =>
     ipcRenderer.invoke('identity:upsert', input),
   deleteIdentity: (id: string): Promise<unknown> => ipcRenderer.invoke('identity:delete', id),
+  renameIdentity: (id: string, name: string): Promise<unknown> =>
+    ipcRenderer.invoke('identity:rename', id, name),
+  identityLoginStatus: (id: string): Promise<unknown> =>
+    ipcRenderer.invoke('identity:loginStatus', id),
   onQuota: (
     cb: (q: {
       five_hour?: { used_percentage: number; resets_at: number }

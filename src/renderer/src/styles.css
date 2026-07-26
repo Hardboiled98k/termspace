@@ -2102,3 +2102,88 @@ body {
   color: var(--tb-muted);
   opacity: 0.75;
 }
+
+/* ── 凭证节点：账号在画布上的实体 ──────────────────────
+   刻意做得比终端小、比终端安静 —— 它是"标签"不是"主角"。
+   绝不显示 env 值：渲染层本来就只拿得到 envKeys（见 identity-store 的脱敏） */
+.cred-node {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  width: 100%;
+  height: 100%;
+  padding: 10px 12px;
+  background: var(--tb-panel);
+  border: 0.5px dashed var(--tb-hairline-strong);
+  border-radius: var(--tb-radius);
+  box-shadow: var(--tb-shadow-card);
+  overflow: hidden;
+}
+.cred-node.selected {
+  border-style: solid;
+  border-color: rgba(10, 132, 255, 0.85);
+  box-shadow: 0 0 0 1px rgba(10, 132, 255, 0.5), var(--tb-shadow-card);
+}
+/* 未登录是要用户去做事的状态，给它橙色边（与"等你处理"的语义一致） */
+.cred-node[data-login='out'] {
+  border-color: rgba(255, 159, 10, 0.55);
+}
+.cred-node[data-login='in'] {
+  border-color: rgba(48, 209, 88, 0.4);
+}
+.cred-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.cred-name {
+  font-size: 12px;
+  font-weight: 590;
+  color: var(--tb-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cred-login {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--tb-muted);
+}
+.cred-home,
+.cred-keys {
+  font-family: var(--tb-font-mono);
+  font-size: 9.5px;
+  color: var(--tb-muted);
+  opacity: 0.75;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cred-hint {
+  margin-top: auto;
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--tb-orange);
+}
+
+/* 凭证改名：平时看着像纯文本，聚焦才显出是输入框 */
+.identity-name-edit {
+  flex: 1;
+  min-width: 0;
+  font: 500 12px/1 var(--tb-font-ui);
+  color: var(--tb-text);
+  background: transparent;
+  border: 0.5px solid transparent;
+  border-radius: 6px;
+  padding: 4px 6px;
+  outline: none;
+}
+.identity-name-edit:hover {
+  border-color: var(--tb-hairline);
+}
+.identity-name-edit:focus {
+  background: var(--tb-terminal);
+  border-color: rgba(10, 132, 255, 0.5);
+}

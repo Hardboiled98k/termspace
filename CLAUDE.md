@@ -97,6 +97,21 @@ TERMBOARD_PANEL=terminal npm run dev      # 自检：直接展开设置面板某
 - identity env **不许覆盖 `TERMBOARD_*`**（会让该节点的状态/派活哑掉）；若它改写了 `PATH`，
   要把 `tb` 的目录重新顶回最前
 
+## 凭证节点（2026-07-26）
+
+账号在画布上的实体。`credential` 节点 → 终端的连线 = 该终端用这个账号。
+三条约束是设计的一部分，别当成可以放宽的细节：
+
+- **连线优先，节点头部的下拉被锁掉**（`data.credBound`）。同一件事两个入口必然打架
+- **拉线会杀会话重开**（identityId 变更即 destroy + respawn），所以拉线前弹确认。
+  拉一根线是很轻的手势，后果却是重启用户正在跑的活
+- **连线 ≠ 自动登录**。`CODEX_HOME` / `CLAUDE_CONFIG_DIR` 只负责隔离，
+  指向新目录时那个号是空的，第一次仍要在终端里跑一次 `codex login`。
+  所以节点上显示登录态：codex 用 `codex login status` 真查（只读、~1s、不花额度）；
+  **Claude 没有等价命令**（穷举过 `--help`），如实报 unknown，别猜
+- 节点上**只列 envKeys 不列值**。渲染层本来就拿不到值，别改成能拿到
+- 一个终端只能有一个凭证：连新线时先摘掉旧的凭证连线
+
 ## 手机端（2026-07-26）
 
 `mobile/` 是纯静态页，由主进程的远程 API 用**固定白名单表**直发（`STATIC` in `remote.ts`），
