@@ -2,6 +2,7 @@
 import { app } from 'electron'
 import { readFile, writeFile, rename } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 
 export interface Settings {
@@ -22,6 +23,11 @@ export interface Settings {
   /** 远程端能否批准工具调用。默认关 —— 批一次 rm -rf 比敲一行字危险得多 */
   remoteAllowApprove: boolean
   remotePort: number
+  /**
+   * 绑哪张网卡。'loopback' = 只有本机；'tailscale' = 绑 tailnet 那个 100.x 地址，
+   * 手机加入同一 tailnet 后可访问。**没有 0.0.0.0 这个选项，也不要加**。
+   */
+  remoteBind: 'loopback' | 'tailscale'
 }
 
 export const DEFAULTS: Settings = {
@@ -34,7 +40,8 @@ export const DEFAULTS: Settings = {
   remoteEnabled: false,
   remoteAllowInput: false,
   remoteAllowApprove: false,
-  remotePort: 7333
+  remotePort: 7333,
+  remoteBind: 'loopback'
 }
 
 const file = (): string => path.join(app.getPath('userData'), 'settings.json')
@@ -47,23 +54,65 @@ export async function getSettings(): Promise<Settings> {
     return cache
   }
   try {
-    cache = { ...DEFAULTS, ...(JSON.parse(await readFile(file(), 'utf8')) as Partial<Settings>) }
+    cache = sanitize({
+      ...DEFAULTS,
+      ...(JSON.parse(await readFile(file(), 'utf8')) as Partial<Settings>)
+    })
   } catch {
     cache = { ...DEFAULTS }
   }
   return cache
 }
 
-export async function setSettings(patch: Partial<Settings>): Promise<Settings> {
-  const cur = await getSettings()
-  const next: Settings = { ...cur, ...patch }
-  // 收敛到合法范围，防手改文件把 app 搞崩
-  next.defaultFontSize = Math.min(24, Math.max(8, Math.round(next.defaultFontSize)))
-  next.scrollback = Math.min(100000, Math.max(500, Math.round(next.scrollback)))
-  next.remotePort = Math.min(65535, Math.max(1024, Math.round(next.remotePort || 7333)))
-  const tmp = `${file()}.tmp`
-  await writeFile(tmp, JSON.stringify(next, null, 2))
-  await rename(tmp, file())
-  cache = next
-  return next
+/**
+ * 收敛到合法值。**读盘和写盘都要过**：手改文件把 `"remoteAllowInput": "false"` 写成字符串
+ * 时，浅合并出来是个 truthy 值，等于把远程写入偷偷打开了 —— 三个安全开关只认 `=== true`。
+ */
+function sanitize(s: Settings): Settings {
+  const bool = (v: unknown): boolean => v === true
+  return {
+    ...s,
+    defaultFontSize: clampInt(s.defaultFontSize, 8, 24, DEFAULTS.defaultFontSize),
+    scrollback: clampInt(s.scrollback, 500, 100_000, DEFAULTS.scrollback),
+    // 0 会让 Node 绑一个随机端口（二维码里的端口就对不上了），必须挡住
+    remotePort: clampInt(s.remotePort, 1024, 65535, DEFAULTS.remotePort),
+    tmuxEnabled: s.tmuxEnabled !== false,
+    remoteEnabled: bool(s.remoteEnabled),
+    remoteAllowInput: bool(s.remoteAllowInput),
+    remoteAllowApprove: bool(s.remoteAllowApprove),
+    // 绑定地址不接受任意输入：不是精确的 'tailscale' 一律当仅本机
+    remoteBind: s.remoteBind === 'tailscale' ? 'tailscale' : 'loopback',
+    claudeHooks: s.claudeHooks === 'on' ? 'on' : s.claudeHooks === 'off' ? 'off' : 'ask',
+    skillDirs: Array.isArray(s.skillDirs) ? s.skillDirs.filter((d) => typeof d === 'string') : [],
+    defaultShell: typeof s.defaultShell === 'string' ? s.defaultShell : ''
+  }
+}
+
+function clampInt(v: unknown, lo: number, hi: number, fallback: number): number {
+  const n = Math.round(Number(v))
+  if (!Number.isFinite(n)) return fallback
+  return Math.min(hi, Math.max(lo, n))
+}
+
+/* 写盘串行化：并发改两个开关时，共用一个固定 .tmp 会互相覆盖，
+   甚至让后一次 rename 撞上 ENOENT（前一次已经把 tmp 改名走了）。 */
+let writeChain: Promise<unknown> = Promise.resolve()
+
+export function setSettings(patch: Partial<Settings>): Promise<Settings> {
+  const run = writeChain.then(async () => {
+    const cur = await getSettings()
+    const next = sanitize({ ...cur, ...patch })
+    /* 先更新内存缓存再落盘：落盘失败时，用户在界面上关掉的开关**必须**已经生效。
+       反过来（落盘成功才生效）意味着写盘一出错，界面显示"只读"而实际仍可写 ——
+       安全开关只能往收紧的方向 fail。 */
+    cache = next
+    // 临时文件名带随机后缀，见上面的注释
+    const tmp = `${file()}.${randomUUID().slice(0, 8)}.tmp`
+    await writeFile(tmp, JSON.stringify(next, null, 2))
+    await rename(tmp, file())
+    return next
+  })
+  // 链上一环失败不能卡死后续写入
+  writeChain = run.catch(() => undefined)
+  return run
 }

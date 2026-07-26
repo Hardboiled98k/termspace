@@ -1031,11 +1031,52 @@ body {
   height: 16px;
   accent-color: var(--tb-blue);
 }
+.settings-row select {
+  font-size: 12px;
+  color: var(--tb-text);
+  background: var(--tb-terminal);
+  border: 0.5px solid var(--tb-hairline);
+  border-radius: 7px;
+  padding: 6px 9px;
+  outline: none;
+}
+.settings-btn {
+  margin-top: 8px;
+  padding: 6px 12px;
+  font: 500 11px/1 var(--tb-font-ui);
+  color: var(--tb-text);
+  background: rgba(255, 255, 255, 0.1);
+  border: 0.5px solid var(--tb-hairline-strong);
+  border-radius: var(--tb-radius-pill);
+  cursor: pointer;
+}
+.settings-btn:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+/* 配对二维码：白底黑码，别加圆角/滤镜，扫码器要的是高对比方块 */
+.settings-qr-row {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  padding: 12px 0;
+  border-bottom: 0.5px solid var(--tb-hairline);
+}
+.settings-qr {
+  width: 132px;
+  height: 132px;
+  flex: none;
+  border-radius: 6px;
+  background: #fff;
+  padding: 0;
+}
 .settings-note {
   font-size: 11px;
   line-height: 1.6;
   color: var(--tb-muted);
   margin: 8px 0 0;
+}
+.settings-err {
+  color: #ffb4ae;
 }
 .settings-note code {
   font-family: var(--tb-font-mono);
@@ -1846,6 +1887,30 @@ body {
   background: transparent;
   border-color: transparent;
   color: var(--tb-muted);
+}
+/* 规则引擎建议拒绝时的「仍然批准」：描边不实心，不跟主操作抢视觉权重 */
+.msg-act.risky {
+  color: var(--tb-orange);
+  background: transparent;
+  border-color: rgba(255, 159, 10, 0.5);
+}
+/* 「上膛」态：规则引擎建议拒绝时批准要点两次，第一下变成这个 */
+.msg-act.armed {
+  color: #fff;
+  background: var(--tb-red);
+  border-color: transparent;
+}
+.msg-verdict {
+  margin: 0 0 7px;
+  padding: 5px 8px;
+  border-radius: 7px;
+  font: 400 11px/1.45 var(--tb-font-ui);
+  color: var(--tb-muted);
+  background: rgba(255, 255, 255, 0.05);
+}
+.msg-verdict.deny {
+  color: #ffb4ae;
+  background: rgba(255, 69, 58, 0.16);
 }
 .msg-run-row {
   display: flex;

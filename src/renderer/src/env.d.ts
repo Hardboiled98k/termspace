@@ -11,6 +11,14 @@ interface AppSettings {
   remoteAllowInput: boolean
   remoteAllowApprove: boolean
   remotePort: number
+  remoteBind: 'loopback' | 'tailscale'
+}
+
+/** 审批规则引擎的判定。**没有 allow** —— 见 src/main/approval-policy.ts */
+interface PolicyVerdict {
+  decision: 'require_human' | 'deny'
+  rule: string
+  reason: string
 }
 
 interface IdentityMeta {
@@ -59,6 +67,13 @@ interface TermscapeApi {
     port: number
     token: string
     bind: string
+    bindMode: 'loopback' | 'tailscale'
+    /** 选了 tailscale 却没找到 100.x 地址，实际退回了回环 */
+    fellBack: boolean
+    /** 启动失败原因，空表示没失败 */
+    error: string
+    /** 带 token 的配对链接，手机扫码即连 */
+    pairUrl: string
   } | null>
   doctor: () => Promise<
     { key: string; label: string; ok: boolean; detail: string; hint: string }[]
@@ -86,6 +101,7 @@ interface TermscapeApi {
         sessionId: string
         cwd: string
         inputHash: string
+        verdict?: PolicyVerdict
       }[]
     ) => void
   ) => () => void

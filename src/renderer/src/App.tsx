@@ -54,6 +54,8 @@ export interface PendingApproval {
   sessionId: string
   cwd: string
   inputHash: string
+  /** 规则引擎判定。只会是「转人工」或「建议拒绝」，永远没有「自动放行」 */
+  verdict?: PolicyVerdict
 }
 
 /** 一次删除操作的可撤回记录 */

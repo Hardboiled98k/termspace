@@ -1,0 +1,489 @@
+/* Termscape 手机端 —— token 与桌面 styles.css 保持一致（Apple 深色系统色） */
+:root {
+  --bg: #0b0d12;
+  --panel: #1c1c1e;
+  --panel-2: #131315;
+  --hair: rgba(255, 255, 255, 0.09);
+  --hair-2: rgba(255, 255, 255, 0.16);
+  --text: #f5f5f7;
+  --muted: #98989f;
+  --blue: #0a84ff;
+  --orange: #ff9f0a;
+  --red: #ff453a;
+  --green: #30d158;
+  --idle: #48484a;
+  --r: 12px;
+  --mono: ui-monospace, 'SF Mono', Menlo, monospace;
+  --ui: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', system-ui, sans-serif;
+  /* 刘海与 home 条 */
+  --top: env(safe-area-inset-top, 0px);
+  --bot: env(safe-area-inset-bottom, 0px);
+}
+
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  overscroll-behavior: none; /* 关掉 Safari 橡皮筋，否则拖画布会连带下拉刷新 */
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--ui);
+  letter-spacing: -0.01em;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.screen {
+  display: none;
+  position: fixed;
+  inset: 0;
+  flex-direction: column;
+}
+body[data-screen='pair'] #pair,
+body[data-screen='board'] #board,
+body[data-screen='term'] #term {
+  display: flex;
+}
+
+.muted {
+  color: var(--muted);
+}
+.grow {
+  flex: 1;
+}
+
+/* ── 顶栏 ── */
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: calc(var(--top) + 8px) 12px 8px;
+  background: rgba(20, 20, 24, 0.86);
+  backdrop-filter: blur(20px);
+  border-bottom: 0.5px solid var(--hair);
+  font-size: 15px;
+  font-weight: 590;
+  flex: none;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  border: none;
+  background: none;
+  cursor: pointer;
+}
+button.ghost {
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.06);
+}
+button.ghost.urgent {
+  color: #1a1200;
+  background: var(--orange);
+  font-weight: 640;
+}
+button.primary {
+  padding: 12px 18px;
+  border-radius: 10px;
+  background: var(--blue);
+  color: #fff;
+  font-weight: 600;
+}
+button:active {
+  opacity: 0.65;
+}
+
+.foot {
+  flex: none;
+  padding: 8px 12px calc(var(--bot) + 8px);
+  font-size: 12px;
+  text-align: center;
+  border-top: 0.5px solid var(--hair);
+}
+/* 提示条：发送失败之类。要显眼，不然等于没提示 */
+.note {
+  color: #ffb4ae;
+  background: rgba(255, 69, 58, 0.14);
+  padding-bottom: 8px;
+}
+
+/* ── 配对 ── */
+#pair {
+  justify-content: center;
+  padding: 24px;
+}
+.pair-box {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.pair-box h1 {
+  margin: 0;
+  font-size: 30px;
+  letter-spacing: -0.02em;
+}
+.pair-box p {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+input {
+  font: inherit;
+  padding: 13px 14px;
+  border-radius: 10px;
+  border: 0.5px solid var(--hair-2);
+  background: var(--panel);
+  color: var(--text);
+  -webkit-user-select: text;
+  user-select: text;
+}
+input:focus {
+  outline: 2px solid var(--blue);
+  outline-offset: -1px;
+}
+.err {
+  color: var(--red);
+  font-size: 13px;
+}
+
+/* ── 画布 ── */
+#stage {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+  touch-action: none; /* 手势全部自己处理 */
+  background:
+    radial-gradient(circle at 1px 1px, rgba(255, 255, 255, 0.055) 1px, transparent 0) 0 0 / 22px 22px;
+}
+#world {
+  position: absolute;
+  inset: 0;
+}
+/* 连线画在屏幕坐标系里（针是屏幕尺寸恒定的，世界坐标系没法统一） */
+#wires {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.w {
+  stroke: rgba(255, 255, 255, 0.24);
+  stroke-width: 1.5;
+}
+.w-context {
+  stroke: rgba(10, 132, 255, 0.6);
+  stroke-dasharray: 5 4;
+}
+
+/* 集群 = 会跟着缩放的区域框（它表达的是空间归属） */
+.zone {
+  position: absolute;
+  border: 1px dashed rgba(255, 255, 255, 0.16);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.028);
+}
+.zone-label {
+  position: absolute;
+  top: -9px;
+  left: 10px;
+  padding: 1px 7px;
+  border-radius: 980px;
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+/* 终端 = 地图针：位置跟缩放，尺寸不跟。缩到全景也读得清、看得见颜色 */
+.pin {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 11px;
+  border-radius: 980px;
+  background: rgba(24, 24, 27, 0.96);
+  border: 1.5px solid var(--hair-2);
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+}
+.pin-browser,
+.pin-context {
+  opacity: 0.6;
+  border-style: dashed;
+}
+/* 挤在一起时退化成圆点：只剩状态色。30px 仍然是可点的触摸目标 */
+#stage[data-lod='dot'] .pin {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  justify-content: center;
+  gap: 0;
+}
+#stage[data-lod='dot'] .pin-title,
+#stage[data-lod='dot'] .pin-state {
+  display: none;
+}
+#stage[data-lod='dot'] .pin-dot {
+  width: 11px;
+  height: 11px;
+}
+.pin-title {
+  font-weight: 590;
+  max-width: 13ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pin-state {
+  color: var(--muted);
+  font-size: 11px;
+}
+.pin-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--idle);
+  flex: none;
+}
+.pin[data-status='running'] {
+  border-color: var(--blue);
+  box-shadow: 0 0 18px rgba(10, 132, 255, 0.45);
+}
+.pin[data-status='running'] .pin-dot {
+  background: var(--blue);
+}
+.pin[data-status='attention'] {
+  border-color: var(--orange);
+  box-shadow: 0 0 20px rgba(255, 159, 10, 0.5);
+}
+.pin[data-status='attention'] .pin-dot {
+  background: var(--orange);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+.pin[data-status='done'] {
+  border-color: var(--green);
+}
+.pin[data-status='done'] .pin-dot {
+  background: var(--green);
+}
+.pin[data-status='error'] {
+  border-color: var(--red);
+}
+.pin[data-status='error'] .pin-dot {
+  background: var(--red);
+}
+@keyframes pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pin-dot {
+    animation: none;
+  }
+}
+
+/* ── 终端 ── */
+#screen-text {
+  flex: 1;
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-all;
+  background: var(--panel-2);
+  -webkit-user-select: text;
+  user-select: text;
+}
+#choices,
+#quick,
+#keys {
+  display: flex;
+  gap: 8px;
+  padding: 8px 12px;
+  overflow-x: auto;
+  flex: none;
+  border-top: 0.5px solid var(--hair);
+}
+#choices:empty,
+#quick:empty {
+  display: none;
+}
+.chip-btn {
+  flex: none;
+  padding: 9px 14px;
+  border-radius: 980px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 0.5px solid var(--hair);
+  font-size: 13px;
+  max-width: 60vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#choices .chip-btn {
+  background: rgba(10, 132, 255, 0.18);
+  border-color: rgba(10, 132, 255, 0.45);
+}
+#keys button {
+  flex: 1;
+  padding: 11px 0;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.08);
+  font-family: var(--mono);
+  font-size: 14px;
+}
+#inputbar {
+  display: flex;
+  gap: 8px;
+  padding: 8px 12px;
+  flex: none;
+  border-top: 0.5px solid var(--hair);
+}
+#inputbar input {
+  flex: 1;
+  min-width: 0;
+}
+#keys {
+  padding-bottom: calc(var(--bot) + 8px);
+}
+.chip {
+  padding: 3px 9px;
+  border-radius: 980px;
+  font-size: 11px;
+  font-weight: 590;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--muted);
+}
+.chip[data-status='running'] {
+  background: rgba(10, 132, 255, 0.2);
+  color: var(--blue);
+}
+.chip[data-status='attention'] {
+  background: rgba(255, 159, 10, 0.2);
+  color: var(--orange);
+}
+
+/* ── 审批抽屉 ── */
+#sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: flex-end;
+}
+#sheet[hidden] {
+  display: none;
+}
+#sheet-panel {
+  width: 100%;
+  max-height: 82vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border-radius: 18px 18px 0 0;
+  overflow: hidden;
+}
+#sheet-list {
+  overflow: auto;
+  padding: 12px 12px calc(var(--bot) + 12px);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ap {
+  border: 0.5px solid var(--hair-2);
+  border-radius: var(--r);
+  padding: 12px;
+  background: var(--panel-2);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ap-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 590;
+}
+.ap-tool {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.07);
+}
+.ap-detail {
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+  word-break: break-all;
+  max-height: 7.5em;
+  overflow: auto;
+}
+.ap-verdict {
+  font-size: 12px;
+  padding: 7px 9px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+}
+.ap-verdict.deny {
+  background: rgba(255, 69, 58, 0.16);
+  color: #ffb4ae;
+}
+.ap-acts {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+}
+.ap-ok,
+.ap-no {
+  padding: 10px 16px;
+  border-radius: 9px;
+  font-weight: 590;
+  font-size: 14px;
+}
+.ap-ok {
+  background: rgba(48, 209, 88, 0.2);
+  color: var(--green);
+}
+.ap-ok.risky {
+  background: transparent;
+  color: var(--orange);
+  box-shadow: inset 0 0 0 1px rgba(255, 159, 10, 0.5);
+}
+.ap-ok.armed {
+  background: var(--red);
+  color: #fff;
+}
+.ap-no {
+  background: rgba(255, 69, 58, 0.18);
+  color: var(--red);
+}

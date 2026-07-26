@@ -8,6 +8,7 @@
  */
 import { app } from 'electron'
 import http from 'node:http'
+import { toPublicApproval, type PendingApproval, type PendingApprovalFull } from './approval-dto'
 import { createHash, randomUUID } from 'node:crypto'
 import { chmod, copyFile, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
@@ -103,30 +104,10 @@ exit 0
 /** 审批请求最多挂多久（秒）。到点回空 = Claude 回落到自己的原生提示，不会永远卡着。 */
 const PERMISSION_HOLD_SEC = 120
 
-/** 给 UI / 远程端看的脱敏审批卡片 —— 摘要是截断的，**不可用于安全判定** */
-export interface PendingApproval {
-  id: string
-  nodeId: string
-  toolName: string
-  /** tool_input 的单行摘要，够用户判断该不该批；已截断，见 PendingApprovalFull */
-  summary: string
-  toolUseId: string
-  createdAt: number
-  /** 判定用的关键上下文（做规则引擎时要绑它，不能只绑 toolUseId —— 官方不保证该字段存在） */
-  sessionId: string
-  cwd: string
-  /** 完整 tool_input 的 sha256，用于"批准的确实是当时看到的那一个" */
-  inputHash: string
-}
-
-/**
- * 主进程内部保留的完整记录。
- * **摘要截断到 300 字，危险内容可以藏在截断之后** —— 任何自动放行的规则判定
- * 必须读这里的 rawInput，绝不能拿 summary 去匹配。
- */
-export interface PendingApprovalFull extends PendingApproval {
-  rawInput: unknown
-}
+/* 审批记录的形态与脱敏出口搬到了 approval-dto.ts —— 那边不依赖 electron，
+   才能被 `node --test` 覆盖到（"完整 tool_input 不出主进程"这条必须有回归网）。 */
+export { toPublicApproval } from './approval-dto'
+export type { PendingApproval, PendingApprovalFull } from './approval-dto'
 
 /** 把 tool_input 压成一行给人看：命令/路径/URL 这类关键信息优先 */
 function summarizeToolInput(toolName: string, input: unknown): string {
@@ -386,7 +367,9 @@ export async function startHookSystem(
     timer: NodeJS.Timeout
   }
   const pending = new Map<string, Held>()
-  const publish = (): void => onApprovals?.([...pending.values()].map((h) => h.rec))
+  // 必须过 toPublicApproval：这条是实时推送路径，直接吐 rec 等于把完整
+  // tool_input 送进 renderer 并从 /api/events 出网
+  const publish = (): void => onApprovals?.([...pending.values()].map((h) => toPublicApproval(h.rec)))
 
   function settle(id: string, body: string): boolean {
     const h = pending.get(id)
@@ -530,7 +513,8 @@ export async function startHookSystem(
               .update(JSON.stringify(rawInput ?? null))
               .digest('hex'),
             // 完整输入只留在主进程：摘要是截断的，拿它做安全判定会被"藏在后面"的内容绕过
-            rawInput
+            rawInput,
+            permissionMode: String(p['permission_mode'] ?? 'default')
           }
           const timer = setTimeout(() => settle(id, ''), PERMISSION_HOLD_SEC * 1000)
           pending.set(id, { rec, res, timer })
@@ -614,12 +598,7 @@ export async function startHookSystem(
     binDir,
     decideApproval: (id, allow) => settle(id, allow ? ALLOW : DENY),
     // 脱敏：rawInput 只留在主进程，不进 renderer 也不过网络
-    listApprovals: () =>
-      [...pending.values()].map(({ rec }) => {
-        const { rawInput: _drop, ...safe } = rec
-        void _drop
-        return safe
-      }),
+    listApprovals: () => [...pending.values()].map(({ rec }) => toPublicApproval(rec)),
     /** 完整记录，只给主进程内的规则引擎用（未来的低档管家） */
     getApprovalFull: (id) => pending.get(id)?.rec,
     enableHooks: () => installClaudeHooks(scriptPath),

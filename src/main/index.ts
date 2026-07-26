@@ -8,7 +8,8 @@ import {
   startHookSystem,
   uninstallClaudeHooks,
   claudeHooksPresent,
-  type HookSystem
+  type HookSystem,
+  type PendingApproval
 } from './hooks'
 import { createContextTail, type ContextTail } from './context-tail'
 import {
@@ -20,6 +21,8 @@ import {
 import { listPresets, upsertPreset, deletePreset } from './preset-store'
 import { startWorkerWatch, workerAction, type WorkerWatch } from './worker-watch'
 import { startRemoteApi, type RemoteApi } from './remote'
+import { resolveBind } from './net-iface'
+import { evaluate as evaluatePolicy, type PolicyVerdict } from './approval-policy'
 import { getSettings, setSettings, type Settings } from './settings-store'
 import { searchSkills, loadSkill, listSkills } from './skill-index'
 import { delegate, noteTranscript, noteStatus, dropNode, isAgentSession } from './delegate'
@@ -50,8 +53,14 @@ let askedConsent = false
 /** 远程端能否写入终端 / 批准工具调用。设置里改了要立刻生效，所以单独缓存 */
 let remoteAllowInput = false
 let remoteAllowApprove = false
+/** 选了 tailscale 但没找到 100.x 地址，实际退回了回环。界面要如实说 */
+let remoteFellBack = false
+/** 远程 API 启动失败的原因。只进 console 的话，设置里只有一个"未启动"，用户无从下手 */
+let remoteError = ''
 
 const ptys = new Map<string, pty.IPty>()
+/** 本次运行开过终端的工作目录。审批规则引擎据此判断 cwd 是否在管辖范围内 */
+const spawnedRoots = new Set<string>()
 let hookSystem: HookSystem | null = null
 let contextTail: ContextTail | null = null
 let workerWatch: WorkerWatch | null = null
@@ -71,6 +80,41 @@ async function peekPane(id: string, lines: number): Promise<string> {
     .join('\n')
     .trim()
 }
+/**
+ * 给审批卡片附上规则引擎的判定（桌面与手机端共用同一份）。
+ *
+ * 规则引擎只输出「转人工」或「建议拒绝」，**永远不会替用户批准** ——
+ * 见 approval-policy.ts 的文件头，别在这里加一条"低风险自动放行"的捷径。
+ * 它读的是完整 rawInput（只在主进程里流转），不是给 UI 看的 300 字截断摘要。
+ */
+function withVerdict(list: PendingApproval[]): (PendingApproval & { verdict?: PolicyVerdict })[] {
+  return list.map((a) => {
+    const full = hookSystem?.getApprovalFull(a.id)
+    /* 拿不到完整输入时给兜底判定，不能返回"无判定"——
+       UI 上「没有横幅」看起来跟「审过了没事」一模一样，故障方向全在危险那一侧 */
+    if (!full) {
+      return {
+        ...a,
+        verdict: {
+          decision: 'require_human' as const,
+          rule: 'unknown',
+          reason: '读不到完整调用内容，无法判定'
+        }
+      }
+    }
+    return {
+      ...a,
+      verdict: evaluatePolicy({
+        toolName: full.toolName,
+        rawInput: full.rawInput,
+        cwd: full.cwd,
+        knownRoots: [...spawnedRoots],
+        permissionMode: full.permissionMode
+      })
+    }
+  })
+}
+
 /** 渲染层推来的画布 agent 摘要，供 tb agents / 派活用 */
 let boardAgents: { id: string; title: string; provider?: string; status: string }[] = []
 /** 画布上的授权连线：`source>target`。终端→终端 = 派活；终端→浏览器 = 允许驱动 */
@@ -412,6 +456,7 @@ ipcMain.handle(
     }
   }
   const cwd = opts?.cwd && existsSync(opts.cwd) ? opts.cwd : os.homedir()
+  spawnedRoots.add(cwd)
   const { file, args } = buildSpawnArgs(tmux, id, shell, cwd, env)
   const p = pty.spawn(file, args, {
     name: 'xterm-256color',
@@ -550,6 +595,11 @@ ipcMain.handle(
 // ── 设置 IPC ──
 ipcMain.handle('settings:get', () => getSettings())
 ipcMain.handle('settings:set', async (_e, patch: Partial<Settings>) => {
+  /* 收紧方向**先于落盘**生效：用户点掉「允许远程写入」的那一刻门就该关上。
+     等 setSettings 成功再更新的话，写盘一失败（磁盘满 / 权限）界面显示"只读"、
+     实际 gate 仍是 true —— 安全开关只允许往安全的方向失败。 */
+  if (patch.remoteAllowInput === false) remoteAllowInput = false
+  if (patch.remoteAllowApprove === false) remoteAllowApprove = false
   const next = await setSettings(patch)
   remoteAllowInput = next.remoteAllowInput // 立刻生效，不用重启
   remoteAllowApprove = next.remoteAllowApprove
@@ -567,8 +617,15 @@ ipcMain.handle('remote:status', async (e) => {
     running: !!remoteApi,
     port: remoteApi?.port ?? s.remotePort,
     token: remoteApi?.token ?? '',
-    // 改成 0.0.0.0 是危险的：这个进程能 spawn pty、持有凭证
-    bind: '127.0.0.1'
+    bindMode: s.remoteBind,
+    // 实际绑到的地址。**永远不会是 0.0.0.0** —— 这个进程能 spawn pty、持有凭证
+    bind: remoteApi?.host ?? (s.remoteBind === 'tailscale' ? resolveBind('tailscale').host : '127.0.0.1'),
+    /** 选了 tailscale 却没找到地址 → 实际只有本机能连，界面必须说清楚 */
+    fellBack: remoteFellBack,
+    /** 启动失败的原因（端口被占之类）。空 = 没失败 */
+    error: remoteError,
+    /** 手机扫这个：带 token 的一次性配对链接 */
+    pairUrl: remoteApi ? `http://${remoteApi.host}:${remoteApi.port}/#t=${remoteApi.token}` : ''
   }
 })
 ipcMain.handle('skills:list', async () => {
@@ -948,8 +1005,9 @@ app.whenReady().then(async () => {
         }
       },
       (list) => {
-        sendToWin('approvals:update', list)
-        remoteApi?.push('approvals', list)
+        const enriched = withVerdict(list)
+        sendToWin('approvals:update', enriched)
+        remoteApi?.push('approvals', enriched)
       },
       installHooks
     )
@@ -964,13 +1022,17 @@ app.whenReady().then(async () => {
      设备级 VPN —— 这个进程能 spawn pty、持有凭证，绝不能自己往公网监听。 */
   if (st.remoteEnabled) {
     try {
+      const bind = resolveBind(st.remoteBind)
       remoteApi = await startRemoteApi({
         tokenFile: path.join(app.getPath('userData'), 'remote-token'),
         port: st.remotePort,
+        host: bind.host,
+        // 打包后 mobile/ 在 asar 里（electron-builder.yml 的 files 收了它），fs 能直接读
+        staticDir: path.join(app.getAppPath(), 'mobile'),
         allowInput: () => remoteAllowInput,
         allowApprove: () => remoteAllowApprove,
         getBoard: () => boardSnapshot,
-        listApprovals: () => hookSystem?.listApprovals() ?? [],
+        listApprovals: () => withVerdict(hookSystem?.listApprovals() ?? []),
         decideApproval: (id, allow) => hookSystem?.decideApproval(id, allow) ?? false,
         peek: (nodeId, lines) => peekPane(nodeId, lines),
         writeInput: (nodeId, text) => {
@@ -980,8 +1042,13 @@ app.whenReady().then(async () => {
           return true
         }
       })
-      console.log(`远程 API 已启动：http://127.0.0.1:${remoteApi.port}`)
+      remoteFellBack = bind.fellBack
+      console.log(`远程 API 已启动：http://${remoteApi.host}:${remoteApi.port}`)
+      if (bind.fellBack) {
+        console.warn('远程绑定退回 127.0.0.1：没找到 Tailscale 地址（没登录/没启动？）')
+      }
     } catch (err) {
+      remoteError = String((err as { message?: string })?.message ?? err)
       console.error('远程 API 启动失败:', err)
     }
   }
@@ -1033,7 +1100,9 @@ app.whenReady().then(async () => {
         })
     }
     // 审批只有增量推送，reload/HMR 后既有的挂起审批就再也不显示了 → 重放一次快照
-    const pend = hookSystem?.listApprovals() ?? []
+    // 必须过 withVerdict：漏了这一层，reload 后重放出来的危险请求会退化成
+    // 一枚普通蓝色「批准」（verdict 为空 → 不显示风险横幅、也没有两段式确认）
+    const pend = withVerdict(hookSystem?.listApprovals() ?? [])
     if (pend.length) sendToWin('approvals:update', pend)
   })
 

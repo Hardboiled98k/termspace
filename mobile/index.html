@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <!-- viewport-fit=cover：iPhone 刘海/底部 home 条要靠 env(safe-area-*) 让位 -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no"
+    />
+    <meta name="theme-color" content="#0b0d12" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Termscape" />
+    <meta name="referrer" content="no-referrer" />
+    <title>Termscape</title>
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <!-- iOS 不认 SVG 的 apple-touch-icon，会退化成页面截图 —— 必须给 PNG -->
+    <link rel="apple-touch-icon" sizes="180x180" href="/icon-180.png" />
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body data-screen="loading">
+    <!-- ── 配对 ── -->
+    <section id="pair" class="screen">
+      <div class="pair-box">
+        <h1>Termscape</h1>
+        <p class="muted">
+          在电脑上打开 <b>设置 → 远程访问</b>，把配对 token 贴进来。<br />
+          也可以直接扫那里的二维码，token 会自动带上。
+        </p>
+        <input
+          id="token-input"
+          type="password"
+          inputmode="text"
+          autocomplete="off"
+          autocapitalize="off"
+          spellcheck="false"
+          placeholder="配对 token"
+        />
+        <button id="token-go" class="primary">连接</button>
+        <div id="pair-err" class="err" hidden></div>
+      </div>
+    </section>
+
+    <!-- ── 画布总览 ── -->
+    <section id="board" class="screen">
+      <header class="bar">
+        <span id="board-title">画布</span>
+        <span class="grow"></span>
+        <button id="btn-fit" class="ghost" aria-label="缩放到全部">全览</button>
+        <button id="btn-alerts" class="ghost" hidden></button>
+      </header>
+      <div id="stage">
+        <div id="world">
+          <svg id="wires" aria-hidden="true"></svg>
+          <div id="nodes"></div>
+        </div>
+      </div>
+      <div id="board-foot" class="foot muted"></div>
+    </section>
+
+    <!-- ── 单终端 ── -->
+    <section id="term" class="screen">
+      <header class="bar">
+        <button id="btn-back" class="ghost" aria-label="返回画布">‹ 画布</button>
+        <span id="term-title"></span>
+        <span class="grow"></span>
+        <span id="term-status" class="chip"></span>
+      </header>
+      <pre id="screen-text" aria-live="polite"></pre>
+      <div id="choices"></div>
+      <div id="quick"></div>
+      <form id="inputbar" autocomplete="off">
+        <input
+          id="cmd"
+          type="text"
+          inputmode="text"
+          autocapitalize="off"
+          autocorrect="off"
+          spellcheck="false"
+          placeholder="输入…（长按麦克风可语音转文字）"
+        />
+        <button id="send" class="primary" type="submit">发送</button>
+      </form>
+      <!-- 控制键用名字，不在 HTML 里写裸控制字符（编辑器/复制粘贴会吃掉它们） -->
+      <div id="keys">
+        <button data-key="enter">&#9166;</button>
+        <button data-key="esc">Esc</button>
+        <button data-key="ctrlc">^C</button>
+        <button data-key="up">&#8593;</button>
+        <button data-key="down">&#8595;</button>
+        <button data-key="tab">Tab</button>
+      </div>
+      <!-- 通用提示条：发送失败/只读/审批过期都走这里。静默失败是这个项目栽过两次的坑 -->
+      <div id="term-note" class="foot note" hidden></div>
+    </section>
+
+    <!-- ── 审批抽屉 ── -->
+    <div id="sheet" hidden>
+      <div id="sheet-panel">
+        <header class="bar">
+          <span>待批准</span><span class="grow"></span>
+          <button id="sheet-close" class="ghost">关闭</button>
+        </header>
+        <div id="sheet-list"></div>
+      </div>
+    </div>
+
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>

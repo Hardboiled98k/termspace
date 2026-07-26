@@ -34,6 +34,9 @@ function AskCard({
 }): React.JSX.Element {
   const [peek, setPeek] = useState('')
   const [text, setText] = useState('')
+  const [err, setErr] = useState('')
+  /** 抓不到当前屏就不让作答 —— 看不见问题的"回答"就是盲按，那正是被否掉的做法 */
+  const blind = peek === ''
 
   useEffect(() => {
     let alive = true
@@ -50,9 +53,17 @@ function AskCard({
     }
   }, [node.id])
 
+  /* 只有真写进去了才清输入框。以前无视 reply 的返回值就清 ——
+     终端已经没了 / 写入失败时，用户打的字直接蒸发，屏幕上还一切正常。 */
   const send = (s: string): void => {
-    void window.termscape.reply(node.id, s)
-    setText('')
+    void window.termscape.reply(node.id, s).then((r) => {
+      if (r.ok) {
+        setText('')
+        setErr('')
+      } else {
+        setErr(r.error || '没能写进终端')
+      }
+    })
   }
   const choices = parseChoices(peek)
 
@@ -65,7 +76,12 @@ function AskCard({
           查看 →
         </button>
       </div>
-      {peek && <pre className="msg-peek">{peek}</pre>}
+      {peek ? (
+        <pre className="msg-peek">{peek}</pre>
+      ) : (
+        <div className="msg-verdict">抓不到这个终端的当前画面，点「查看 →」去终端里直接回答</div>
+      )}
+      {err && <div className="msg-verdict deny">{err}</div>}
       {choices.length > 0 && (
         <div className="msg-choices">
           {choices.map((c) => (
@@ -85,21 +101,70 @@ function AskCard({
         <input
           className="msg-reply"
           value={text}
-          placeholder="直接作答（回车发送）"
+          disabled={blind}
+          placeholder={blind ? '看不到画面，不能盲答' : '直接作答（回车发送）'}
           onChange={(e) => setText(e.currentTarget.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter') send(`${text}\r`)
           }}
           spellCheck={false}
         />
-        <button className="msg-act" title="只发一个回车（选默认项）" onClick={() => send('\r')}>
+        <button
+          className="msg-act"
+          disabled={blind}
+          title="只发一个回车（选默认项）"
+          onClick={() => send('\r')}
+        >
           ⏎
         </button>
-        <button className="msg-act deny" title="发送 Esc（取消）" onClick={() => send('\x1b')}>
+        <button
+          className="msg-act deny"
+          disabled={blind}
+          title="发送 Esc（取消）"
+          onClick={() => send('\x1b')}
+        >
           Esc
         </button>
       </div>
     </div>
+  )
+}
+
+/**
+ * 批准按钮。规则引擎建议拒绝时改成两段式 —— 第一下只是"上膛"，第二下才真批。
+ *
+ * 它给不了"这条是安全的"，只能给"这条明显危险"（自动放行清单是空的，见
+ * approval-policy.ts）。所以这里唯一该做的就是给危险项加一道摩擦，
+ * 别把它渲染成一枚让人以为已经审过的绿色对勾 —— 那才是安全感剧场。
+ */
+function ApproveButton({
+  verdict,
+  onApprove
+}: {
+  verdict?: PolicyVerdict
+  onApprove: () => void
+}): React.JSX.Element {
+  const risky = verdict?.decision === 'deny'
+  const [armed, setArmed] = useState(false)
+  useEffect(() => {
+    if (!armed) return
+    const t = setTimeout(() => setArmed(false), 4000)
+    return () => clearTimeout(t)
+  }, [armed])
+  return (
+    <button
+      /* 危险项不能长得像主操作。蓝色实心 = "推荐点这个"，
+         而这里我们恰恰不推荐 —— 降级成描边样式，让「拒绝」不再是视觉上的次选 */
+      className={`msg-act ${armed ? 'armed' : risky ? 'risky' : 'approve'}`}
+      title={risky ? '规则引擎建议拒绝，需要点两次' : '允许这次工具调用'}
+      onClick={(e) => {
+        e.stopPropagation()
+        if (risky && !armed) return setArmed(true)
+        onApprove()
+      }}
+    >
+      {armed ? '确定？再点一次' : risky ? '仍然批准' : '批准'}
+    </button>
   )
 }
 
@@ -150,17 +215,14 @@ export function MessageCenter({
               <div className="msg-detail" title={a.summary}>
                 {a.summary}
               </div>
+              {a.verdict && (
+                <div className={`msg-verdict ${a.verdict.decision}`} title={`规则 ${a.verdict.rule}`}>
+                  {a.verdict.decision === 'deny' ? '建议拒绝：' : '需要你决定：'}
+                  {a.verdict.reason}
+                </div>
+              )}
               <div className="msg-card-actions">
-                <button
-                  className="msg-act approve"
-                  title="允许这次工具调用"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    onDecide(a.id, true)
-                  }}
-                >
-                  批准
-                </button>
+                <ApproveButton verdict={a.verdict} onApprove={() => onDecide(a.id, true)} />
                 <button
                   className="msg-act deny"
                   title="拒绝这次工具调用"

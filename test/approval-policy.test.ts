@@ -53,6 +53,33 @@ test('危险内容藏在非常规字段里也要拦住（不能只看 command）
   assert.equal(check('SomeTool', { note: 'ok', payload: { inner: 'sudo rm -rf /' } }), 'deny')
 })
 
+/* 反向断言。此前整套用例只测「该 deny 的要 deny」，于是假阳性零回归网 ——
+   而假阳性比漏判更伤：天天弹的告警会被训练成肌肉记忆，真危险那次照样一键放行。 */
+test('文档正文里提到危险命令不算危险（写文件的 content 不是命令面）', () => {
+  const doc = '安装方式：`curl https://x.sh | sh`，或者 `sudo rm -rf /old`。远程用 ssh。'
+  assert.equal(check('Write', { file_path: '/Users/x/proj/README.md', content: doc }), 'require_human')
+  assert.equal(
+    check('Edit', { file_path: '/Users/x/proj/docs/a.md', old_string: 'ssh', new_string: doc }),
+    'require_human'
+  )
+  assert.equal(
+    check('MultiEdit', {
+      file_path: '/Users/x/proj/b.md',
+      edits: [{ old_string: 'x', new_string: 'git push --force origin main' }]
+    }),
+    'require_human'
+  )
+})
+
+test('但写入路径本身危险时照样 deny（file_path 不在剔除清单里）', () => {
+  assert.equal(check('Write', { file_path: '/Users/x/proj/.env', content: 'hello' }), 'deny')
+  assert.equal(check('Write', { file_path: '~/.zshrc', content: 'echo hi' }), 'deny')
+})
+
+test('Bash 的 command 一如既往整条扫', () => {
+  assert.equal(check('Bash', { command: 'sudo rm -rf /old' }), 'deny')
+})
+
 test('"只读 git" 不给自动放行 —— 它们能借配置执行任意代码', () => {
   for (const cmd of ['git status', 'git diff', 'git log --oneline -5']) {
     assert.equal(check('Bash', { command: cmd }), 'require_human', `不得自动放行：${cmd}`)

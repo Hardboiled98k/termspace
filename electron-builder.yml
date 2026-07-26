@@ -6,6 +6,8 @@ directories:
 files:
   - out/**/*
   - package.json
+  # 手机端 PWA：主进程用 app.getAppPath()/mobile 直接读，asar 内可读
+  - mobile/**/*
 # node-pty 是原生模块，需按 Electron ABI 打进包
 asarUnpack:
   - '**/node_modules/node-pty/**'

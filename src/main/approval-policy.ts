@@ -67,13 +67,32 @@ const HARD_DENY: { id: string; re: RegExp; why: string }[] = [
   }
 ]
 
-/** 从 tool_input 里把所有可能承载命令/路径的字段抽出来一起看 */
-function surfaceOf(input: unknown): string {
+/**
+ * 文件编辑类工具：它们的 content / new_string 是**要写进去的数据**，不是要执行的命令。
+ * 拿命令形规则去扫正文，等于「写一段提到 sudo 的 markdown」= 提权告警。
+ */
+const FILE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'StrReplace'])
+const CONTENT_FIELDS = ['content', 'new_string', 'old_string', 'new_str', 'old_str', 'edits']
+
+/**
+ * 从 tool_input 里把所有可能承载命令/路径的字段抽出来一起看。
+ *
+ * 默认整份 JSON 串起来：危险内容藏在哪个字段都拦得住，只看 command/file_path
+ * 会被没预料到的字段绕过。**唯一的例外**是上面那批文件编辑工具的正文字段 ——
+ * 那不是命令面。这笔账要这么算：漏判一次只是少一条提示（默认本来就是转人工，
+ * 自动放行清单是空的，什么都没被放过）；而误报一次是在腐蚀唯一有牙齿的那个状态，
+ * 天天见的告警会被训练成肌肉记忆，真危险那次照样一键批准。
+ * 注意 file_path 不在剔除清单里，所以「写 .env」依然会被 protected-path 拦下。
+ */
+function surfaceOf(toolName: string, input: unknown): string {
   if (input == null) return ''
   if (typeof input === 'string') return input
   try {
-    // 整个 JSON 串起来看：危险内容藏在哪个字段都拦得住，
-    // 而只看 command/file_path 会被没预料到的字段绕过
+    if (FILE_TOOLS.has(toolName) && typeof input === 'object') {
+      const rest: Record<string, unknown> = { ...(input as Record<string, unknown>) }
+      for (const k of CONTENT_FIELDS) delete rest[k]
+      return JSON.stringify(rest)
+    }
     return JSON.stringify(input)
   } catch {
     return String(input)
@@ -96,7 +115,7 @@ export interface PolicyInput {
  * 注意返回值里**没有 allow** —— 这是设计，不是没写完。
  */
 export function evaluate(inp: PolicyInput): PolicyVerdict {
-  const surface = surfaceOf(inp.rawInput)
+  const surface = surfaceOf(inp.toolName, inp.rawInput)
 
   for (const r of HARD_DENY) {
     if (r.re.test(surface)) {
@@ -115,7 +134,10 @@ export function evaluate(inp: PolicyInput): PolicyVerdict {
       reason: `会话权限模式是 ${inp.permissionMode}，不做任何自动判断`
     }
   }
-  if (inp.cwd && inp.knownRoots.length && !inp.knownRoots.some((r) => inp.cwd.startsWith(r))) {
+  // 前缀比较必须带分隔符，否则 /proj-evil 会被当成 /proj 里面
+  const inRoot = (root: string): boolean =>
+    inp.cwd === root || inp.cwd.startsWith(root.endsWith('/') ? root : `${root}/`)
+  if (inp.cwd && inp.knownRoots.length && !inp.knownRoots.some(inRoot)) {
     return {
       decision: 'require_human',
       rule: 'cwd-outside',
