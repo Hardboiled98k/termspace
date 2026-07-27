@@ -378,6 +378,8 @@ case "$cmd" in
     curl -s -H "$H" --get --data-urlencode "name=$*" "$BASE/tb/load" ;;
   agents|ls)
     curl -s -H "$H" "$BASE/tb/agents" ;;
+  context|ctx)
+    curl -s -H "$H" "$BASE/tb/context" ;;
   ask|delegate)
     target="$1"; shift 2>/dev/null
     if [ -z "$target" ] || [ -z "$*" ]; then echo "用法: tb ask <节点id> <任务>" >&2; exit 2; fi
@@ -399,6 +401,7 @@ tb — Termscape 工具中枢
   tb skills <关键词>       搜索可用 skill（返回名称 + 一行说明）
   tb load <名称>           取出该 skill 全文，按其指示执行
   tb agents                列出本画布上的其他 agent 终端
+  tb context               读取连到本终端的共享上下文（实时，改了立刻能看到）
   tb ask <节点id> <任务>   把任务派给另一个终端里的 agent，等它做完返回结果
   tb browser open <url>    在画布上打开浏览器测试目标网页
   tb browser goto <url>    让画布浏览器导航到某地址
@@ -409,6 +412,7 @@ tb — Termscape 工具中枢
 
 用法：先 skills 找、load 取全文，不要凭记忆猜 skill。
 派活前先 tb agents 看有哪些节点，再 tb ask <id> "任务描述"。
+上下文节点的内容随时会被人改；需要时用 tb context 现取，别依赖会话开始时的那份。
 EOF
     ;;
   *) echo "tb: 未知命令 '$cmd'（tb help 查看用法）" >&2; exit 2 ;;
@@ -420,6 +424,8 @@ export interface TbHandlers {
   skills: (q: string) => Promise<string>
   load: (name: string) => Promise<string>
   agents: (source: string) => Promise<string>
+  /** 连到该终端的上下文节点，**现读现返**（会话启动时注入的那份可能已经过期） */
+  context: (source: string) => Promise<string>
   ask: (source: string, target: string, task: string) => Promise<string>
   browser: (source: string, action: string, arg: string, nodeId: string) => Promise<string>
 }
@@ -529,6 +535,8 @@ export async function startHookSystem(
             ? tb.load(u.searchParams.get('name') ?? '')
             : route === 'agents'
               ? tb.agents(source)
+            : route === 'context'
+              ? tb.context(source)
               : route === 'ask'
                 ? tb.ask(
                     source,

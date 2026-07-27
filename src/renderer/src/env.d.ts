@@ -123,6 +123,8 @@ interface TermscapeApi {
     agents: { id: string; title: string; provider?: string; status: string }[]
     /** 授权连线，形如 `source>target` */
     links: string[]
+    /** 上下文节点→终端的连线，形如 `ctx>term`。`tb context` 靠它现算内容 */
+    ctxLinks: string[]
     /** 现存节点 id 全集（主进程据此撤销失效授权） */
     nodeIds: string[]
     /** 完整画布快照（远程 API 用；只含布局与状态，不含终端内容） */

@@ -152,6 +152,8 @@ function withVerdict(list: PendingApproval[]): (PendingApproval & { verdict?: Po
 let boardAgents: { id: string; title: string; provider?: string; status: string }[] = []
 /** 画布上的授权连线：`source>target`。终端→终端 = 派活；终端→浏览器 = 允许驱动 */
 let boardLinks = new Set<string>()
+/** 上下文节点 → 终端 的连线（`ctx>term`）。`tb context` 靠它现算 */
+let boardCtxLinks = new Set<string>()
 /** 完整画布快照（布局 + 状态），远程 API 用；终端内容不在里面 */
 let boardSnapshot: unknown = null
 ipcMain.on(
@@ -159,7 +161,13 @@ ipcMain.on(
   (
     e,
     payload:
-      | { agents?: typeof boardAgents; links?: string[]; nodeIds?: string[]; board?: unknown }
+      | {
+          agents?: typeof boardAgents
+          links?: string[]
+          ctxLinks?: string[]
+          nodeIds?: string[]
+          board?: unknown
+        }
       | typeof boardAgents
   ) => {
     if (!fromMainWin(e)) return
@@ -171,6 +179,9 @@ ipcMain.on(
       remoteApi?.push('board', p.board)
     }
     boardLinks = new Set(Array.isArray(p?.links) ? p.links.filter((s) => typeof s === 'string') : [])
+  boardCtxLinks = new Set(
+    Array.isArray(p?.ctxLinks) ? p.ctxLinks.filter((s) => typeof s === 'string') : []
+  )
     /* 节点 id 会被复用（nextId 取 max+1）：删掉 b1 再建一个新的 b1，
        旧授权就白送给了陌生节点。所以节点一消失就撤销与它有关的一次性授权。 */
     if (Array.isArray(p?.nodeIds)) {
@@ -910,7 +921,26 @@ const TOOL_ROUTING_HINT = `## Termscape 工具中枢
 - 遇到需要专门方法的任务（设计/出图/部署/数据/视频/文档等）先跑 \`tb skills <关键词>\`
 - 命中后用 \`tb load <名称>\` 取全文再照做
 - \`tb agents\` 看本画布其他 agent 终端，\`tb ask <id> <任务>\` 派活给它们
+- \`tb context\` 现取连到本终端的共享上下文。**下面那份是会话开始时的快照，用户随时会改** ——
+  开始一件新任务前、或用户提到"看看上下文/需求变了"时，先跑一次 \`tb context\` 拿最新的
 - 需要测网页时用 \`tb browser open <url>\`，再 \`tb browser text\` / \`tb browser js <代码>\` 检查——直接开在画布上，用户能实时看到`
+
+/**
+ * 按当前连线**现算**该终端的共享上下文。`tb context` 走这条 ——
+ * spawn 时注入的那份是快照，用户改完节点内容或改了连线，跑着的会话是看不到的。
+ */
+async function currentContextText(termId: string): Promise<string> {
+  const ctxIds = [...boardCtxLinks]
+    .filter((l) => l.endsWith(`>${termId}`))
+    .map((l) => l.slice(0, l.indexOf('>')))
+  if (!ctxIds.length) return '（这个终端没有连任何上下文节点）'
+  const parts: string[] = []
+  for (const cid of ctxIds) {
+    const t = await readFile(ctxFile(cid), 'utf8').catch(() => '')
+    if (t.trim()) parts.push(t.trim())
+  }
+  return parts.length ? parts.join('\n\n---\n\n') : '（连了上下文节点，但内容是空的）'
+}
 
 /** 把连到该终端的所有简报节点合并成一个文件，返回路径（无连线则返回空串） */
 async function buildMergedContext(termId: string, ctxIds: string[]): Promise<string> {
@@ -1164,6 +1194,7 @@ app.whenReady().then(async () => {
           const text = await loadSkill(name, dirs)
           return text ?? `未找到 skill「${name}」，先用 tb skills <关键词> 查名字。`
         },
+        context: (source) => currentContextText(source),
         agents: async (source) => {
           const others = boardAgents.filter((a) => a.id !== source)
           if (!others.length) return '画布上暂无其他 agent 终端。'
@@ -1418,6 +1449,33 @@ app.whenReady().then(async () => {
            「缩到全景看颜色分布」是这个产品的招牌交互，而 LOD 只设了 visibility:hidden ——
            终端全都还活着、还在渲染。这里让 N 个终端持续输出，分别量缩放 1.0 和 LOD 下
            渲染进程的 CPU，用数字回答该不该改成真正停渲染。 */
+        /* TERMBOARD_CTX_TEST=1：验证 tb context 是不是真的现读现返。
+           判据：**不重开会话**的前提下改上下文节点内容，第二次 tb context 要能读到新内容。
+           这正是原来 --append-system-prompt 那条路做不到的事。 */
+        if (process.env['TERMBOARD_CTX_TEST']) {
+          /* 用一个自造的临时上下文节点，测完删干净 —— 不碰用户真实数据。
+             判据：**不重开会话**的前提下改内容，第二次读要能读到新内容。
+             这正是原来 --append-system-prompt 那条路做不到的事（它只在 spawn 时灌一次）。 */
+          const cid = 'ctxtest-tmp'
+          const tid = 'ctxtest-term'
+          await mkdir(ctxDir(), { recursive: true })
+          boardCtxLinks.add(`${cid}>${tid}`)
+          try {
+            await writeFile(ctxFile(cid), '第一版：目标是 A')
+            const v1 = await currentContextText(tid)
+            await writeFile(ctxFile(cid), '第二版：目标改成 B 了')
+            const v2 = await currentContextText(tid)
+            const none = await currentContextText('没连线的终端')
+            console.log(`[ctx-test] 第一次读：${JSON.stringify(v1)}`)
+            console.log(`[ctx-test] 改完再读：${JSON.stringify(v2)}`)
+            console.log(`[ctx-test] 实时生效：${v1 !== v2 && v2.includes('B')}`)
+            console.log(`[ctx-test] 没连线时：${JSON.stringify(none)}`)
+          } finally {
+            boardCtxLinks.delete(`${cid}>${tid}`)
+            await unlink(ctxFile(cid)).catch(() => undefined)
+          }
+        }
+
         const bench = Number(process.env['TERMBOARD_LOD_BENCH'] ?? 0)
         if (bench > 0) {
           workspaceFrozen = true

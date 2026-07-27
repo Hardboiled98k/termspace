@@ -1474,6 +1474,11 @@ function Board(): React.JSX.Element {
       links: edges
         .filter((e) => (e.data?.kind ?? 'delegate') === 'delegate')
         .map((e) => `${e.source}>${e.target}`),
+      /* 上下文连线单独报：`tb context` 要按当前连线**现算**内容。
+         spawn 时那份 contextNodeIds 是快照，用户改完连线不会重新传上来。 */
+      ctxLinks: edges
+        .filter((e) => e.data?.kind === 'context')
+        .map((e) => `${e.source}>${e.target}`),
       // 现存节点全集：主进程据此撤销指向已消失节点的一次性授权（id 会被复用）
       nodeIds: nodes.filter((n) => n.type !== 'worker').map((n) => n.id),
       /* 完整画布快照，给远程 API（手机端要按同样的空间关系画出来）。
