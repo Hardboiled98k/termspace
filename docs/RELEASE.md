@@ -18,10 +18,13 @@ codesign --verify --deep --strict dist/mac-arm64/Termscape.app
 spctl --assess --type execute dist/mac-arm64/Termscape.app   # 要看到 source=Notarized Developer ID
 xcrun stapler validate dist/Termscape-<版本>-arm64.dmg
 
-# 4. 传这两个文件到更新源目录（dmg 可选，给人手动下载用）
-#    latest-mac.yml
-#    Termscape-<版本>-arm64-mac.zip
+# 4. 发布（第一次要先填 ~/.termscape-publish.env，见脚本头部）
+./scripts/publish.sh
 ```
+
+`publish.sh` 会替你把这几件事做掉：产物齐不齐、yml 里的版本和包一致不一致、
+签名和公证过没过、**先传 zip 再传 yml**（反过来的话客户端可能在两次传输之间
+读到新版本的 yml 却下载到一个还不存在的 zip）、传完再从公开地址取一次验收。
 
 **zip 是自动更新用的，dmg 是给人手动装的。** Squirrel.Mac 只认 zip，
 少传它的话客户端能查到新版本但下载不下来。
