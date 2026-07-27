@@ -51,15 +51,18 @@ interface RateSnapshot {
 function askRateLimits(
   bin: string,
   codexHome: string
-): Promise<{ ok: true; data: Record<string, unknown> } | { ok: false; error: string }> {
+): Promise<{ ok: true; data: Record<string, unknown>; email?: string } | { ok: false; error: string }> {
   return new Promise((resolve) => {
     const p = spawn(bin, ['app-server', '--stdio'], {
       stdio: ['pipe', 'pipe', 'ignore'],
       env: { ...process.env, CODEX_HOME: codexHome }
     })
     let buf = ''
+    let email = ''
     let settled = false
-    const finish = (r: { ok: true; data: Record<string, unknown> } | { ok: false; error: string }): void => {
+    const finish = (
+      r: { ok: true; data: Record<string, unknown>; email?: string } | { ok: false; error: string }
+    ): void => {
       if (settled) return
       settled = true
       try {
@@ -99,13 +102,20 @@ function askRateLimits(
         // 按 id 派发，**不能按到达顺序配对**（实测后发的会先回）
         if (m.id === 1) {
           p.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'initialized' })}\n`)
+          /* account/read 是纯本地的（~3ms），顺手要一下邮箱 ——
+             planType 只给 'pro'，两个 pro 订阅号在界面上长得一模一样，
+             邮箱是唯一能把它们分开的东西。注意它要 `params: {}` 不是 null。 */
+          p.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'account/read', params: {} })}\n`)
           p.stdin.write(
-            `${JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'account/rateLimits/read', params: null })}\n`
+            `${JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'account/rateLimits/read', params: null })}\n`
           )
         } else if (m.id === 2) {
+          const acc = (m.result as { account?: { email?: string } } | undefined)?.account
+          if (acc?.email) email = acc.email
+        } else if (m.id === 3) {
           clearTimeout(timer)
           if (m.error) finish({ ok: false, error: m.error.message ?? 'unknown' })
-          else finish({ ok: true, data: (m.result ?? {}) as Record<string, unknown> })
+          else finish({ ok: true, data: (m.result ?? {}) as Record<string, unknown>, email })
         }
       }
     })
@@ -207,6 +217,7 @@ export async function collectCodex(args: {
     state: 'ok',
     source: 'codex app-server（官方）',
     plan: main.planType ?? undefined,
+    email: r.email || undefined,
     windows,
     spend
   }

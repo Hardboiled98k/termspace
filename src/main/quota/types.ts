@@ -63,6 +63,11 @@ export interface AccountQuota {
   source: string
   /** 'Max 5x' / 'pro' 之类 */
   plan?: string
+  /**
+   * 账号邮箱。**区分两个同 provider 订阅号的唯一可靠标识** ——
+   * planType 只给 'pro'，看不出 20x，两个 pro 号长得一模一样。
+   */
+  email?: string
   windows: QuotaWindow[]
   spend?: QuotaSpend[]
   /** state != 'ok' 时给用户的人话，**必须能指出下一步动作** */

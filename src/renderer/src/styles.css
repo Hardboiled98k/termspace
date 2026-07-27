@@ -2258,3 +2258,14 @@ body {
   font-size: 10px;
   color: var(--tb-green);
 }
+
+/* 账号邮箱：两个 codex 订阅号的 planType 都是 'pro'，只有邮箱能分开 */
+.quota-email {
+  font-size: 9px;
+  color: var(--tb-muted);
+  opacity: 0.7;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: -2px;
+}

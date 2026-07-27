@@ -242,6 +242,8 @@ function AccountBlock({
         {a.plan && <span className="quota-plan">{a.plan}</span>}
         <span className={`quota-using${usingCount ? ' on' : ''}`}>{usingCount} 节点</span>
       </div>
+      {/* 邮箱是区分两个同 provider 订阅号的唯一可靠标识 —— planType 都叫 'pro' */}
+      {a.email && <div className="quota-email">{a.email}</div>}
       {a.windows.length > 0 ? (
         <div className="quota-provider-rows">
           {a.windows.map((w) => (
