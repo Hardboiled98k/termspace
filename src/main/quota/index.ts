@@ -56,7 +56,9 @@ export function fingerprint(list: QuotaAccount[]): string {
 
 export function startQuotaHub(
   homeDir: string,
-  onUpdate: (list: AccountQuota[]) => void
+  onUpdate: (list: AccountQuota[]) => void,
+  /** 只给测试用：替换真采集器。生产不传 —— 真采集要打网络、跑子进程，测不了调度逻辑 */
+  collectOverride?: (a: QuotaAccount) => Promise<AccountQuota>
 ): QuotaHub {
   let accounts: QuotaAccount[] = []
   const results = new Map<string, AccountQuota>()
@@ -124,19 +126,33 @@ export function startQuotaHub(
     }
   }
 
+  /* 采集期间来的强制刷新。**不能直接丢** —— 一轮采集要几秒（codex 未登录时硬超时 25s），
+     用户正好在这段时间里换了凭证的隔离目录，那次 setAccounts 的 run(true) 就被
+     `if (running) return` 吃掉了，界面上继续挂着旧号的额度直到下一个 5 分钟周期。
+     而且**正在跑的那轮用的是旧 accounts**（Promise.all 的入参在 await 之前就求值完了），
+     它结束时还会拿旧账号的结果 onUpdate 一次，等于把新配置的显示又盖回去。 */
+  let pending = false
+
   const run = async (force = false): Promise<void> => {
-    if (running) return
+    if (running) {
+      if (force) pending = true
+      return
+    }
     if (!force && Date.now() - lastRun < MIN_GAP_MS) return
     running = true
     lastRun = Date.now()
     try {
       // 各账号并行；一个挂了不影响别的
-      const list = await Promise.all(accounts.map(collectOne))
+      const list = await Promise.all(accounts.map(collectOverride ?? collectOne))
       results.clear()
       for (const r of list) results.set(r.accountId, r)
       onUpdate(list)
     } finally {
       running = false
+      if (pending) {
+        pending = false
+        void run(true) // running 已经翻回 false，不会递归下去
+      }
     }
   }
 

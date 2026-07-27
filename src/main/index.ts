@@ -979,12 +979,15 @@ const afterIdentityChange = <T,>(r: T): T => {
   void syncQuotaAccountsRef?.()
   return r
 }
-ipcMain.handle('identity:list', () => listIdentities())
-ipcMain.handle('identity:upsert', async (_e, input: Parameters<typeof upsertIdentity>[0]) =>
-  afterIdentityChange(await upsertIdentity(input))
+/* 这三条此前漏了 fromMainWin —— 同批的 rename / loginStatus 都有，是不一致而不是有意为之。
+   凭证库是这个 app 里最敏感的东西（改一条 identity 就能把某个终端的 CODEX_HOME 指走），
+   来源判定必须和同组的其它路由一致。 */
+ipcMain.handle('identity:list', (e) => (fromMainWin(e) ? listIdentities() : []))
+ipcMain.handle('identity:upsert', async (e, input: Parameters<typeof upsertIdentity>[0]) =>
+  fromMainWin(e) ? afterIdentityChange(await upsertIdentity(input)) : []
 )
-ipcMain.handle('identity:delete', async (_e, id: string) =>
-  afterIdentityChange(await deleteIdentity(id))
+ipcMain.handle('identity:delete', async (e, id: string) =>
+  fromMainWin(e) ? afterIdentityChange(await deleteIdentity(id)) : []
 )
 ipcMain.handle('identity:rename', async (e, id: string, name: string) =>
   fromMainWin(e) ? afterIdentityChange(await renameIdentity(String(id), String(name))) : []

@@ -68,3 +68,11 @@ test('Claude 走 api_key 时要标出「按量计费」', () => {
 test('Claude 输出不是 JSON 时报 unknown，不编一个登录态出来', () => {
   assert.equal(parseClaudeAuth('command not found').state, 'unknown')
 })
+
+test('claude auth 返回 null / 数字 → unknown，不抛也不报"未登录"', () => {
+  // JSON.parse('null') 成功但读属性会抛；'0' 成功但 loggedIn 是 undefined
+  for (const s of ['null', '0', '"x"', '[]']) {
+    const r = parseClaudeAuth(s)
+    assert.equal(r.state, 'unknown', `${s} 应该是 unknown，得到 ${r.state}`)
+  }
+})

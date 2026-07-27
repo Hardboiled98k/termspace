@@ -41,7 +41,15 @@ export interface ClaudeAuth {
 export function parseClaudeAuth(stdout: string, home?: string): LoginStatus {
   let j: ClaudeAuth
   try {
-    j = JSON.parse(stdout) as ClaudeAuth
+    const v: unknown = JSON.parse(stdout)
+    /* `JSON.parse` 对合法 JSON 的 `null` / 数字 / 字符串都成功。
+       `null` 会让下面读 `.loggedIn` 直接抛（整个 IPC handler 变成 reject）；
+       数字则读出 undefined → 被判成「未登录」，而它其实是「没看懂」。
+       两种都必须落到 unknown。 */
+    if (!v || typeof v !== 'object' || Array.isArray(v)) {
+      return { state: 'unknown', detail: stdout.trim().slice(0, 80) || '查不出来', home }
+    }
+    j = v as ClaudeAuth
   } catch {
     // 认不出就 unknown，**不猜**（命令换形状了也不能编一个登录态出来）
     return { state: 'unknown', detail: stdout.trim().slice(0, 80) || '查不出来', home }
