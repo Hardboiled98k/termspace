@@ -69,6 +69,11 @@ TERMBOARD_PANEL=terminal npm run dev      # 自检：直接展开设置面板某
   悬空连线 = 新节点白捡旧节点的授权
 - **pinch 缩放要用原生 non-passive wheel 监听**：React 的 wheel 是 passive 委托，
   合成事件里 `preventDefault()` 是空操作
+- **WebGL context 上限已实测，不用再猜**：`TERMBOARD_WEBGL_STRESS=20 npm run dev`
+  → 20 个终端里 16 个拿到 context、4 个直接走 DOM renderer；再打爆 → 16 次 contextlost
+  → 全部落回 DOM 且**字还在**。这条路不用改。
+  ⚠️ 复测时**必须等满 6 秒**：addon 收到 `webglcontextlost` 后会先等 3 秒看 context
+  自己恢不恢复，之后才 fire `onContextLoss`。窗口短于 3s 会量出"降级失效"的假结论
 - **`<webview>` 远缩时不能卸载**：摘出 DOM = 浏览器会话销毁 + 注册表留死引用。
   学 TerminalNode：保持挂载 + `visibility:hidden`
 - **派活是最危险的一段**：注入 = 替用户敲回车。只接受当前活着的 agent 会话
@@ -115,7 +120,19 @@ TERMBOARD_PANEL=terminal npm run dev      # 自检：直接展开设置面板某
   账号只有 10080min（周）一个窗口、`secondary` 是 null —— 按位置认会凭空多出一行 5h
 - `~/.claude/claude-usage.json` 是用户自己的 statusline tee 脚本产物，**不是官方文件**，
   换机就没有 → 只做最后兜底，且一律标 stale（实测能和真值差 30 多个百分点）
-- state 分五档，`unconfigured` 整块不渲染。**「查不到」和「用了 0%」必须是两种东西**
+- state 分五档。**「查不到」「未登录」「用了 0%」必须是三种东西** —— 未登录能自己修
+  （去跑一次 login），查不到只能等。所以 `unconfigured` 只藏"自动探测的系统号且没人在用"，
+  **用户自建的凭证即使未登录也必须占位**，否则那个号在界面上就是凭空消失
+- **窗口标签从小到大判**：老写法第一条是 `mins >= 10000 → '周'`，于是 43200（月）也成了"周"。
+  和 `quota2.sh` 把周窗口标成 5h 是同一类错
+- **别信 `~/scripts/quota2.sh` 的数**：它读的是 session jsonl / statusline 快照，都是
+  **上一次落盘的历史值**，进程一停就冻住。实测真值 0% 时它报 8%（10 小时前的数）。
+  Termscape 走实时 API，以 app 里的为准
+- codex 的 `credits.balance` 是**余额字符串**（可能是 `"$766.76"`），不是上限；
+  `Number()` 直接吃会得到 NaN。`QuotaSpend` 的 `usedMinor` 和 `remainingMinor` 是两个
+  方向相反的数，缺哪个留 undefined，**绝不拿 0 顶上**
+- 每个采集器都要 `windows.length ? 'ok' : 'unknown-shape'`；Hub 的 `setAccounts` 要比
+  **指纹**（含 name / env）而不是 accountId —— 换了 `CODEX_HOME` 而 id 不变时会继续显示旧号
 
 ## 凭证节点（2026-07-26）
 
@@ -193,9 +210,17 @@ npm run dist:signed
 
 ## 路线图（真实状态见 PRD.md「优先级排序」，那张表已重校）
 
-M1–M6 与 F1–F8 均有可用实现；签名公证与手机端已完成。明确未做的是 **MCP 形态**
-（F7/F8 现在走 `tb` + 回环 HTTP）、**非 Claude provider 的真状态与额度**、**记忆系统统筹**、
-**手机端的完整 PWA / 后台推送**（受安全上下文与 Web Push 限制，见上）。
+M1–M6 与 F1–F8 均有可用实现；签名公证、手机端、三家额度采集、崩溃日志、工作区导出导入
+均已完成。明确未做的：
+
+| 未做 | 为什么 |
+|------|--------|
+| **MCP 形态** | F7/F8 现在走 `tb` + 回环 HTTP，够用 |
+| **CI / 自动更新 / x64 包** | 仓库还没有 remote，`publish: null`。等真要发了再配，现在纯投机 |
+| **手机端完整 PWA / 后台推送** | 受安全上下文与 Web Push 限制（见上） |
+| **手机端按设备可撤销 token** | 单用户单机时轮换那把 token 就是撤销，够了 |
+| **记忆系统统筹** | 还没想清形态 |
+| 非订阅 provider 的额度 | 可查的清单与不可查的原因见 `docs/QUOTA.md` |
 
 ## 参考
 
