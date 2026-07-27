@@ -428,10 +428,16 @@ function BoardHUD({
 /* ── Identity 管理面板 ── */
 function IdentityPanel({
   identities,
-  onChanged
+  onChanged,
+  usageOf,
+  onDeleted
 }: {
   identities: IdentityMeta[]
   onChanged: (list: IdentityMeta[]) => void
+  /** 这个凭证被谁在用 —— 删之前要让用户看到代价 */
+  usageOf: (id: string) => { terminals: number; nodes: number; presets: number }
+  /** 删库**之前**先撤销画布上的引用（关会话、清 identityId、删凭证节点和线） */
+  onDeleted: (id: string) => Promise<void>
 }): React.JSX.Element {
   const [name, setName] = useState('')
   const [provider, setProvider] = useState<IdentityMeta['provider']>('claude')
@@ -506,7 +512,23 @@ function IdentityPanel({
               <span className="identity-keys">{i.envKeys.join(' · ')}</span>
               <button
                 className="identity-del"
-                onClick={async () => onChanged(await window.termscape.deleteIdentity(i.id))}
+                onClick={async () => {
+                  /* 删凭证前必须查引用。原来是**无确认、无检查**直接删 ——
+                     正在用它的终端会继续持有旧 secret 跑到天荒地老，
+                     画布上的凭证节点变成指向虚空，preset 也留着悬空引用。 */
+                  const u = usageOf(i.id)
+                  const parts = [
+                    u.terminals ? `${u.terminals} 个终端正在用它` : '',
+                    u.nodes ? `${u.nodes} 个凭证节点指向它` : '',
+                    u.presets ? `${u.presets} 个预设引用它` : ''
+                  ].filter(Boolean)
+                  const detail = parts.length
+                    ? `\n\n${parts.join('、')}。这些终端会被关掉会话、改用系统默认身份重开。`
+                    : ''
+                  if (!window.confirm(`删除凭证「${i.name}」？${detail}\n\n这个操作不能撤回。`)) return
+                  await onDeleted(i.id) // 先撤销引用，再删库
+                  onChanged(await window.termscape.deleteIdentity(i.id))
+                }}
               >
                 删除
               </button>
@@ -1538,6 +1560,70 @@ function Board(): React.JSX.Element {
   )
 
   /** 撤回：先把屏幕内容写回快照文件，再放节点回画布（顺序反了就会先 spawn 后回灌，白屏） */
+  /** 这个凭证被谁在用（**全工作区**，不只当前画布 —— 别的项目里的终端一样会断） */
+  const identityUsage = useCallback(
+    (idn: string): { terminals: number; nodes: number; presets: number } => {
+      const allNodes = [
+        ...nodesRef.current,
+        ...Object.entries(boardsRef.current)
+          .filter(([pid]) => pid !== activeProject)
+          .flatMap(([, b]) => b.nodes)
+      ]
+      let terminals = 0
+      let nodes = 0
+      for (const n of allNodes) {
+        const t = (n as { type?: string }).type
+        const bound = (n as { data?: { identityId?: string }; identityId?: string })
+        const owned = bound.data?.identityId ?? bound.identityId
+        if (owned !== idn) continue
+        if (t === 'credential') nodes++
+        else if (t === 'terminal') terminals++
+      }
+      return { terminals, nodes, presets: presets.filter((p) => p.identityId === idn).length }
+    },
+    [activeProject, presets]
+  )
+
+  /**
+   * 删凭证前先把画布上的引用撤干净。
+   *
+   * **顺序很重要**：先关会话、清 identityId、摘掉凭证节点和线，**再**删库。
+   * 反过来的话，那些终端会在下一次启动时因为"凭证不存在"被 fail-closed 挡住，
+   * 用户看到的是一排起不来的终端，而不是一次干净的降级。
+   * 别的项目（非当前画布）里的引用也要清，否则切过去就是一堆起不来的终端。
+   */
+  const revokeIdentityEverywhere = useCallback(
+    async (idn: string): Promise<void> => {
+      const hit = nodesRef.current.filter(
+        (n) =>
+          (n.type === 'terminal' || n.type === 'credential') &&
+          (n.data as { identityId?: string }).identityId === idn
+      )
+      await Promise.all(
+        hit.filter((n) => n.type === 'terminal').map((n) => window.termscape.destroy(n.id).catch(() => ''))
+      )
+      const credIds = new Set(hit.filter((n) => n.type === 'credential').map((n) => n.id))
+      setNodes((ns) =>
+        ns
+          .filter((n) => !credIds.has(n.id))
+          .map((n) =>
+            n.type === 'terminal' && (n.data as { identityId?: string }).identityId === idn
+              ? { ...n, data: { ...n.data, identityId: undefined, credBound: false } }
+              : n
+          )
+      )
+      setEdges((es) => es.filter((e) => !credIds.has(e.source) && !credIds.has(e.target)))
+      // 非当前画布的快照也要清，否则切过去全是起不来的终端
+      for (const b of Object.values(boardsRef.current)) {
+        b.nodes = b.nodes
+          .filter((n) => !(n.type === 'credential' && n.identityId === idn))
+          .map((n) => (n.identityId === idn ? { ...n, identityId: undefined } : n))
+      }
+      setSaveTick((t) => t + 1)
+    },
+    []
+  )
+
   const requestDelete = useCallback(
     (ids: string[], label: string): void => {
       void removeNodes(ids, label)
@@ -1598,7 +1684,12 @@ function Board(): React.JSX.Element {
               <PresetPanel presets={presets} identities={identities} onChanged={setPresets} />
             )}
             renderIdentities={() => (
-              <IdentityPanel identities={identities} onChanged={setIdentities} />
+              <IdentityPanel
+                identities={identities}
+                onChanged={setIdentities}
+                usageOf={identityUsage}
+                onDeleted={revokeIdentityEverywhere}
+              />
             )}
             /* 导出取的是内存里的实时状态，不是磁盘那份 —— 磁盘那份最多落后一个 500ms 防抖周期，
                但用户点「导出」时刚拖完的节点位置就该在里面 */

@@ -3,12 +3,17 @@
  * 密文落盘 userData/identities.bin；明文只在内存；渲染层只拿元数据（不含 env 值）
  */
 import { app, safeStorage } from 'electron'
-import { readFile, writeFile, rename } from 'node:fs/promises'
+import { readFile, writeFile, rename, unlink } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import path from 'node:path'
-import { isReservedEnvKey, materializeEnv, type ResolvedEnv } from './identity-env'
+import {
+  applyIdentityEnv,
+  isReservedEnvKey,
+  materializeEnv,
+  type ResolvedEnv
+} from './identity-env'
 import { parseClaudeAuth, parseCodexLogin, type LoginStatus } from './login-status.ts'
 
 // 展开规则搬到 identity-env.ts（不依赖 electron，才能被 node --test 覆盖）
@@ -33,31 +38,70 @@ export interface IdentityMeta {
 const file = (): string => path.join(app.getPath('userData'), 'identities.bin')
 
 let cache: Identity[] | null = null
+/**
+ * 库存在但读不出来（解密失败 / JSON 坏了）。
+ *
+ * **这个状态必须和"库是空的"分开**。原来两者都是 `cache = []`，于是：
+ * 解密失败 → 界面显示"还没有凭证" → 用户新建一个 → persist 把只含这一个的列表
+ * 写回去 → **原来那份密文被整个覆盖，所有钥匙一次性丢光**。
+ * 换机器、Keychain 变更、磁盘半坏都会触发，而且用户毫无察觉。
+ */
+let readError: string | null = null
 
 async function load(): Promise<Identity[]> {
   if (cache) return cache
   if (!existsSync(file())) {
+    // 文件不存在 = 真的还没有凭证，这是合法的空
     cache = []
     return cache
   }
   try {
     const buf = await readFile(file())
-    cache = JSON.parse(safeStorage.decryptString(buf)) as Identity[]
-  } catch {
-    // 解密失败（换机器/Keychain 变更）→ 视为空，不崩
-    cache = []
+    const parsed = JSON.parse(safeStorage.decryptString(buf)) as unknown
+    if (!Array.isArray(parsed)) throw new Error('不是数组')
+    cache = parsed as Identity[]
+    readError = null
+  } catch (e) {
+    // **绝不 cache=[]**：那会让后续任何一次写入把整库抹平
+    readError = String((e as Error)?.message ?? e)
+    console.error('凭证库读不出来，已进入只读保护：', readError)
+    return []
   }
   return cache
 }
 
+/** 库是不是处于"读不出来"的只读保护态 */
+export function identityStoreError(): string | null {
+  return readError
+}
+
+/* 所有写操作排队。并发的 upsert/delete 会争同一个 tmp 文件，
+   可能 rename ENOENT 或磁盘与内存分叉（丢一把钥匙） */
+let writeChain: Promise<unknown> = Promise.resolve()
+const serializeWrite = <T>(fn: () => Promise<T>): Promise<T> => {
+  const next = writeChain.then(fn, fn)
+  writeChain = next.catch(() => undefined)
+  return next
+}
+
 async function persist(list: Identity[]): Promise<void> {
+  // 读都读不出来时**拒绝写**，否则就是拿一个残缺的内存视图去覆盖真库
+  if (readError) {
+    throw new Error(`凭证库当前读不出来（${readError}），已拒绝写入以免覆盖原文件`)
+  }
   if (!safeStorage.isEncryptionAvailable()) {
     throw new Error('系统加密不可用，拒绝明文存储凭证')
   }
   const buf = safeStorage.encryptString(JSON.stringify(list))
-  const tmp = `${file()}.tmp`
-  await writeFile(tmp, buf)
-  await rename(tmp, file())
+  // 随机后缀：两次并发写不会撞同一个 tmp
+  const tmp = `${file()}.${randomUUID().slice(0, 8)}.tmp`
+  try {
+    await writeFile(tmp, buf)
+    await rename(tmp, file())
+  } catch (e) {
+    await unlink(tmp).catch(() => undefined)
+    throw e
+  }
   cache = list
 }
 
@@ -72,7 +116,7 @@ export async function listIdentities(): Promise<IdentityMeta[]> {
   return (await load()).map(toMeta)
 }
 
-export async function upsertIdentity(input: {
+async function upsertIdentityInner(input: {
   id?: string
   name: string
   provider: Identity['provider']
@@ -95,16 +139,19 @@ export async function upsertIdentity(input: {
     while (used.has(`${input.provider}${n}`)) n++
     name = `${input.provider}${n}`
   }
-  const existing = input.id ? list.find((i) => i.id === input.id) : undefined
+  /* 不可变副本：原来是就地改共享 cache，写盘失败时内存已经变了，
+     界面显示的是"改成功了"，磁盘上还是旧的 */
+  const next = list.map((i) => ({ ...i }))
+  const existing = input.id ? next.find((i) => i.id === input.id) : undefined
   if (existing) {
     existing.name = name
     existing.provider = input.provider
     existing.env = env
   } else {
-    list.push({ id: randomUUID(), name, provider: input.provider, env })
+    next.push({ id: randomUUID(), name, provider: input.provider, env })
   }
-  await persist(list)
-  return list.map(toMeta)
+  await persist(next)
+  return next.map(toMeta)
 }
 
 /**
@@ -113,22 +160,31 @@ export async function upsertIdentity(input: {
  * 单独一个入口是因为 upsert 会用传进来的 env 整体替换 —— 而渲染层**拿不到 env 值**
  * （只有 envKeys），想改名就必须重新输一遍全部密钥，等于不能改名。
  */
-export async function renameIdentity(id: string, name: string): Promise<IdentityMeta[]> {
-  const list = await load()
+async function renameIdentityInner(id: string, name: string): Promise<IdentityMeta[]> {
+  const list = (await load()).map((i) => ({ ...i }))
   const found = list.find((i) => i.id === id)
   if (found) {
-    const next = name.trim().slice(0, 60)
-    if (next) found.name = next
+    const trimmed = name.trim().slice(0, 60)
+    if (trimmed) found.name = trimmed
     await persist(list)
   }
   return list.map(toMeta)
 }
 
-export async function deleteIdentity(id: string): Promise<IdentityMeta[]> {
-  const list = (await load()).filter((i) => i.id !== id)
+async function deleteIdentityInner(id: string): Promise<IdentityMeta[]> {
+  const list = (await load()).filter((i) => i.id !== id).map((i) => ({ ...i }))
   await persist(list)
   return list.map(toMeta)
 }
+
+/* 对外的三个写入口一律串行 —— 见 serializeWrite 的注释 */
+export const upsertIdentity = (
+  input: Parameters<typeof upsertIdentityInner>[0]
+): Promise<IdentityMeta[]> => serializeWrite(() => upsertIdentityInner(input))
+export const renameIdentity = (id: string, name: string): Promise<IdentityMeta[]> =>
+  serializeWrite(() => renameIdentityInner(id, name))
+export const deleteIdentity = (id: string): Promise<IdentityMeta[]> =>
+  serializeWrite(() => deleteIdentityInner(id))
 
 export type { LoginStatus } from './login-status.ts'
 
@@ -152,7 +208,12 @@ const findBin = (name: string): string | null =>
 export async function identityLoginStatus(id: string): Promise<LoginStatus> {
   const found = (await load()).find((i) => i.id === id)
   if (!found) return { state: 'unknown', detail: '凭证不存在' }
-  const { set } = materializeEnv(found.env, app.getPath('home'))
+  const resolved = materializeEnv(found.env, app.getPath('home'))
+  const { set } = resolved
+  /* **必须带上 unset**：订阅型凭证配了 `ANTHROPIC_API_KEY=` 时终端里那把 key 是删掉的，
+     这里若只合并 set，查出来会是 `api_key` → 界面显示「按量计费」，
+     和这个终端实际的计费方式正好相反。 */
+  const probeEnv = applyIdentityEnv(process.env, resolved)
 
   if (found.provider === 'codex') {
     const home = set['CODEX_HOME'] || path.join(app.getPath('home'), '.codex')
@@ -162,8 +223,7 @@ export async function identityLoginStatus(id: string): Promise<LoginStatus> {
       execFile(
         bin,
         ['login', 'status'],
-        // 同上：整个 identity env 都传，凭证里配了 OPENAI_API_KEY 时认证来源就不是订阅
-        { timeout: 8000, env: { ...process.env, ...set, CODEX_HOME: home } },
+        { timeout: 8000, env: { ...probeEnv, CODEX_HOME: home } },
         (err, stdout, stderr) => resolve(err ? `${stdout}${stderr}` : stdout)
       )
     })
@@ -185,7 +245,7 @@ export async function identityLoginStatus(id: string): Promise<LoginStatus> {
       execFile(
         bin,
         ['auth', 'status', '--json'],
-        { timeout: 8000, env: { ...process.env, ...set } },
+        { timeout: 8000, env: probeEnv },
         (err, stdout, stderr) => resolve(err ? `${stdout}${stderr}` : stdout)
       )
     })

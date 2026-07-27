@@ -43,6 +43,26 @@ const RESERVED = /^(TERMBOARD_|PATH$|TMUX$|TMUX_PANE$|TERM$|SHELL$|HOME$)/
 /** 这个键能不能出现在凭证里 */
 export const isReservedEnvKey = (k: string): boolean => RESERVED.test(k)
 
+/**
+ * 把一个 identity 的 env 包应用到基础环境上。**set 和 unset 必须一起用**。
+ *
+ * 单独抽出来是因为原先三处各写各的，而少写 unset 的那处会得出相反的结论：
+ * 一个订阅型凭证配了 `ANTHROPIC_API_KEY=`（删掉继承来的 key），终端里确实删掉了，
+ * 但查登录态那处只用了 `{set}` 再合并完整 `process.env` —— 那把 key 还在，
+ * 于是 `claude auth status` 报 `api_key`，界面显示「按量计费」。
+ * **和这个终端实际的计费方式正好相反。**
+ */
+export function applyIdentityEnv(
+  base: NodeJS.ProcessEnv,
+  resolved: ResolvedEnv | null
+): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = { ...base }
+  if (!resolved) return out
+  for (const k of resolved.unset) delete out[k]
+  for (const [k, v] of Object.entries(resolved.set)) out[k] = v
+  return out
+}
+
 export function materializeEnv(raw: Record<string, string>, home: string): ResolvedEnv {
   const set: Record<string, string> = {}
   const unset: string[] = []

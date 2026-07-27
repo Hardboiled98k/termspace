@@ -22,6 +22,13 @@ export interface QuotaAccount {
   name: string
   /** identity 展开后的 env（只需要 CODEX_HOME / CLAUDE_CONFIG_DIR 两个键） */
   env: Record<string, string>
+  /**
+   * 计费方式。**`api-key` 的账号绝不能走订阅采集器** ——
+   * 没有隔离目录时采集器会回退到默认目录/默认钥匙串，把**系统默认订阅号的额度**
+   * 标在这个 API key 名下，用户看到的百分比属于另一个账号，
+   * 而这个终端实际是按量计费。显示反了比不显示糟得多。
+   */
+  kind?: 'subscription' | 'api-key'
 }
 
 export interface QuotaHub {
@@ -41,7 +48,7 @@ export function fingerprint(list: QuotaAccount[]): string {
         .sort(([x], [y]) => (x < y ? -1 : 1))
         .map(([k, v]) => `${k}=${v}`)
         .join(',')
-      return `${a.accountId}|${a.provider}|${a.name}|${env}`
+      return `${a.accountId}|${a.provider}|${a.name}|${a.kind ?? ''}|${env}`
     })
     .sort()
     .join('\n')
@@ -57,6 +64,21 @@ export function startQuotaHub(
   let running = false
 
   const collectOne = async (a: QuotaAccount): Promise<AccountQuota> => {
+    /* 按量计费的账号如实说"查不到订阅额度"，而不是从 HUD 里消失 ——
+       凭证明明在画布上，额度面板里却没有它，用户只会以为坏了。
+       各家的按量用量 API 见 docs/QUOTA.md「明确不做」那节（多数要 org admin key）。 */
+    if (a.kind === 'api-key') {
+      return {
+        accountId: a.accountId,
+        provider: a.provider,
+        name: a.name,
+        state: 'unavailable',
+        capturedAt: now(),
+        source: '-',
+        windows: [],
+        hint: 'API key 按量计费，没有订阅额度可查'
+      }
+    }
     try {
       if (a.provider === 'codex') {
         return await collectCodex({

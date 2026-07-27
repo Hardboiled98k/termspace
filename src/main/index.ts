@@ -40,6 +40,7 @@ import {
   paneCommand
 } from './tmux'
 import { tmuxClientEnv } from './tmux-args'
+import { applyIdentityEnv, type ResolvedEnv } from './identity-env'
 
 // dev 下 app 名默认是 "Electron"，userData 会指向共享目录 → 显式隔离
 app.setPath('userData', path.join(app.getPath('appData'), 'termboard'))
@@ -462,7 +463,7 @@ ipcMain.handle(
       (settings.defaultShell && existsSync(settings.defaultShell) ? settings.defaultShell : '') ||
       process.env['SHELL'] ||
       '/bin/zsh'
-    const env: Record<string, string> = {}
+    let env: Record<string, string> = {}
     for (const [k, v] of Object.entries(process.env)) {
       if (v !== undefined) env[k] = v
     }
@@ -502,22 +503,20 @@ ipcMain.handle(
       return { ok: false, error: 'identity-missing' }
     }
     if (idEnv) {
-      /* 先删：继承下来的 OPENAI_API_KEY / ANTHROPIC_API_KEY 会让 CLI 绕过订阅走 key 计费。
-         保留键在 materializeEnv 里已经滤掉了，这里再挡一道 —— 老凭证可能是在加保护
-         之前存进去的，光靠入口那道会漏。 */
-      for (const k of idEnv.unset) {
-        if (k.startsWith('TERMBOARD_')) continue
-        delete env[k]
+      /* set 和 unset 一起应用（applyIdentityEnv 是三处共用的那一份）。
+         unset 是命根子：继承下来的 OPENAI_API_KEY / ANTHROPIC_API_KEY 会让 CLI
+         绕过订阅走 key 计费。保留键在 materializeEnv 里已滤掉，这里再挡一道 ——
+         老凭证可能是在加保护之前存进去的。 */
+      const safe: ResolvedEnv = {
+        set: Object.fromEntries(
+          Object.entries(idEnv.set).filter(([k]) => !k.startsWith('TERMBOARD_'))
+        ),
+        unset: idEnv.unset.filter((k) => !k.startsWith('TERMBOARD_'))
       }
-      for (const [k, v] of Object.entries(idEnv.set)) {
-        // 不许覆盖自家门控：改了 TERMBOARD_HOOK_TOKEN 之类，这个节点的状态/派活就哑了
-        if (k.startsWith('TERMBOARD_')) continue
-        env[k] = v
-      }
-      // identity 若整个改写了 PATH，把 tb 的目录重新顶回最前，否则 agent 用不了 tb
-      if (idEnv.set['PATH'] && hookSystem) {
-        env['PATH'] = `${hookSystem.binDir}:${idEnv.set['PATH']}`
-      }
+      // applyIdentityEnv 返回新对象（unset 是真删掉的），所以要整个换掉而不是 Object.assign
+      env = applyIdentityEnv(env, safe) as Record<string, string>
+      /* PATH 现在是保留键（identity 改不了它），所以不再需要"把 tb 目录顶回最前"那段。
+         留个注释是因为这条曾经真的坏过：identity 改写 PATH 后 agent 就找不到 tb 了。 */
     }
 
     /* codex 的状态灯：把托管 hook 装进这个节点实际使用的 CODEX_HOME。
@@ -1365,7 +1364,19 @@ app.whenReady().then(async () => {
     for (const i of ids) {
       if (i.provider !== 'codex' && i.provider !== 'claude') continue
       const env = (await resolveIdentityEnv(i.id))?.set ?? {}
-      accounts.push({ accountId: i.id, provider: i.provider, name: i.name, env })
+      /* **只有指明了隔离目录的凭证才是"订阅号"**。
+         没有 CODEX_HOME / CLAUDE_CONFIG_DIR 的凭证（典型是纯 API key）若也建采集器，
+         采集器会回退到默认目录 / 默认钥匙串，**把系统默认订阅号的额度标在它名下** ——
+         用户看到的百分比属于另一个账号，而这个终端实际是按量计费。
+         界面显示的和真实计费方式正好相反，比不显示糟得多。 */
+      const isolated = i.provider === 'codex' ? env['CODEX_HOME'] : env['CLAUDE_CONFIG_DIR']
+      accounts.push({
+        accountId: i.id,
+        provider: i.provider,
+        name: i.name,
+        env,
+        kind: isolated ? 'subscription' : 'api-key'
+      })
     }
     quotaHub?.setAccounts(accounts)
   }
