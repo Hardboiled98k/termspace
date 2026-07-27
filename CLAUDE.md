@@ -97,6 +97,26 @@ TERMBOARD_PANEL=terminal npm run dev      # 自检：直接展开设置面板某
 - identity env **不许覆盖 `TERMBOARD_*`**（会让该节点的状态/派活哑掉）；若它改写了 `PATH`，
   要把 `tb` 的目录重新顶回最前
 
+## 额度采集（2026-07-27）
+
+`src/main/quota/` —— **一个账号一个采集器**，全局单例拉一次广播给所有节点（额度是账号级的，
+绝不每节点各拉）。5 分钟一轮。完整调研见 `docs/QUOTA.md` 与 `docs/QUOTA-PLAN.md`。
+
+- **Claude**：`GET https://api.anthropic.com/api/oauth/usage`，token 从钥匙串取。
+  必须 `execFile('/usr/bin/security')` —— 那条记录的 ACL 信任的是 security 这个二进制本身，
+  走 keytar 之类的原生绑定会弹授权框。**拿不到 token 就绝不发请求**：匿名请求返回的是
+  429 + `retry-after: 1460`（IP 级封 24 分钟），不是 401。也不做 refresh_token（会和
+  Claude Code 抢写钥匙串）
+- **Codex**：`codex app-server --stdio` 的 JSON-RPC `account/rateLimits/read`。
+  三个坑：① 二进制在 `~/.npm-global/bin`，Electron 从 Finder 启动不继承登录 shell 的 PATH，
+  必须走绝对路径否则把"装了的用户"显示成"未安装"；② `initialize` 的 params 形状错了
+  服务端**静默退出**，一行错都不报；③ 未登录时该方法会**静默挂 25s**，必须硬超时
+- **窗口语义只能从 `windowDurationMins` 推，绝不按数组位置认 5h/周**。实测本机 codex
+  账号只有 10080min（周）一个窗口、`secondary` 是 null —— 按位置认会凭空多出一行 5h
+- `~/.claude/claude-usage.json` 是用户自己的 statusline tee 脚本产物，**不是官方文件**，
+  换机就没有 → 只做最后兜底，且一律标 stale（实测能和真值差 30 多个百分点）
+- state 分五档，`unconfigured` 整块不渲染。**「查不到」和「用了 0%」必须是两种东西**
+
 ## 凭证节点（2026-07-26）
 
 账号在画布上的实体。`credential` 节点 → 终端的连线 = 该终端用这个账号。

@@ -162,36 +162,17 @@ const GROUP_GAP = 16
 const GROUP_PAD = 20
 const GROUP_HEAD = 48
 
-/* ── 额度 HUD（数据源: ~/.claude/claude-usage.json，60s 轮询）── */
-interface QuotaPool {
-  used_percentage: number
-  resets_at: number
-}
-interface Quota {
-  five_hour?: QuotaPool
-  seven_day?: QuotaPool
-  /** 快照时刻（unix 秒）。**必须校验新鲜度** —— 见下面 staleness 的注释 */
-  _captured_at?: number
-}
+/* ── 额度 HUD ──────────────────────────────────────────
+   归属单位是**账号**，不是 provider（见 docs/QUOTA.md）。
+   同时挂两个 codex 订阅时那就是两行，绝不能混成一个数。 */
 
-/**
- * 这份额度是**快照**，不是实时值。
- *
- * 数据来自 ~/.claude/claude-usage.json，写它的是 Claude Code 渲染状态栏时的 tee 脚本 ——
- * 也就是说：**只有在某个 Claude Code 会话活着并刷新状态栏时，这个数才会更新**。
- * 那个会话可以在画布之外（普通终端、IDE），这正是"画布上一个 Claude 节点都没有、
- * HUD 却有数"的原因。反过来，一段时间没跑 Claude 的话，它会**冻在最后一次的值上**，
- * 看起来跟实时数据一模一样 —— 这就是本项目栽过两次的那类静默失败。
- * 所以超过 STALE_SEC 一律显式标"N 分钟前"，别让用户拿旧数做决定。
- */
+/** 超过这个岁数就明确标出来，别让用户拿旧数做决定 */
 const STALE_SEC = 5 * 60
 
-function ago(capturedAt?: number): string | null {
-  if (!capturedAt) return '来源未知'
-  const sec = Math.round(Date.now() / 1000 - capturedAt)
-  if (sec < STALE_SEC) return null // 够新，不打扰
+function ago(capturedAt: number): string {
+  const sec = Math.max(0, Math.round(Date.now() / 1000 - capturedAt))
   const min = Math.round(sec / 60)
-  return min >= 60 ? `${Math.floor(min / 60)} 小时前的快照` : `${min} 分钟前的快照`
+  return min >= 60 ? `${Math.floor(min / 60)} 小时前` : `${min} 分钟前`
 }
 
 function zoneClass(pct: number): string {
@@ -204,36 +185,90 @@ function resetIn(resetsAt: number): string {
   return min >= 60 ? `${Math.floor(min / 60)}h${min % 60}m` : `${min}m`
 }
 
-function QuotaRow({ label, pool }: { label: string; pool: QuotaPool }): React.JSX.Element {
-  const pct = Math.round(pool.used_percentage)
+function QuotaRow({ w }: { w: QuotaWindow }): React.JSX.Element {
+  const pct = Math.round(w.usedPercent)
+  const label = w.scopeModel ? `${w.label}·${w.scopeModel}` : w.label
   return (
-    <div className="quota-row" title={`${label} 已用 ${pct}%，${resetIn(pool.resets_at)} 后重置`}>
+    <div
+      className="quota-row"
+      title={`${label} 已用 ${w.usedPercent}%${w.resetsAt ? `，${resetIn(w.resetsAt)} 后重置` : ''}`}
+    >
       <span className="quota-label">{label}</span>
-      <span className="quota-bar">
-        <span className={`quota-fill ${zoneClass(pct)}`} style={{ width: `${pct}%` }} />
-      </span>
-      <span className="quota-pct">{pct}%</span>
-      <span className="quota-reset">{resetIn(pool.resets_at)}</span>
+      {w.unlimited ? (
+        <span className="quota-unlimited">无限</span>
+      ) : (
+        <>
+          <span className="quota-bar">
+            <span
+              className={`quota-fill ${w.severity === 'critical' ? 'red' : w.severity === 'warning' ? 'yellow' : zoneClass(pct)}`}
+              style={{ width: `${Math.min(100, pct)}%` }}
+            />
+          </span>
+          <span className="quota-pct">{pct}%</span>
+        </>
+      )}
+      <span className="quota-reset">{w.resetsAt ? resetIn(w.resetsAt) : ''}</span>
     </div>
   )
 }
 
-/* 一个供应商一块（未来加 Codex/OpenAI/自定义 API 只需往数组里加） */
-function ProviderBlock({
-  name,
-  pools
+/** state 不是 ok 时 UI 上该说什么。「查不到」和「用了 0%」必须是两种东西 */
+const STATE_NOTE: Record<string, string> = {
+  unavailable: '这次没取到',
+  'unknown-shape': '返回的字段不认识（对方升级了？）',
+  stale: '旧快照'
+}
+
+/**
+ * 一个账号一块。
+ * `usingCount` 是「画布上有几个终端在用这个号」—— 它把"终端里用的"和"账号"连起来；
+ * 0 个却仍在消耗，就说明画布之外也在用这个号（这正是最容易让人困惑的情形）。
+ */
+function AccountBlock({
+  a,
+  usingCount
 }: {
-  name: string
-  pools: { label: string; pool: QuotaPool }[]
-}): React.JSX.Element {
+  a: AccountQuota
+  usingCount: number
+}): React.JSX.Element | null {
+  // 没装/没登录的账号整块不渲染，别拿一行 0% 去占地方
+  if (a.state === 'unconfigured') return null
+  const stale = a.state === 'stale' || Date.now() / 1000 - a.capturedAt > STALE_SEC
   return (
-    <div className="quota-provider">
-      <span className="quota-provider-name">{name}</span>
-      <div className="quota-provider-rows">
-        {pools.map((p) => (
-          <QuotaRow key={p.label} label={p.label} pool={p.pool} />
-        ))}
+    <div className={`quota-account${stale ? ' stale' : ''}`} title={`${a.source}｜${a.hint ?? ''}`}>
+      <div className="quota-account-head">
+        <span className={`identity-provider ${a.provider}`}>{a.provider}</span>
+        <span className="quota-account-name">{a.name}</span>
+        {a.plan && <span className="quota-plan">{a.plan}</span>}
+        <span className={`quota-using${usingCount ? ' on' : ''}`}>{usingCount} 节点</span>
       </div>
+      {a.windows.length > 0 ? (
+        <div className="quota-provider-rows">
+          {a.windows.map((w) => (
+            <QuotaRow key={w.id} w={w} />
+          ))}
+        </div>
+      ) : (
+        <div className="quota-account-note">{STATE_NOTE[a.state] ?? '暂无数据'}</div>
+      )}
+      {a.spend
+        ?.filter((sp) => sp.enabled !== false || sp.usedMinor > 0)
+        .map((sp) => (
+          <div key={sp.label} className="quota-row">
+            <span className="quota-label">{sp.label}</span>
+            <span className="quota-money">
+              {(sp.usedMinor / 100).toFixed(2)}
+              {sp.limitMinor ? ` / ${(sp.limitMinor / 100).toFixed(0)}` : ''} {sp.currency}
+            </span>
+          </div>
+        ))}
+      {(stale || a.hint) && (
+        <div className="quota-account-note">
+          {stale ? `⚠ ${ago(a.capturedAt)}的数` : ''}
+          {stale && a.hint ? ' · ' : ''}
+          {a.hint ?? ''}
+        </div>
+      )}
     </div>
   )
 }
@@ -257,7 +292,7 @@ function BoardHUD({
   ctxMap: Record<string, NodeCtx>
   onFocus: (id: string) => void
 }): React.JSX.Element | null {
-  const [quota, setQuota] = useState<Quota | null>(null)
+  const [quota, setQuota] = useState<AccountQuota[]>([])
   const [collapsed, setCollapsed] = useState(false)
   useEffect(() => window.termscape.onQuota(setQuota), [])
 
@@ -273,22 +308,31 @@ function BoardHUD({
     })
   const shown = agentRows.slice(0, 6)
 
-  const claudePools: { label: string; pool: QuotaPool }[] = []
-  if (quota?.five_hour) claudePools.push({ label: '5h', pool: quota.five_hour })
-  if (quota?.seven_day) claudePools.push({ label: '周', pool: quota.seven_day })
-  const providers = claudePools.length ? [{ name: 'Claude', pools: claudePools }] : []
-  if (providers.length === 0 && agentRows.length === 0) return null
+  /* 每个账号有几个终端在用它。没绑凭证的节点算在「系统默认」头上 ——
+     这一列就是把"终端里用的"和"账号"连起来的那根线。 */
+  const usingCount = (a: AccountQuota): number =>
+    terms.filter((n) =>
+      n.data.identityId
+        ? n.data.identityId === a.accountId
+        : a.accountId === `system:${n.data.provider ?? 'claude'}`
+    ).length
 
-  // 折叠态：只留一行摘要（多订阅时最省地方）
-  const peak = Math.max(0, ...claudePools.map((p) => Math.round(p.pool.used_percentage)))
-  const staleLabel = providers.length ? ago(quota?._captured_at) : null
+  // 没装/没登录的账号整块不出现，别拿一行 0% 占地方
+  const accounts = quota.filter((a) => a.state !== 'unconfigured')
+  if (accounts.length === 0 && agentRows.length === 0) return null
+
+  // 折叠态：只留一行摘要 —— 取所有账号里最吃紧的那个数
+  const peak = Math.max(
+    0,
+    ...accounts.flatMap((a) => a.windows.map((w) => Math.round(w.usedPercent)))
+  )
 
   return (
     <div className={`quota-hud${collapsed ? ' collapsed' : ''}`}>
       <button className="hud-toggle" onClick={() => setCollapsed((c) => !c)}>
         <span className="hud-toggle-label">
           {collapsed
-            ? `${providers.length ? `${peak}%` : ''}${
+            ? `${accounts.length ? `${peak}%` : ''}${
                 attention > 0 ? ` · ${attention} 需要你` : running > 0 ? ` · ${running} 运行` : ''
               }` || '概览'
             : '用量'}
@@ -297,23 +341,16 @@ function BoardHUD({
       </button>
       {!collapsed && (
         <>
-          {providers.length > 0 && (
+          {accounts.length > 0 && (
             <>
-              {/* 必须写清楚这是**账号级**的量。它读的是 ~/.claude/claude-usage.json ——
-                  Claude Code 自己维护的本机全局文件，跟这张画布上有没有 Claude 终端无关。
-                  以前只写一个「用量」，画布上一个 Claude 节点都没有时照样显示百分比，
-                  用户会以为这是画布用掉的。 */}
-              <span className="quota-title" title="读本机 ~/.claude/claude-usage.json，与画布内容无关">
-                账号额度 · 本机全局
+              {/* 写清楚这是**账号级**的量：一个号可能同时被画布外的终端/IDE 用着，
+                  所以「0 节点」不代表它不会涨 —— 这正是最容易让人困惑的地方 */}
+              <span className="quota-title" title="按账号统计，含画布之外在用同一个号的进程">
+                账号额度
               </span>
-              {providers.map((p) => (
-                <ProviderBlock key={p.name} name={p.name} pools={p.pools} />
+              {accounts.map((a) => (
+                <AccountBlock key={a.accountId} a={a} usingCount={usingCount(a)} />
               ))}
-              <span className="quota-foot">
-                {staleLabel
-                  ? `⚠ ${staleLabel} —— 有 Claude 在跑时才会刷新`
-                  : '含画布之外的 Claude（终端、IDE、其他窗口）'}
-              </span>
             </>
           )}
           {agentRows.length > 0 && (

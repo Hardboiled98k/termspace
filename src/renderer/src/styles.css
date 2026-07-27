@@ -270,7 +270,8 @@ body {
   border: 0.5px solid var(--tb-hairline);
   border-radius: 10px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
-  width: 196px;
+  /* 一账号一块 + 按模型细分的桶，196px 装不下 */
+  width: 236px;
   max-height: 70vh;
   overflow-y: auto;
 }
@@ -341,8 +342,13 @@ body {
 .quota-label {
   font-size: 9.5px;
   color: var(--tb-muted);
-  width: 14px;
+  /* 「5h」「周」很短，但按模型细分的桶叫「周·GPT-5.3-Codex-Spark」——
+     固定窄宽度会让它竖着排成一列。给上限 + 省略号，全名进 title */
+  max-width: 84px;
   flex-shrink: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .quota-bar {
   flex: 1;
@@ -2186,4 +2192,69 @@ body {
 .identity-name-edit:focus {
   background: var(--tb-terminal);
   border-color: rgba(10, 132, 255, 0.5);
+}
+
+/* ── 额度 HUD：一个账号一块 ──────────────────────────
+   两个 codex 订阅就是两块，绝不合并成一个数 */
+.quota-account {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 5px 0;
+  border-bottom: 0.5px solid var(--tb-hairline);
+}
+.quota-account:last-of-type {
+  border-bottom: none;
+}
+.quota-account.stale {
+  opacity: 0.68;
+}
+.quota-account-head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+}
+.quota-account-name {
+  font-weight: 600;
+  color: var(--tb-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.quota-plan {
+  font-size: 9px;
+  color: var(--tb-muted);
+  background: rgba(255, 255, 255, 0.07);
+  border-radius: 4px;
+  padding: 1px 4px;
+}
+/* 「N 节点在用」——把"终端里用的"和"账号"连起来的那一列。
+   0 时压暗但**不隐藏**：0 节点却仍在涨，正是"画布之外也在用"的信号 */
+.quota-using {
+  margin-left: auto;
+  font-size: 9px;
+  color: var(--tb-muted);
+  opacity: 0.55;
+  font-variant-numeric: tabular-nums;
+}
+.quota-using.on {
+  opacity: 1;
+  color: var(--tb-blue);
+}
+.quota-account-note {
+  font-size: 9.5px;
+  line-height: 1.4;
+  color: var(--tb-muted);
+}
+.quota-money {
+  margin-left: auto;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: var(--tb-text);
+}
+.quota-unlimited {
+  flex: 1;
+  font-size: 10px;
+  color: var(--tb-green);
 }

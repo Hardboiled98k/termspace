@@ -25,6 +25,7 @@ import { listPresets, upsertPreset, deletePreset } from './preset-store'
 import { startWorkerWatch, workerAction, type WorkerWatch } from './worker-watch'
 import { startRemoteApi, type RemoteApi } from './remote'
 import { resolveBind } from './net-iface'
+import { startQuotaHub, type QuotaHub, type QuotaAccount } from './quota'
 import { evaluate as evaluatePolicy, type PolicyVerdict } from './approval-policy'
 import { getSettings, setSettings, type Settings } from './settings-store'
 import { searchSkills, loadSkill, listSkills } from './skill-index'
@@ -69,6 +70,7 @@ let contextTail: ContextTail | null = null
 let workerWatch: WorkerWatch | null = null
 let mainWin: BrowserWindow | null = null
 let remoteApi: RemoteApi | null = null
+let quotaHub: QuotaHub | null = null
 
 /** 抓某终端当前屏尾部若干行的纯文本（消息中心和远程 API 共用） */
 async function peekPane(id: string, lines: number): Promise<string> {
@@ -1142,25 +1144,38 @@ app.whenReady().then(async () => {
     }
   }
 
-  // 额度 HUD：读官方真值文件（statusline 同源），60s 轮询
-  const quotaFile = path.join(os.homedir(), '.claude', 'claude-usage.json')
-  const pushQuota = async (): Promise<void> => {
-    try {
-      const q = JSON.parse(await readFile(quotaFile, 'utf8'))
-      sendToWin('quota:update', q)
-    } catch {
-      // 文件缺失/损坏时 HUD 不显示
+  /* 额度 HUD：**按账号**采集（见 docs/QUOTA.md）。
+     以前是读一个本机快照文件、只有 Claude、还分不清账号 ——
+     两个 codex 订阅会被混成一个数。 */
+  quotaHub = startQuotaHub(os.homedir(), (list) => sendToWin('quota:update', list))
+  const syncQuotaAccounts = async (): Promise<void> => {
+    const ids = await listIdentities()
+    const accounts: QuotaAccount[] = [
+      // 系统默认 = 没绑凭证的节点用的那个登录态，它也是一个账号
+      { accountId: 'system:claude', provider: 'claude', name: '系统默认', env: {} },
+      { accountId: 'system:codex', provider: 'codex', name: '系统默认', env: {} }
+    ]
+    for (const i of ids) {
+      if (i.provider !== 'codex' && i.provider !== 'claude') continue
+      const env = (await resolveIdentityEnv(i.id))?.set ?? {}
+      accounts.push({ accountId: i.id, provider: i.provider, name: i.name, env })
     }
+    quotaHub?.setAccounts(accounts)
   }
-  const quotaTimer = setInterval(() => void pushQuota(), 60_000)
-  app.on('before-quit', () => clearInterval(quotaTimer))
+  void syncQuotaAccounts()
+  // 凭证增删后要重建账号表，否则新加的号永远不出现在 HUD 里
+  ipcMain.on('quota:sync', () => void syncQuotaAccounts())
+  app.on('before-quit', () => quotaHub?.dispose())
 
   const win = createWindow()
   mainWin = win
   // 渲染层 React mount 后主动握手 → 重推全部状态
   // （did-finish-load 早于 React 订阅注册，直接推会竞态丢失）
   ipcMain.on('renderer:ready', () => {
-    void pushQuota()
+    // reload 后先把已有快照推回去（HUD 别空一拍），再让 hub 按自己的节奏刷
+    const snap = quotaHub?.snapshot() ?? []
+    if (snap.length) sendToWin('quota:update', snap)
+    quotaHub?.refresh()
     workerWatch?.refresh()
     // 首启征求 hook 写入同意：放在窗口起来之后问，别卡启动；自检截图模式下跳过。
     // renderer:ready 每次 reload/HMR 都会来，askedConsent 保证一轮只问一次。

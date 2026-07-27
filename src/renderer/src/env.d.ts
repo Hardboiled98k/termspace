@@ -14,6 +14,40 @@ interface AppSettings {
   remoteBind: 'loopback' | 'tailscale'
 }
 
+/** 额度：一个窗口（5h / 周 / 按模型）。语义只能从 windowMinutes 推，不许按位置认 */
+interface QuotaWindow {
+  id: string
+  label: string
+  usedPercent: number
+  windowMinutes?: number
+  resetsAt?: number
+  severity?: 'normal' | 'warning' | 'critical'
+  scopeModel?: string
+  unlimited?: boolean
+}
+
+interface QuotaSpend {
+  label: string
+  usedMinor: number
+  limitMinor?: number
+  currency: string
+  enabled?: boolean
+}
+
+/** 额度的归属单位是**账号**（见 docs/QUOTA.md），不是 provider 也不是节点 */
+interface AccountQuota {
+  accountId: string
+  provider: string
+  name: string
+  state: 'ok' | 'stale' | 'unconfigured' | 'unavailable' | 'unknown-shape'
+  capturedAt: number
+  source: string
+  plan?: string
+  windows: QuotaWindow[]
+  spend?: QuotaSpend[]
+  hint?: string
+}
+
 /** 审批规则引擎的判定。**没有 allow** —— 见 src/main/approval-policy.ts */
 interface PolicyVerdict {
   decision: 'require_human' | 'deny'
@@ -145,14 +179,7 @@ interface TermscapeApi {
       model: string
     }) => void
   ) => () => void
-  onQuota: (
-    cb: (q: {
-      five_hour?: { used_percentage: number; resets_at: number }
-      seven_day?: { used_percentage: number; resets_at: number }
-      /** 快照时刻（unix 秒）。这份数据只在有 Claude 会话刷状态栏时更新，必须校验新鲜度 */
-      _captured_at?: number
-    }) => void
-  ) => () => void
+  onQuota: (cb: (list: AccountQuota[]) => void) => () => void
   ready: () => void
   workerAction: (
     action: 'result' | 'kill' | 'send' | 'clean',
