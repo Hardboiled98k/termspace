@@ -6,6 +6,7 @@
  */
 import { collectClaude } from './claude'
 import { collectCodex } from './codex'
+import { collectCopilot } from './copilot'
 import { now, type AccountQuota } from './types'
 
 export type { AccountQuota, QuotaWindow, QuotaSpend, QuotaState } from './types'
@@ -50,6 +51,9 @@ export function startQuotaHub(
           codexHome: a.env['CODEX_HOME'] || `${homeDir}/.codex`,
           homeDir
         })
+      }
+      if (a.provider === 'copilot') {
+        return await collectCopilot({ accountId: a.accountId, name: a.name })
       }
       if (a.provider === 'claude') {
         return await collectClaude({

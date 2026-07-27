@@ -1153,7 +1153,9 @@ app.whenReady().then(async () => {
     const accounts: QuotaAccount[] = [
       // 系统默认 = 没绑凭证的节点用的那个登录态，它也是一个账号
       { accountId: 'system:claude', provider: 'claude', name: '系统默认', env: {} },
-      { accountId: 'system:codex', provider: 'codex', name: '系统默认', env: {} }
+      { accountId: 'system:codex', provider: 'codex', name: '系统默认', env: {} },
+      // Copilot 只有一个账号（跟着 gh 的登录态走），没有多号概念
+      { accountId: 'system:copilot', provider: 'copilot', name: 'GitHub', env: {} }
     ]
     for (const i of ids) {
       if (i.provider !== 'codex' && i.provider !== 'claude') continue
