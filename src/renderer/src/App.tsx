@@ -1119,7 +1119,9 @@ function Board(): React.JSX.Element {
       if (!kind) return
       setEdges((es) => addEdge({ ...c, ...edgeStyle(kind) }, es))
     },
-    [nodes]
+    // identities 用在确认框里显示凭证名字；漏了它就会拿旧列表去查，
+    // 刚新建的凭证连线时确认框写的是 id 而不是名字
+    [nodes, identities]
   )
 
   /** 上一拍有凭证连线的终端。用来识别「线被删了」这个瞬间 */

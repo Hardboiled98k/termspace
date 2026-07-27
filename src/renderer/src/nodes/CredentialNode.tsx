@@ -93,7 +93,13 @@ export function CredentialNode({ id, data, selected }: NodeProps<CredentialNodeT
         <div className="cred-keys">{me.envKeys.join(' · ')}</div>
       )}
       {state === 'out' && (
-        <div className="cred-hint">在连着的终端里跑一次 codex login</div>
+        /* 按 provider 说该跑哪条命令。写死 codex 的话，claude 凭证上会显示
+           一条在那个终端里根本不存在的命令 */
+        <div className="cred-hint">
+          {me?.provider === 'claude'
+            ? '在连着的终端里跑一次 claude 并登录'
+            : `在连着的终端里跑一次 ${me?.provider ?? 'codex'} login`}
+        </div>
       )}
       {!data.identityId && <div className="cred-hint">右键选一个凭证</div>}
       {/* 只出不进：凭证是被终端用的，不接受任何入边 */}
