@@ -66,6 +66,15 @@ TERMBOARD_PANEL=terminal npm run dev      # 自检：直接展开设置面板某
 - **workspace 落盘必须原子**：tmp+rename + `.bak` + 损坏隔离。裸 writeFile 写一半被杀 =
   JSON 截断 → load 当成首次启动 → 画布归零，且随后 reap 把所有 tmux 会话当孤儿杀光
 - **删节点必须连带删连线**：连线是授权图，悬空连线 = 新节点白捡旧节点的授权
+- **关标签页留下的 board 必须能被认领回来**（`reclaimBoardId` / `orphanBoardsToRecover`）。
+  `closeProject` 有意保留画布和 tmux 会话，但 `addProject` 原来每次铸新 pid，
+  于是"重新添加同目录即恢复"根本做不到。**症状不是报错也不是丢数据，是数据留得太好**：
+  reap 认的是"所有 board 里出现过的节点 id"，孤儿 board 里的终端会一直活下去，
+  界面上看不见、关不掉。本机实测躺着 4 个孤儿 board、两个活了三天的终端。
+  → board 上存 `cwd`，同目录再加时认领原 pid（认 pid 不搬节点，pid 决定上下文文件名）；
+  正在用的 board 不认领（同目录开两个标签页是合法的）；
+  没有 cwd 的老孤儿在启动时直接给标签页，判据是**有没有 terminal/browser 节点**
+  —— 只剩自动播种的 `ctx-hub` 不算，那是空画布且没有活进程要救
 - **节点 id 不可复用**（`board-serde.ts` 的 `newNodeId`，形如 `t-7k3f9a`）。
   老实现是 `max+1`，删掉 `t7` 再建一个还叫 `t7` —— 而 nodeId 同时是 **tmux 会话名
   `tb-<id>`、scrollback 文件名、上下文文件名、hook token 文件名、pty 表的键、授权图的键**，

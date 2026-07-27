@@ -117,8 +117,13 @@ curl -o /dev/null -w '%{http_code}\n' http://timestamp.apple.com/ts01   # 302 = 
 ## 自用不需要公证
 
 ```bash
-npm run dist:local   # 签名，跳过公证
+npm run dist:local   # 签名、跳过公证、**只出 arm64**、收尾自动 npm run rebuild
 ```
+
+只出 arm64 是因为自用就装在这台机上，而双架构要跑两遍签名（几千个文件各盖一次
+时间戳），实测 25 分钟 → 50 分钟。发版才需要 `dist:signed` 的双架构。
+末尾串了 `npm run rebuild` 是因为打包会把 `node_modules` 里的 node-pty
+留在最后那一轮的架构上（见上一节）。
 
 quarantine 属性只有浏览器/AirDrop 下载才加，本机构建和 `scp` 传过去的包都没有，
 直接 `cp -R` 到 `/Applications` 就能跑。`spctl --assess` 会报 `rejected`，那是预期的。
