@@ -93,6 +93,15 @@ TERMBOARD_PANEL=terminal npm run dev      # 自检：直接展开设置面板某
   学 TerminalNode：保持挂载 + `visibility:hidden`
 - **派活是最危险的一段**：注入 = 替用户敲回车。只接受当前活着的 agent 会话
   （靠 session_id 挡 SessionEnd 之后的迟到事件），状态判定 fail-closed，改动后跑 `npm test`
+- **检查和落笔之间只要还有 await，就得在落笔那一刻再查一遍**：授权复查在
+  前台探测和 stat **之前**，这两步各一个 await，足够 agent 退出 —— 那时 pane 里是
+  光秃秃的 shell，`writeToPty` 就是直接执行命令。同类的还有 remote.ts 的"读 body
+  是异步的，开关要在 await 之后重查"
+- **必须有单实例锁**（`app.requestSingleInstanceLock`）：dev 和打包版共用同一个
+  userData（有意为之，换目录会让所有 tmux 会话变孤儿），同时开两个就会 workspace.json
+  互相整份覆盖、reap 把对方的会话当孤儿杀光、hook/远程端口抢不到。
+  用 `app.exit()` 不用 `app.quit()` —— quit 要等 will-quit，这中间 whenReady
+  会先建出第二个窗口，而窗口一挂载就开始读 workspace 并起防抖保存
 
 ## 同机多订阅账号（2026-07-26）
 
@@ -135,6 +144,13 @@ TERMBOARD_PANEL=terminal npm run dev      # 自检：直接展开设置面板某
   账号只有 10080min（周）一个窗口、`secondary` 是 null —— 按位置认会凭空多出一行 5h
 - `~/.claude/claude-usage.json` 是用户自己的 statusline tee 脚本产物，**不是官方文件**，
   换机就没有 → 只做最后兜底，且一律标 stale（实测能和真值差 30 多个百分点）
+- **采集期间来的 `setAccounts` 不能丢**：一轮采集要几秒（codex 未登录时硬超时 25s），
+  用户正好在这段时间改了凭证的隔离目录，那次刷新会被 `if (running) return` 吃掉；
+  而正在跑的那轮用的是**旧账号列表**（`Promise.all` 的入参在 await 之前就求值完了），
+  它结束时还会把新配置的显示盖回去。要 pending 补跑
+- **凭证带 API key 但没配隔离目录时，别去查登录态**：`codex login status` 查的是
+  默认 `~/.codex` —— 那是**系统默认号**。界面会在这个凭证名下显示别人的"已登录"，
+  用户以为在烧订阅额度，实际每次调用都在出账单。判据要和额度那边的 `kind` 一致
 - state 分五档。**「查不到」「未登录」「用了 0%」必须是三种东西** —— 未登录能自己修
   （去跑一次 login），查不到只能等。所以 `unconfigured` 只藏"自动探测的系统号且没人在用"，
   **用户自建的凭证即使未登录也必须占位**，否则那个号在界面上就是凭空消失
@@ -217,6 +233,31 @@ npm run dist:signed
 - 验收三连：`codesign --verify --deep --strict` / `spctl --assess --type execute`
   （要看到 `source=Notarized Developer ID`）/ `stapler validate`
 
+## 跨机派活（2026-07-27）
+
+`tb ask <ssh别名>:<节点> <任务>` —— 走用户已有的免密 ssh，**不新增任何网络暴露面**
+（两边 hook server 照旧只绑 127.0.0.1，ssh 隧道进来的源地址本身就是回环）。
+评审全文见 `docs/peer-review-codex.md`。
+
+- **不要改成给 `remote.ts` 加 `/api/delegate`**（这是最初的方案，被否了）：字面上不是
+  exec，安全语义上是 RCE-by-proxy —— 往一个有 Bash 权限的 agent 里注入提示词。
+  ssh 那条路上，能连进来的人本来就有完整 shell 权限，没有新增能力
+- **alias 白名单是安全判据不是配置便利**：alias 原样进 `ssh` 的 argv，
+  `-oProxyCommand=…` 这种"机器名"会在**本机**执行任意命令。格式校验（`peer.ts`
+  的 `isPeerAlias`）+ 白名单两道，settings 读盘时也滤一次 —— 判据必须共用同一个，
+  各写一份正则改一处漏一处
+- **对端授权不走 `authorizeLink`**：那个函数比对画布连线 `boardLinks`，而 peer 不是
+  画布上的节点，比对永远不成立 —— 只会弹一个远端没人看的窗，还留下匹配不上的幽灵 grant。
+  跨机的判据是设置里的开关，且要在 `authorize` 回调里再查一遍（注入前最后一个可控点）
+- **helper 留在被派活那一侧**：hook 端口每次启动都变、token 只在本机文件里，
+  对面既拿不到也不该拿。跨机链路上只传任务本身
+- **任务正文走 stdin，绝不进 argv** —— `ps` 对同机所有用户可见
+- **helper 路径要用双引号**：macOS 的 userData 路径含空格（`Application Support`），
+  不引的话对端 shell 会拆成三个参数；用双引号而非单引号是因为 `$HOME` 要在对端展开
+- 超时 240s（远端 delegate）< 260s（ssh）< 320s（tb 的 curl），**且不自动重试**：
+  注入不可撤回，重试就是往对面 agent 里注两遍。断线只能理解成 detach
+- 未做：`requestId` 幂等（人工重试仍会重复注入）；`tb agents` 看不到远端节点
+
 ## 授权模型（同 UID 前提，务必如实描述）
 
 跨节点动作（`tb ask` / `tb browser`）走「连线即授权」+ 弹窗兜底。但所有终端与 app 同 UID，
@@ -231,6 +272,7 @@ M1–M6 与 F1–F8 均有可用实现；签名公证、手机端、三家额度
 | 未做 | 为什么 |
 |------|--------|
 | **MCP 形态** | F7/F8 现在走 `tb` + 回环 HTTP，够用 |
+| 跨机的 `requestId` 幂等 / `tb agents` 列远端节点 | 跨机派活刚落地，先看实际用起来缺什么 |
 | **CI / 自动更新 / x64 包** | 仓库还没有 remote，`publish: null`。等真要发了再配，现在纯投机 |
 | **手机端完整 PWA / 后台推送** | 受安全上下文与 Web Push 限制（见上） |
 | **手机端按设备可撤销 token** | 单用户单机时轮换那把 token 就是撤销，够了 |
