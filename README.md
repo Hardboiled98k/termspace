@@ -15,9 +15,11 @@ Termscape 当前处于 **alpha** 阶段。已有功能可以本地使用，但�
 - **tmux 会话续存**：启用且本机存在 tmux 时，每个节点连接到独立的 `tb-<nodeId>` 会话。刷新、热更新、切换项目画布或退出应用只断开客户端；明确关闭节点才结束会话。没有 tmux 时自动降级为普通 shell。
 - **项目标签页**：可选择本地项目文件夹，为每个项目保存独立画布；新终端以当前项目目录作为工作目录。
 - **凭证管理**：可为 Claude、Codex、Gemini 或自定义命令保存环境变量包，并绑定到 Agent 预设或终端节点。凭证通过 Electron `safeStorage` 使用 macOS Keychain 加密，渲染进程只读取名称、供应商和变量名。
-- **额度 HUD**：读取 `~/.claude/claude-usage.json`，显示 Claude 5 小时/周额度、重置倒计时，以及当前画布的 Agent 状态和上下文占用。数据文件不存在时不显示额度区块。
+- **额度 HUD（按账号）**：归属单位是**账号**不是 provider —— 同时挂两个 Codex 订阅号加一把 API key 就是三块，每块带「N 个节点在用它」。三家都是实时查：Claude 走 OAuth usage 接口（token 从钥匙串取）、Codex 走 `codex app-server` 的 JSON-RPC、Copilot 走 GitHub 接口。「查不到」「未登录」「用了 0%」是三种不同的显示 —— 未登录你能自己修，查不到只能等。详见 `docs/QUOTA.md`。
 - **简报连线注入上下文**：每个项目可建立一份 Markdown 简报；从简报节点连线到终端后，内容会合并到该终端的 `TERMBOARD_CONTEXT_FILE`。内置“Claude ＋共享上下文”预设会通过 `--append-system-prompt` 注入该文件，其他终端可自行读取环境变量指向的文件。
 - **`tb` 工具中枢**：Termscape 终端的 `PATH` 中会注入本地 `tb` 命令，可按需搜索/加载 `~/.claude/skills` 中的 Skill、列出画布 Agent、向其他终端派活，以及控制画布浏览器。服务只监听回环地址并使用会话令牌鉴权。
+- **跨机派活**：`tb ask <ssh别名>:<节点> <任务>` 把任务派到另一台机器上 Termscape 里的终端，做完把回答带回来。走你已经配好的免密 `ssh`，**不新开任何网络端口**（两边的服务照旧只绑回环）。双侧 opt-in：发起侧要把机器加进白名单并逐目标确认一次，接收侧要显式打开「接受跨机派活」。同一个任务十分钟内重发不会二次注入。
+- **自动更新**：后台检测、后台下载，**下载完只提示，装不装你说了算** —— 终端里跑着你的活，自动重启会掐掉正在跑的那一轮 agent 对话。更新源填在设置里（只收 https），换源不用重新打包。
 - **画布内浏览器节点**：基于 Electron `<webview>`，支持地址输入、前进、后退和刷新。Agent 也可通过 `tb browser` 打开或导航页面、读取可见文本、执行 JavaScript 和截图。
 - **集群操作**：框选成组后自动网格排列；组级可群发命令、批量重启（保留身份/目录/启动命令）、折叠（会话保持存活）；组状态取组内最坏情况 `error > attention > running > idle`。
 - **工具调用审批接到画布**：Claude 的 `PermissionRequest` hook 请求被主进程挂起，消息中心直接显示**它要做什么**（工具名 + 命令/路径摘要），批准/拒绝走结构化应答而不是往终端里发按键。超时（120 秒）自动回落到 Claude 自己的交互提示，不会卡住 agent。
@@ -93,7 +95,7 @@ TERMBOARD_SHOT=/tmp/shot.png npm run dev   # 6 秒后截图并退出
 - 上述「授权模型」是产品护栏而非安全边界，同 UID 进程可绕过。
 - 当前只配置了 macOS `arm64` 构建，不提供 Intel macOS、Windows 或 Linux 包。
 - Agent 状态 hooks 目前只支持 Claude Code；Codex、Gemini 和普通 shell 节点不会获得同等的真实状态检测。
-- 额度 HUD 当前只读取 Claude 数据，不提供 Codex、Gemini 或其他供应商额度。
+- 额度只覆盖 Claude / Codex / Copilot 三家订阅。按量计费的用量、以及只有网页端入口的供应商（如 Cursor 个人订阅）查不了，`docs/QUOTA.md` 里逐条写了原因。
 
 ## 许可
 
