@@ -68,6 +68,12 @@ interface UndoEntry {
   edges: Edge[]
   /** nodeId → 销毁前抓到的屏幕内容（撤回时回灌，避免恢复出来是一片空白） */
   screens: Record<string, string>
+  /**
+   * 终端 id → 删除前绑的凭证。
+   * **删凭证节点会连带把相关终端改回系统默认身份**，光恢复节点和线不够 ——
+   * 橙线回来了、实际跑的还是默认账号，画布在说假话。
+   */
+  rebind: Record<string, string>
   at: number
 }
 
@@ -93,7 +99,7 @@ interface SavedEdge {
   id: string
   source: string
   target: string
-  kind: 'context' | 'delegate'
+  kind: 'context' | 'delegate' | 'credential'
 }
 /* 项目 = 一张画布 + 一个工作目录（新终端继承它） */
 interface Project {
@@ -870,12 +876,18 @@ function Board(): React.JSX.Element {
             n.parentId && collapsedGroups.has(n.parentId) ? { ...n, hidden: true } : n
           )
       )
+      /* 老工作区里的凭证边标的是 `context`（那时还没有 credential 这个 kind）。
+         按**源节点类型**纠正一次 —— 不纠的话它们会被当成上下文源，
+         `ctxLinks` → `tb context` 会去读一个凭证节点根本不存在的上下文文件。 */
+      const credIds = new Set(
+        (b?.nodes ?? []).filter((n) => n.type === 'credential').map((n) => n.id)
+      )
       setEdges(
         (b?.edges ?? []).map((e) => ({
           id: e.id,
           source: e.source,
           target: e.target,
-          ...edgeStyle(e.kind)
+          ...edgeStyle(credIds.has(e.source) ? 'credential' : e.kind)
         }))
       )
       viewportRef.current = b?.viewport ?? null
@@ -940,7 +952,7 @@ function Board(): React.JSX.Element {
         id: e.id,
         source: e.source,
         target: e.target,
-        kind: (e.data?.kind as 'context' | 'delegate') ?? 'delegate'
+        kind: (e.data?.kind as SavedEdge['kind']) ?? 'delegate'
       })),
       viewport: viewportRef.current ?? undefined
     }),
@@ -1548,7 +1560,17 @@ function Board(): React.JSX.Element {
         })
       )
       const keptEdges = edgesRef.current.filter((e) => gone.has(e.source) || gone.has(e.target))
-      undoRef.current.push({ label, nodes: doomed, edges: keptEdges, screens, at: Date.now() })
+      /* 删的若是凭证节点，把它绑着的终端此刻的 identityId 记下来 ——
+         撤销逻辑随后会把这些终端改回默认身份，⌘Z 得能把身份也还回去 */
+      const rebind: Record<string, string> = {}
+      for (const e of keptEdges) {
+        const src = nodesRef.current.find((n) => n.id === e.source)
+        if (src?.type !== 'credential') continue
+        const term = nodesRef.current.find((n) => n.id === e.target)
+        const idn = (term?.data as { identityId?: string } | undefined)?.identityId
+        if (term?.type === 'terminal' && idn) rebind[term.id] = idn
+      }
+      undoRef.current.push({ label, nodes: doomed, edges: keptEdges, screens, rebind, at: Date.now() })
       if (undoRef.current.length > 20) undoRef.current.shift()
       setNodes((ns) => ns.filter((n) => !gone.has(n.id)))
       dropEdgesOf(gone)
@@ -1640,8 +1662,26 @@ function Board(): React.JSX.Element {
         text ? window.termscape.seedScrollback(id, text) : Promise.resolve(false)
       )
     )
-    setNodes((ns) => [...ns, ...entry.nodes.filter((n) => !ns.some((x) => x.id === n.id))])
-    setEdges((es) => [...es, ...entry.edges.filter((e) => !es.some((x) => x.id === e.id))])
+    /* id 会被复用（nextIdFrom 取 max+1），所以恢复前先看清现在都有谁：
+       - 被删过、现在又出现了 = 有**新节点占了这个 id**，既不恢复它也不恢复它的连线
+         （连线是授权图，还给新节点等于让陌生人白捡旧节点的授权）
+       - 没被删过、现在还在 = 原封不动的幸存者，安全 */
+    const deleted = new Set(entry.nodes.map((n) => n.id))
+    const present = new Set(nodesRef.current.map((n) => n.id))
+    const safeEnd = (id: string): boolean => (deleted.has(id) ? !present.has(id) : present.has(id))
+    const okEdges = entry.edges.filter((e) => safeEnd(e.source) && safeEnd(e.target))
+
+    setNodes((ns) => {
+      const back = entry.nodes.filter((n) => !ns.some((x) => x.id === n.id))
+      // 身份也要还回去，否则橙线回来了、跑的还是默认账号
+      const restored = ns.map((n) =>
+        n.type === 'terminal' && entry.rebind[n.id]
+          ? { ...n, data: { ...n.data, identityId: entry.rebind[n.id] } }
+          : n
+      )
+      return [...restored, ...back]
+    })
+    setEdges((es) => [...es, ...okEdges.filter((e) => !es.some((x) => x.id === e.id))])
   }, [])
 
   useEffect(() => {

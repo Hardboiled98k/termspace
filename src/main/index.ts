@@ -352,10 +352,31 @@ function destroyPty(id: string): Promise<string> {
     await pendingSnapshots.get(id) // 等在飞的抓屏落完，否则下一行删了又被写回来
     // 快照必须删：否则删掉节点后，新节点若拿到同一个 id 会回灌已删除终端的内容
     await unlink(scrollbackFile(id)).catch(() => undefined)
+    /* **kill 的结果必须验**。原来直接忽略返回值：kill-session 超时或失败被压成 false，
+       随后 `new-session -A` 会 attach 回**旧会话**（并忽略新的 `-e`），
+       于是换凭证后界面显示 B、实际跑的还是 A。这是"静默用错身份"里最难查的一种，
+       因为一切看起来都成功了。 */
     await killSession(id)
+    if (await hasSession(id)) {
+      // 再来一次；tmux 偶尔在客户端刚断开时拒绝 kill
+      await new Promise((r) => setTimeout(r, 150))
+      await killSession(id)
+    }
+    if (await hasSession(id)) {
+      console.error(`destroyPty: ${id} 的 tmux 会话没能结束`)
+      deadSessions.add(id)
+    } else {
+      deadSessions.delete(id)
+    }
     return farewell
   })
 }
+
+/**
+ * 上一次 destroy 没能真正结束的会话。
+ * 下次 spawn 到这个 id 时**不能 attach 回去** —— 那就是接回了旧身份。
+ */
+const deadSessions = new Set<string>()
 
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
@@ -541,6 +562,21 @@ ipcMain.handle(
     } catch {
       // 无快照
     }
+  }
+  /* 上一次 destroy 没杀干净的会话，绝不能就这么 attach 回去 ——
+     `new-session -A` 会接回旧会话并**忽略新的 -e**，换凭证后界面显示 B、实际还是 A。 */
+  if (deadSessions.has(id)) {
+    await killSession(id)
+    if (await hasSession(id)) {
+      sendToWin('pty:spawn-error', {
+        nodeId: id,
+        message:
+          '上一次的会话没能结束（tmux 里还在），为免接回旧账号已拒绝启动。\n' +
+          `手动清理：tmux -L termboard kill-session -t =tb-${id}`
+      })
+      return { ok: false, error: 'stale-session' }
+    }
+    deadSessions.delete(id)
   }
   const cwd = opts?.cwd && existsSync(opts.cwd) ? opts.cwd : os.homedir()
   spawnedRoots.add(cwd)
