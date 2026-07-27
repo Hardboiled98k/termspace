@@ -63,6 +63,59 @@ export function newNodeId(prefix: string, existing: Iterable<string> = []): stri
   return `${prefix}-${Date.now().toString(36)}`
 }
 
+/** board 记录里为认领而存的最小信息。真正的 SavedBoard 还有 nodes/edges/viewport */
+export interface BoardStub {
+  cwd?: string
+  nodes: readonly unknown[]
+}
+
+/**
+ * 再次添加某个目录时，认领回它原来的 pid。
+ *
+ * **关标签页不删数据是有意的**（画布记录留着、tmux 会话继续活着），
+ * 但那条路只有在"重新添加同目录能拿回原来的 pid"时才闭环 ——
+ * 否则铸一个新 pid 就等于：旧画布连同**里面还在跑的终端**永远够不着，
+ * 而 reap 认的是"所有 board 里出现过的节点 id"，那些会话会一直活下去，
+ * 界面上看不见、也关不掉，只能去命令行 `tmux -L termboard kill-session`。
+ *
+ * pid 还决定上下文节点的文件名，所以认领的是 **pid 本身**，不是"把节点搬过去"。
+ *
+ * 只认没有项目在用的 board（`openPids`）—— 同一个目录开着两个标签页时，
+ * 新加的那个必须是独立画布，不能劫持正在用的那个。
+ */
+export function reclaimBoardId(
+  boards: Readonly<Record<string, BoardStub>>,
+  openPids: Iterable<string>,
+  cwd: string
+): string | null {
+  // 空 cwd 是 v1 迁移来的「默认」项目，不是真目录，不参与匹配
+  if (!cwd) return null
+  const open = new Set(openPids)
+  for (const [pid, b] of Object.entries(boards)) {
+    if (!open.has(pid) && b.cwd === cwd) return pid
+  }
+  return null
+}
+
+/**
+ * 丢掉既没有项目在用、又一个节点都没有的 board。
+ *
+ * 保守到近乎无用是**故意的**：只要还有节点就留着，因为节点 id 一旦从
+ * `boards` 里消失，reap 就会把它对应的 tmux 会话当孤儿杀掉 ——
+ * 而那可能是用户跑了一整天的活。这里只清真正的空壳。
+ */
+export function pruneEmptyBoards<T extends BoardStub>(
+  boards: Readonly<Record<string, T>>,
+  openPids: Iterable<string>
+): Record<string, T> {
+  const open = new Set(openPids)
+  const out: Record<string, T> = {}
+  for (const [pid, b] of Object.entries(boards)) {
+    if (open.has(pid) || b.nodes.length > 0) out[pid] = b
+  }
+  return out
+}
+
 export interface SavedNode {
   id: string
   x: number

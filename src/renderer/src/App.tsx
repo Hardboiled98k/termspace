@@ -30,6 +30,8 @@ import {
   toSaved,
   newNodeId,
   DEFAULT_SIZE,
+  reclaimBoardId,
+  pruneEmptyBoards,
   type BoardNode,
   type SavedNode
 } from './board-serde'
@@ -125,6 +127,9 @@ interface SavedBoard {
   nodes: SavedNode[]
   edges?: SavedEdge[]
   viewport?: Viewport
+  /** 这块画布属于哪个目录。**关掉标签页后靠它认领回原 pid**（见 reclaimBoardId）。
+   *  项目记录本身会随关闭消失，所以这个信息只能存在 board 上。 */
+  cwd?: string
 }
 interface Workspace extends SavedBoard {
   // v2
@@ -996,6 +1001,17 @@ function Board(): React.JSX.Element {
     if (!loaded || !activeProject) return
     const t = setTimeout(() => {
       boardsRef.current[activeProject] = snapshot()
+      // 每次落盘都把 cwd 补到 board 上 —— 关标签页时项目记录就没了，
+      // 到那时再想记已经来不及。也顺带给老工作区里的 board 补上。
+      for (const p of projects) {
+        const b = boardsRef.current[p.id]
+        if (b && p.cwd) b.cwd = p.cwd
+      }
+      // 清掉既没人用又空无一物的 board（只有空壳会被清，见 pruneEmptyBoards）
+      boardsRef.current = pruneEmptyBoards(
+        boardsRef.current,
+        projects.map((p) => p.id)
+      )
       void window.termscape
         .saveWorkspace({
           projects,
@@ -1020,10 +1036,14 @@ function Board(): React.JSX.Element {
   const addProject = useCallback(async () => {
     const dir = await window.termscape.pickFolder()
     if (!dir) return
-    // 加随机后缀：纯时间戳在同一毫秒建两个项目会撞，而 pid 决定上下文节点的文件名
-    const pid = newNodeId('p', projects.map((p) => p.id))
     boardsRef.current[activeProject] = snapshot()
-    boardsRef.current[pid] = { nodes: [], edges: [] }
+    // 这个目录以前开过又关掉了？认领回原来的 pid —— 画布和里面还活着的终端一起回来。
+    // 铸新 pid 会把旧画布永久孤儿化（见 reclaimBoardId 的注释）。
+    const openPids = projects.map((p) => p.id)
+    const reclaimed = reclaimBoardId(boardsRef.current, openPids, dir)
+    // 加随机后缀：纯时间戳在同一毫秒建两个项目会撞，而 pid 决定上下文节点的文件名
+    const pid = reclaimed ?? newNodeId('p', openPids)
+    if (!reclaimed) boardsRef.current[pid] = { nodes: [], edges: [], cwd: dir }
     setProjects((ps) => [...ps, { id: pid, name: dir.split('/').pop() || '项目', cwd: dir }])
     setActiveProject(pid)
     applyBoard(boardsRef.current[pid])
@@ -1031,7 +1051,8 @@ function Board(): React.JSX.Element {
 
   const closeProject = useCallback(
     (pid: string) => {
-      // 只从标签栏移除；画布记录保留（tmux 会话也还活着），重新添加同目录即恢复
+      // 只从标签栏移除；画布记录保留（tmux 会话也还活着）。
+      // 重新添加**同一个目录**会认领回这个 pid，画布和终端一起回来（reclaimBoardId）。
       setProjects((ps) => {
         if (ps.length <= 1) return ps
         const rest = ps.filter((p) => p.id !== pid)
