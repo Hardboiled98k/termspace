@@ -96,7 +96,14 @@ TERMBOARD_PANEL=terminal npm run dev      # 自检：直接展开设置面板某
 - **检查和落笔之间只要还有 await，就得在落笔那一刻再查一遍**：授权复查在
   前台探测和 stat **之前**，这两步各一个 await，足够 agent 退出 —— 那时 pane 里是
   光秃秃的 shell，`writeToPty` 就是直接执行命令。同类的还有 remote.ts 的"读 body
-  是异步的，开关要在 await 之后重查"
+  是异步的，开关要在 await 之后重查"。
+  `DelegateDeps.finalGate` 就是为此存在（跨机那条链路的开关在这里再查一次）；
+  **`finalGate` 到 `writeToPty` 之间不许再出现任何 await**
+- **敏感文件的权限必须在创建那一刻就给**，不能"先写完再 chmod"：`writeFile` 用默认
+  权限（umask 022 → 0644），rename 之后到 chmod 之前那个文件是**全局可读**的。
+  `bin/tb-peer` 的正文里带着完整 peer token、`nodetokens/*` 能伪造 SessionStart
+  （而 SessionStart 在 delegate 的状态机里先于墓碑、无条件置活）。
+  窗口只有几毫秒，但监听目录事件就能守到
 - **必须有单实例锁**（`app.requestSingleInstanceLock`）：dev 和打包版共用同一个
   userData（有意为之，换目录会让所有 tmux 会话变孤儿），同时开两个就会 workspace.json
   互相整份覆盖、reap 把对方的会话当孤儿杀光、hook/远程端口抢不到。
@@ -148,9 +155,12 @@ TERMBOARD_PANEL=terminal npm run dev      # 自检：直接展开设置面板某
   用户正好在这段时间改了凭证的隔离目录，那次刷新会被 `if (running) return` 吃掉；
   而正在跑的那轮用的是**旧账号列表**（`Promise.all` 的入参在 await 之前就求值完了），
   它结束时还会把新配置的显示盖回去。要 pending 补跑
-- **凭证带 API key 但没配隔离目录时，别去查登录态**：`codex login status` 查的是
-  默认 `~/.codex` —— 那是**系统默认号**。界面会在这个凭证名下显示别人的"已登录"，
-  用户以为在烧订阅额度，实际每次调用都在出账单。判据要和额度那边的 `kind` 一致
+- **计费方式只有一个判据：`identity-env.ts` 的 `billingKind`** —— 最终生效的环境里
+  有没有 API key。登录态和额度**必须共用它**：曾经一个用"有 key 且没隔离目录"、
+  另一个用"有隔离目录"，于是两样都配的凭证会去查那个目录，把里面**另一个订阅号**的
+  "已登录 + 还剩 70%"显示在这个凭证名下，而每次调用都在出账单。
+  看 `probeEnv` 不看 identity 自己的 `set`：用户 shell 里 export 的 key 会被继承，
+  那也真的会生效；identity 用 `KEY=` 删掉的则已经不在里面了
 - state 分五档。**「查不到」「未登录」「用了 0%」必须是三种东西** —— 未登录能自己修
   （去跑一次 login），查不到只能等。所以 `unconfigured` 只藏"自动探测的系统号且没人在用"，
   **用户自建的凭证即使未登录也必须占位**，否则那个号在界面上就是凭空消失
@@ -254,8 +264,14 @@ npm run dist:signed
 - **任务正文走 stdin，绝不进 argv** —— `ps` 对同机所有用户可见
 - **helper 路径要用双引号**：macOS 的 userData 路径含空格（`Application Support`），
   不引的话对端 shell 会拆成三个参数；用双引号而非单引号是因为 `$HOME` 要在对端展开
-- 超时 240s（远端 delegate）< 260s（ssh）< 320s（tb 的 curl），**且不自动重试**：
-  注入不可撤回，重试就是往对面 agent 里注两遍。断线只能理解成 detach
+- **超时必须逐层严格递增**：240（远端 delegate）< 270（helper curl）< 300（ssh）
+  < 320（tb 的 curl）。持平就等于"内层刚注入完、外层已经放弃" —— 曾经 helper 和 ssh
+  都是 260s 正是这样。而且 delegate **返回之前还要干活**（1.5s 轮询 + 1.2s 等落盘
+  + 读整个 transcript），helper 只多几秒的话正常完成的派活会被自己人掐断。
+  用例要断言**整条阶梯**递增，只断言最外 > 最内看不出持平
+- **不自动重试**：注入不可撤回，重试就是往对面 agent 里注两遍。断线只能理解成 detach
+- task 有 32 KiB 上限（**按字节** —— 中文一个字三字节）：整段会被一次 `writeToPty`
+  打进 pty，靠 1 MiB 的 HTTP body 兜是不够的
 - 未做：`requestId` 幂等（人工重试仍会重复注入）；`tb agents` 看不到远端节点
 
 ## 授权模型（同 UID 前提，务必如实描述）
