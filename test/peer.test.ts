@@ -12,10 +12,11 @@ import {
   parsePeerTarget,
   peerAllowed,
   sshArgs,
-  decodePeerAsk,
+  decodePeerReq,
   encodePeerAsk,
   PEER_TIMEOUTS,
   buildPeerHelper,
+  encodePeerAgents,
   TIMEOUT_LADDER,
   TASK_MAX_BYTES
 } from '../src/main/peer.ts'
@@ -71,20 +72,38 @@ test('ssh 参数里主机名在 -- 之后，且 BatchMode 开着', () => {
 })
 
 test('helper 的 stdin 解析：形状不对一律拒', () => {
-  assert.equal(decodePeerAsk('not json'), null)
-  assert.equal(decodePeerAsk('null'), null)
-  assert.equal(decodePeerAsk('[]'), null)
-  assert.equal(decodePeerAsk('{}'), null)
-  assert.equal(decodePeerAsk('{"target":"t1"}'), null, '没有任务')
-  assert.equal(decodePeerAsk('{"target":"t1","task":"   "}'), null, '空白任务')
-  assert.equal(decodePeerAsk('{"target":"../x","task":"go"}'), null, '非法节点 id')
+  assert.equal(decodePeerReq('not json'), null)
+  assert.equal(decodePeerReq('null'), null)
+  assert.equal(decodePeerReq('[]'), null)
+  assert.equal(decodePeerReq('{}'), null)
+  assert.equal(decodePeerReq('{"target":"t1"}'), null, '没有任务')
+  assert.equal(decodePeerReq('{"target":"t1","task":"   "}'), null, '空白任务')
+  assert.equal(decodePeerReq('{"target":"../x","task":"go"}'), null, '非法节点 id')
 })
 
 test('helper 收下合法输入；source 只截断不校验（它只用于显示）', () => {
-  const p = decodePeerAsk(encodePeerAsk({ source: 't-1', target: 't-2', task: '跑测试' }))
-  assert.deepEqual(p, { source: 't-1', target: 't-2', task: '跑测试' })
-  const long = decodePeerAsk(JSON.stringify({ source: 'x'.repeat(999), target: 't1', task: 'a' }))
+  const p = decodePeerReq(encodePeerAsk({ source: 't-1', target: 't-2', task: '跑测试' }))
+  assert.deepEqual(p, { op: 'ask', source: 't-1', target: 't-2', task: '跑测试' })
+  const long = decodePeerReq(JSON.stringify({ source: 'x'.repeat(999), target: 't1', task: 'a' }))
   assert.equal(long?.source.length, 64)
+})
+
+test('省略 op 视为 ask —— 两台机不会同时升级，改一边不能断另一边', () => {
+  const old = JSON.stringify({ source: 't-1', target: 't-2', task: '老格式' })
+  assert.deepEqual(decodePeerReq(old), { op: 'ask', source: 't-1', target: 't-2', task: '老格式' })
+})
+
+test('认不出的 op 一律拒 —— 别把将来才有的操作当成派活执行了', () => {
+  const bad = JSON.stringify({ op: 'exec', source: 's', target: 't1', task: 'rm -rf /' })
+  assert.equal(decodePeerReq(bad), null)
+})
+
+test('列节点请求不需要 target/task', () => {
+  const p = decodePeerReq(encodePeerAgents('t-1'))
+  assert.deepEqual(p, { op: 'agents', source: 't-1' })
+  // 但 source 照样要收敛
+  const dirty = decodePeerReq(JSON.stringify({ op: 'agents', source: `a${String.fromCharCode(10)}b` }))
+  assert.equal(dirty?.source, 'ab')
 })
 
 test('超时必须逐层严格递增 —— 持平就会"内层刚注入、外层已放弃"', () => {
@@ -106,18 +125,18 @@ test('超时必须逐层严格递增 —— 持平就会"内层刚注入、外�
 
 test('任务超长要拒 —— 它会被一次性写进 pty', () => {
   const ok = 'x'.repeat(TASK_MAX_BYTES)
-  assert.ok(decodePeerAsk(encodePeerAsk({ source: '', target: 't1', task: ok })))
+  assert.ok(decodePeerReq(encodePeerAsk({ source: '', target: 't1', task: ok })))
   const tooLong = 'x'.repeat(TASK_MAX_BYTES + 1)
-  assert.equal(decodePeerAsk(encodePeerAsk({ source: '', target: 't1', task: tooLong })), null)
+  assert.equal(decodePeerReq(encodePeerAsk({ source: '', target: 't1', task: tooLong })), null)
   // 按字节不按字符：中文一个字三字节，按字符数限的话实际长度会是三倍
   const cn = '中'.repeat(Math.floor(TASK_MAX_BYTES / 3) + 1)
-  assert.equal(decodePeerAsk(encodePeerAsk({ source: '', target: 't1', task: cn })), null)
+  assert.equal(decodePeerReq(encodePeerAsk({ source: '', target: 't1', task: cn })), null)
 })
 
 test('source 里的控制字符要收敛（它会进日志和 UI）', () => {
   // ESC + 换行：终端里能把自己伪装成另一行输出
   const dirty = `mac${String.fromCharCode(27)}[31m${String.fromCharCode(10)}FAKE`
-  const p = decodePeerAsk(JSON.stringify({ source: dirty, target: 't1', task: 'go' }))
+  const p = decodePeerReq(JSON.stringify({ source: dirty, target: 't1', task: 'go' }))
   assert.ok(p)
   assert.equal(p.source, 'mac31mFAKE', `source 没收敛干净：${JSON.stringify(p.source)}`)
 })
@@ -162,7 +181,8 @@ test('helper 脚本端到端：stdin 原样送达、token 在头里、任务不�
   assert.equal(out, '远端回话', 'helper 要把远端的回话原样吐出来')
   assert.equal(got.token, 'TOK-123456789012')
   assert.equal(got.body, payload, 'stdin 必须原样送达，一个字符都不能被 shell 动过')
-  assert.deepEqual(decodePeerAsk(got.body ?? ''), {
+  assert.deepEqual(decodePeerReq(got.body ?? ''), {
+    op: 'ask',
     source: 't-1',
     target: 't-2',
     task: '跑 `id` && echo $HOME'

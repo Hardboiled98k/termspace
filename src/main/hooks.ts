@@ -11,7 +11,7 @@ import http from 'node:http'
 import {
   buildPeerHelper,
   createRequestLog,
-  decodePeerAsk,
+  decodePeerReq,
   peerRequestId,
   PEER_TIMEOUTS,
   TASK_MAX_BYTES
@@ -400,7 +400,8 @@ case "$cmd" in
   load|skill)
     curl -s -H "$H" --get --data-urlencode "name=$*" "$BASE/tb/load" ;;
   agents|ls)
-    curl -s -H "$H" "$BASE/tb/agents" ;;
+    # 带参数 = 问那台机器要清单（要几秒，所以不做成默认行为）
+    curl -s -m 40 -H "$H" --get --data-urlencode "peer=$1" "$BASE/tb/agents" ;;
   context|ctx)
     curl -s -H "$H" "$BASE/tb/context" ;;
   ask|delegate)
@@ -427,6 +428,7 @@ tb — Termscape 工具中枢
   tb skills <关键词>       搜索可用 skill（返回名称 + 一行说明）
   tb load <名称>           取出该 skill 全文，按其指示执行
   tb agents                列出本画布上的其他 agent 终端
+  tb agents <机器>         列出那台机器上的 agent 终端（派活前用它找节点 id）
   tb context               读取连到本终端的共享上下文（实时，改了立刻能看到）
   tb ask <节点id> <任务>   把任务派给另一个终端里的 agent，等它做完返回结果
   tb ask <机器>:<节点id> <任务>  派到另一台机器上的 Termscape（机器名在设置里配）
@@ -450,7 +452,8 @@ esac
 export interface TbHandlers {
   skills: (q: string) => Promise<string>
   load: (name: string) => Promise<string>
-  agents: (source: string) => Promise<string>
+  /** `peer` 非空 = 问那台机器要清单（`tb agents <机器>`） */
+  agents: (source: string, peer?: string) => Promise<string>
   /** 连到该终端的上下文节点，**现读现返**（会话启动时注入的那份可能已经过期） */
   context: (source: string) => Promise<string>
   ask: (source: string, target: string, task: string) => Promise<string>
@@ -459,6 +462,8 @@ export interface TbHandlers {
    * 不参与授权 —— 授权靠本机设置里的「接受跨机派活」开关（见 /tb/peer 路由）。
    */
   peerAsk?: (source: string, target: string, task: string) => Promise<string>
+  /** 别的机器问「你这儿有哪些 agent 终端」。只读，但同样受跨机开关门控 */
+  peerAgents?: (source: string) => Promise<string>
   browser: (source: string, action: string, arg: string, nodeId: string) => Promise<string>
 }
 
@@ -573,8 +578,19 @@ export async function startHookSystem(
       })
       req.on('end', () => {
         if (tooBig) return reply(413, `任务太长（上限 ${TASK_MAX_BYTES} 字节）`)
-        const p = decodePeerAsk(Buffer.concat(bodyChunks).toString('utf8'))
+        const p = decodePeerReq(Buffer.concat(bodyChunks).toString('utf8'))
         if (!p) return reply(400, `请求格式不对（任务为空、节点 id 非法，或任务超过 ${TASK_MAX_BYTES} 字节）`)
+
+        /* 列节点是**只读**的，不注入任何东西 —— 所以不走幂等表也不受
+           「接受跨机派活」开关门控？不，还是要门控：节点标题和 cwd 里有项目名，
+           不想让对面派活的人，多半也不想让他看见自己在做什么。 */
+        if (p.op === 'agents') {
+          if (!tb?.peerAgents) return reply(400, '这台机器的版本不支持列节点')
+          return void tb
+            .peerAgents(p.source)
+            .then((t) => reply(200, t))
+            .catch(() => reply(500, '内部错误'))
+        }
 
         /* ── 幂等 ──
            派活超时或 ssh 断掉之后，任务**其实已经注入进那个 agent 了**（断线是
@@ -634,7 +650,7 @@ export async function startHookSystem(
           : route === 'load'
             ? tb.load(u.searchParams.get('name') ?? '')
             : route === 'agents'
-              ? tb.agents(source)
+              ? tb.agents(source, u.searchParams.get('peer') ?? '')
             : route === 'context'
               ? tb.context(source)
               : route === 'ask'

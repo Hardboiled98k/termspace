@@ -32,6 +32,7 @@ import {
   peerAllowed,
   sshArgs,
   encodePeerAsk,
+  encodePeerAgents,
   PEER_TIMEOUTS
 } from './peer'
 import { resolveBind } from './net-iface'
@@ -257,39 +258,47 @@ const grants = new Set<string>()
  * - **超时到了就放弃，不重试**：注入是不可撤回的，重试一次就是把同一个任务
  *   往对面那个 agent 里注两遍。断线只能理解成 detach。
  */
-async function askPeer(
-  source: string,
-  peer: { alias: string; nodeId: string },
-  task: string
-): Promise<string> {
+async function callPeer(alias: string, payload: string, what: string): Promise<string> {
   const { peers } = await getSettings()
-  if (!peerAllowed(peer.alias, peers)) {
-    return `派活失败：机器「${peer.alias}」不在白名单里。先去设置 → 跨机协作把它加上（那里也写着对端要怎么配）。`
+  if (!peerAllowed(alias, peers)) {
+    return `${what}失败：机器「${alias}」不在白名单里。先去设置 → 跨机协作把它加上（那里也写着对端要怎么配）。`
   }
   return new Promise<string>((resolve) => {
     const child = execFile(
       'ssh',
       /* 自测时可以把 helper 指到别处。**只在开发构建里认这个 env** ——
          它整段进 ssh 的远端命令，打包版里留一个能改执行目标的环境变量没有理由。 */
-      sshArgs(peer.alias, (!app.isPackaged && process.env['TERMBOARD_PEER_HELPER']) || undefined),
+      sshArgs(alias, (!app.isPackaged && process.env['TERMBOARD_PEER_HELPER']) || undefined),
       { timeout: PEER_TIMEOUTS.sshMs, maxBuffer: 4 * 1024 * 1024 },
       (err, stdout, stderr) => {
         if (err) {
           const hint = /Permission denied|Host key|Could not resolve|Connection refused/i.test(
             stderr
           )
-            ? `\n（先在终端里手动跑一次 ssh ${peer.alias} 确认免密通了）`
+            ? `\n（先在终端里手动跑一次 ssh ${alias} 确认免密通了）`
             : ''
           return resolve(
-            `跨机派活失败：ssh ${peer.alias} —— ${(stderr || err.message).slice(0, 300)}${hint}`
+            `跨机${what}失败：ssh ${alias} —— ${(stderr || err.message).slice(0, 300)}${hint}`
           )
         }
         resolve(stdout.trim() || '[对端没有返回内容]')
       }
     )
-    child.stdin?.end(encodePeerAsk({ source, target: peer.nodeId, task }))
+    child.stdin?.end(payload)
   })
 }
+
+const askPeer = (
+  source: string,
+  peer: { alias: string; nodeId: string },
+  task: string
+): Promise<string> =>
+  callPeer(peer.alias, encodePeerAsk({ source, target: peer.nodeId, task }), '派活')
+
+/** `tb agents <机器>`：列对端画布上的 agent 终端。**显式带参数**，不逐台 ssh —— 那会让
+    最常用的 `tb agents` 每次都卡上几秒，而多数时候用户问的是本机。 */
+const agentsPeer = (source: string, alias: string): Promise<string> =>
+  callPeer(alias, encodePeerAgents(source), '列节点')
 
 /**
  * 跨节点动作授权：先看画布连线，没有就弹窗问用户。
@@ -1411,7 +1420,9 @@ app.whenReady().then(async () => {
           return text ?? `未找到 skill「${name}」，先用 tb skills <关键词> 查名字。`
         },
         context: (source) => currentContextText(source),
-        agents: async (source) => {
+        agents: async (source, peerAlias) => {
+          // `tb agents <机器>` → 问对端要它的清单
+          if (peerAlias) return agentsPeer(source, peerAlias)
           const others = boardAgents.filter((a) => a.id !== source)
           if (!others.length) return '画布上暂无其他 agent 终端。'
           return others
@@ -1449,6 +1460,20 @@ app.whenReady().then(async () => {
            本机比对画布连线，跨机比对设置里的开关 —— peer 不是画布上的节点，
            拿它去比连线永远不成立，只会弹一个远端没人看的窗。
            `source` 是对方自报的，只写进弹不出去的日志和返回文案，不参与判定。 */
+        /* 对端问「你这儿有哪些 agent 终端」。**同样受跨机开关门控** ——
+           节点标题里有项目名和你在做什么，不想让对面派活的人多半也不想让他看见这些。 */
+        peerAgents: async (source) => {
+          if (!(await getSettings()).peerDelegate) {
+            return '被拒：这台机器没开「接受跨机派活」（设置 → 跨机协作）。'
+          }
+          const rows = boardAgents.map((a) => {
+            const live = isAgentSession(a.id) ? 'agent' : 'shell'
+            return `${a.id}\t${a.title}\t${a.provider ?? 'shell'}\t${a.status}\t${live}`
+          })
+          return rows.length
+            ? `[来自 ${source || '对端'} 的查询]\n${rows.join('\n')}`
+            : '这台机器的画布上没有终端节点。'
+        },
         peerAsk: async (source, target, task) => {
           if (!(await getSettings()).peerDelegate) {
             return '派活被拒：这台机器没开「接受跨机派活」（设置 → 跨机协作）。'

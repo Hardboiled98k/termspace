@@ -228,7 +228,16 @@ export function createRequestLog(
  * `source` 只用于**展示和日志**（远端画布上会显示"谁派来的"）。
  * 它是调用方自报的，远端不能拿它当权限键 —— 远端的授权靠自己的
  * 「允许跨机派活」开关，不靠这个字符串。
+ *
+ * 两种操作共用这一条通道：
+ * - `ask`    派活
+ * - `agents` 列对端画布上的 agent 终端（**只读**）—— 没有它就没法知道 target 该填什么，
+ *            对端的节点 id 是随机的（`t-7k3f9a`），只能跑去那台机器的画布上看
  */
+export type PeerReq =
+  | { op: 'ask'; source: string; target: string; task: string }
+  | { op: 'agents'; source: string }
+
 export interface PeerAskPayload {
   source: string
   target: string
@@ -236,7 +245,11 @@ export interface PeerAskPayload {
 }
 
 export function encodePeerAsk(p: PeerAskPayload): string {
-  return JSON.stringify(p)
+  return JSON.stringify({ op: 'ask', ...p })
+}
+
+export function encodePeerAgents(source: string): string {
+  return JSON.stringify({ op: 'agents', source })
 }
 
 /**
@@ -248,8 +261,12 @@ export function encodePeerAsk(p: PeerAskPayload): string {
  */
 export const TASK_MAX_BYTES = 32 * 1024
 
-/** 远端 helper 解析 stdin。任何不合形状的输入都要拒，别猜 */
-export function decodePeerAsk(raw: string): PeerAskPayload | null {
+/**
+ * 远端 helper 解析 stdin。任何不合形状的输入都要拒，别猜。
+ *
+ * **省略 op 视为 `ask`**：两台机器不会同时升级，改了一边就断另一边不可接受。
+ */
+export function decodePeerReq(raw: string): PeerReq | null {
   let v: unknown
   try {
     v = JSON.parse(raw)
@@ -258,14 +275,19 @@ export function decodePeerAsk(raw: string): PeerAskPayload | null {
   }
   if (!v || typeof v !== 'object' || Array.isArray(v)) return null
   const o = v as Record<string, unknown>
-  if (typeof o.target !== 'string' || !NODE_RE.test(o.target)) return null
-  if (typeof o.task !== 'string' || !o.task.trim()) return null
-  // 按**字节**算：中文一个字三字节，按字符数限会让实际长度是三倍
-  if (Buffer.byteLength(o.task, 'utf8') > TASK_MAX_BYTES) return null
   /* source 只用于显示，但"只用于显示"正是要收敛控制字符的理由：
      它会进 `peer:${source}` 和事件日志，带 ANSI/换行就能在终端和 UI 里伪装成别的行。 */
   const source =
     typeof o.source === 'string' ? o.source.replace(/[^\w.:@-]/g, '').slice(0, 64) : ''
-  return { source, target: o.target, task: o.task }
+
+  if (o.op === 'agents') return { op: 'agents', source }
+  // 认不出的 op 一律拒 —— 别把一个将来才有的操作当成派活执行了
+  if (o.op !== undefined && o.op !== 'ask') return null
+
+  if (typeof o.target !== 'string' || !NODE_RE.test(o.target)) return null
+  if (typeof o.task !== 'string' || !o.task.trim()) return null
+  // 按**字节**算：中文一个字三字节，按字符数限会让实际长度是三倍
+  if (Buffer.byteLength(o.task, 'utf8') > TASK_MAX_BYTES) return null
+  return { op: 'ask', source, target: o.target, task: o.task }
 }
 
