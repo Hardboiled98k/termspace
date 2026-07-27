@@ -285,7 +285,10 @@ npm run dist:signed
   被拒的派活要 `abandon` 登记，否则开关打开后同一个任务十分钟内都派不出去
 - task 有 32 KiB 上限（**按字节** —— 中文一个字三字节）：整段会被一次 `writeToPty`
   打进 pty，靠 1 MiB 的 HTTP body 兜是不够的
-- 未做：`requestId` 幂等（人工重试仍会重复注入）；`tb agents` 看不到远端节点
+- **已端到端实测通过**（两个方向都跑过）：普通 shell 被拒且什么都没执行、
+  真 agent 会话 7 秒返回答案、重发同一任务挡住并回上次结果、开关关掉时拒绝、
+  乱 token 403、40KB 任务 400。**从 ssh 起对端的 GUI app 用 `open -a`** ——
+  `launchctl asuser` 要 root，会报 `Could not switch to audit session`
 
 ## 自动更新（2026-07-27）
 
