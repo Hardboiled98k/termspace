@@ -122,6 +122,7 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
     term.open(el)
     termRef.current = term
     fitRef.current = fit
+    let webgl: WebglAddon | undefined
     try {
       /* Chromium 每页 ~16 个 WebGL context 上限，超限最老的被强制丢弃。
          这条降级路径已实测（`TERMBOARD_WEBGL_STRESS=20 npm run dev`）：
@@ -132,11 +133,15 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
          ⚠️ 验证时注意：addon 收到 webglcontextlost 后会**先等满 3 秒**看 context 会不会
          自己恢复，之后才 fire onContextLoss。测量窗口短于 3s 会得出"降级失效"的错误结论
          （我第一次就这么误判过）。 */
-      const webgl = new WebglAddon()
-      webgl.onContextLoss(() => webgl.dispose())
+      webgl = new WebglAddon()
+      webgl.onContextLoss(() => webgl?.dispose())
       term.loadAddon(webgl)
     } catch {
-      // WebGL 不可用 → xterm 自动落回 DOM renderer
+      /* WebGL 不可用 → xterm 自动落回 DOM renderer。
+         但**必须显式 dispose**：AddonManager 是 `_addons.push()` 之后才 `activate()`，
+         activate 抛错时这个半死的 addon 仍留在列表里，term.dispose() 时还会被再调一次。 */
+      webgl?.dispose()
+      webgl = undefined
     }
     fit.fit()
 
@@ -175,6 +180,10 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
       // rAF 合帧：NodeResizer 拖拽期间每帧触发
       cancelAnimationFrame(raf)
       raf = requestAnimationFrame(() => {
+        /* 尺寸为 0 时**不能 fit**：那会把 cols/rows 算成 1×1 并真的发给 pty，
+           shell 会照着重排一遍输出，用户回来看到的是一屏被揉烂的历史。
+           元素被 display:none / 折叠 / 尚未布局时都会走到这里。 */
+        if (!el.clientWidth || !el.clientHeight) return
         fit.fit()
         window.termscape.resize(id, term.cols, term.rows)
       })

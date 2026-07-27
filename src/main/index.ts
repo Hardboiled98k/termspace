@@ -1413,6 +1413,65 @@ app.whenReady().then(async () => {
           console.log(`[webgl-stress] 打爆后：${sum(await win.webContents.executeJavaScript(probe))}`)
           console.log(`[webgl-stress] contextlost 触发 ${lost} 次`)
         }
+
+        /* TERMBOARD_LOD_BENCH=N：LOD 到底有没有在白烧 CPU。
+           「缩到全景看颜色分布」是这个产品的招牌交互，而 LOD 只设了 visibility:hidden ——
+           终端全都还活着、还在渲染。这里让 N 个终端持续输出，分别量缩放 1.0 和 LOD 下
+           渲染进程的 CPU，用数字回答该不该改成真正停渲染。 */
+        const bench = Number(process.env['TERMBOARD_LOD_BENCH'] ?? 0)
+        if (bench > 0) {
+          workspaceFrozen = true
+          const ids: string[] = await win.webContents.executeJavaScript(
+            `(async () => {
+              const b = document.querySelector('.toolbar-btn.split-main')
+              const before = new Set([...document.querySelectorAll('.react-flow__node-terminal')].map(n => n.dataset.id))
+              for (let i = 0; i < ${bench}; i++) { b.click(); await new Promise(r => setTimeout(r, 120)) }
+              return [...document.querySelectorAll('.react-flow__node-terminal')]
+                .map(n => n.dataset.id).filter(x => !before.has(x))
+            })()`
+          )
+          await new Promise((r) => setTimeout(r, 2500))
+          // 让每个终端持续吐字（走真实 pty，不是往 xterm 里灌假数据）
+          for (const tid of ids) ptys.get(tid)?.write('while :; do seq 1 60; sleep 0.02; done\r')
+
+          /** 采样窗口内渲染进程的平均 CPU。percentCPUUsage 是"距上次调用"的均值 */
+          const rendererCpu = async (ms: number): Promise<number> => {
+            app.getAppMetrics()
+            await new Promise((r) => setTimeout(r, ms))
+            /* GPU 进程要单独看：LOD 省的是**合成/绘制**，那笔账记在 GPU 上，
+               只盯 renderer 会得出"LOD 毫无用处"的错误结论 */
+            const all = app.getAppMetrics()
+            const by = (t: string): number =>
+              all.filter((m) => m.type === t).reduce((s, m) => s + m.cpu.percentCPUUsage, 0)
+            console.log(`[lod-bench]   renderer ${by('Tab').toFixed(1)}% · GPU ${by('GPU').toFixed(1)}%`)
+            return by('Tab')
+          }
+          await new Promise((r) => setTimeout(r, 3000))
+          const hot = await rendererCpu(5000)
+          // 缩到 LOD 以下
+          await win.webContents.executeJavaScript(
+            `(async () => {
+              const z = document.querySelector('.react-flow__controls-zoomout')
+              // 停在 LOD 与 far 之间（0.14 < zoom < 0.35），那才是"看全景"的真实状态
+              for (let i = 0; i < 5; i++) { z.click(); await new Promise(r => setTimeout(r, 120)) }
+            })()`
+          )
+          await new Promise((r) => setTimeout(r, 3000))
+          const cold = await rendererCpu(5000)
+          const vis = await win.webContents.executeJavaScript(
+            `JSON.stringify({
+              zoom: +(document.querySelector('.react-flow__viewport')?.style.transform.match(/scale\\(([\\d.]+)/)?.[1] ?? 0),
+              lod: document.querySelectorAll('.term-node-lod').length,
+              far: document.querySelectorAll('.term-node-far-chip').length,
+              xterm: document.querySelectorAll('.xterm').length,\n              chars: [...document.querySelectorAll('.xterm-rows, .xterm-screen')].length
+            })`
+          )
+          console.log(`[lod-bench] ${bench} 个终端持续输出（seq 1 60 / 20ms）`)
+          console.log(`[lod-bench] 缩放 1.0 全部可见 → renderer ${hot.toFixed(1)}%`)
+          console.log(`[lod-bench] 缩到 LOD ${vis} → renderer ${cold.toFixed(1)}%`)
+          // 自检产物必须自己收干净，否则留一地孤儿 tmux 会话
+          for (const tid of ids) await destroyPty(tid)
+        }
         const img = await win.webContents.capturePage()
         await writeFile(shotPath, img.toPNG())
       } finally {

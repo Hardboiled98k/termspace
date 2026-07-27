@@ -74,6 +74,15 @@ TERMBOARD_PANEL=terminal npm run dev      # 自检：直接展开设置面板某
   → 全部落回 DOM 且**字还在**。这条路不用改。
   ⚠️ 复测时**必须等满 6 秒**：addon 收到 `webglcontextlost` 后会先等 3 秒看 context
   自己恢不恢复，之后才 fire `onContextLoss`。窗口短于 3s 会量出"降级失效"的假结论
+- **`term.loadAddon()` 抛错后要显式 `dispose()`**：AddonManager 是 `_addons.push()`
+  之后才 `activate()`，激活失败的 addon 仍留在列表里，`term.dispose()` 时还会被再调一次
+- **ResizeObserver 里尺寸为 0 时不能 fit**：会把 cols/rows 算成 1×1 并真发给 pty，
+  shell 照着重排一遍输出。元素 `display:none` / 折叠 / 未布局都会走到这条路
+- **LOD 的账记在 GPU 上，不在 renderer 上**（`TERMBOARD_LOD_BENCH=16 npm run dev`）：
+  16 个终端持续输出时，缩到 LOD 让 **GPU 6.1% → 1.1%**，而 **renderer 1.8% → 1.6% 几乎不动**
+  —— `visibility:hidden` 省掉了合成绘制，但 xterm 照常解析和渲染。
+  codex 建议做 WebGL lease pool（只给可见+活跃的 N 个上 WebGL），**先不做**：
+  16 个终端满负荷才 2% renderer，没有要解决的问题。真到卡了再按这个数复量
 - **`<webview>` 远缩时不能卸载**：摘出 DOM = 浏览器会话销毁 + 注册表留死引用。
   学 TerminalNode：保持挂载 + `visibility:hidden`
 - **派活是最危险的一段**：注入 = 替用户敲回车。只接受当前活着的 agent 会话
