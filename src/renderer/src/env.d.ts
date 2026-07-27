@@ -172,6 +172,9 @@ interface TermscapeApi {
   onExit: (id: string, cb: (code: number) => void) => () => void
   loadContext: (nodeId: string) => Promise<string>
   saveContext: (nodeId: string, text: string) => Promise<{ ok: boolean; error?: string }>
+  onDelegateFlight: (
+    cb: (e: { source: string; target: string; active: boolean }) => void
+  ) => () => void
   onSpawnError: (cb: (e: { nodeId: string; message: string }) => void) => () => void
   loadWorkspace: () => Promise<unknown>
   saveWorkspace: (data: unknown) => Promise<{ ok: boolean; error?: string }>

@@ -95,12 +95,18 @@ const statusColor: Record<string, string> = {
   group: '#2C2C2E'
 }
 
+/**
+ * 连线的四种语义。加新种类时**务必同步改三处**：edgeStyle、reportAgents 的 links 过滤
+ * （授权图！漏了就是该放行的被拒）、以及加载时的迁移。
+ */
+type EdgeKind = 'context' | 'delegate' | 'credential' | 'drive'
+
 /* 磁盘上的工作区格式（只存布局，不存运行时状态） */
 interface SavedEdge {
   id: string
   source: string
   target: string
-  kind: 'context' | 'delegate' | 'credential'
+  kind: EdgeKind
 }
 /* 项目 = 一张画布 + 一个工作目录（新终端继承它） */
 interface Project {
@@ -144,7 +150,7 @@ function shortPath(p: string): string {
  * - **附着线没箭头**：上下文/凭证是"挂在这个终端上"的属性，不是一次动作，
  *   画箭头会让人误以为它也是某种调用方向。
  */
-function edgeStyle(kind: 'context' | 'delegate' | 'credential'): Partial<Edge> {
+function edgeStyle(kind: EdgeKind): Partial<Edge> {
   if (kind === 'context') {
     return {
       animated: false,
@@ -160,8 +166,19 @@ function edgeStyle(kind: 'context' | 'delegate' | 'credential'): Partial<Edge> {
       data: { kind }
     }
   }
+  if (kind === 'drive') {
+    /* 终端→浏览器：**有方向但不是主从**。agent 驱动一个工具，不是指挥另一个 agent。
+       原来和派活线共用同一种蓝色箭头 —— 和「凭证边一度被标成 context」是同一类问题：
+       连线是这个产品的协议本身，标错 kind = 协议说了假话。 */
+    return {
+      animated: false,
+      style: { stroke: '#64D2FF', strokeWidth: 1.6 },
+      markerEnd: { type: MarkerType.ArrowClosed, color: '#64D2FF', width: 14, height: 14 },
+      data: { kind }
+    }
+  }
   return {
-    animated: true,
+    animated: false,
     style: { stroke: '#0A84FF', strokeWidth: 1.8 },
     markerEnd: { type: MarkerType.ArrowClosed, color: '#0A84FF', width: 16, height: 16 },
     data: { kind }
@@ -895,12 +912,18 @@ function Board(): React.JSX.Element {
       const credIds = new Set(
         (b?.nodes ?? []).filter((n) => n.type === 'credential').map((n) => n.id)
       )
+      // 老工作区里 terminal→browser 也标成 delegate，按目标节点类型纠正
+      const browserIds = new Set(
+        (b?.nodes ?? []).filter((n) => n.type === 'browser').map((n) => n.id)
+      )
+      const fixKind = (e: SavedEdge): EdgeKind =>
+        credIds.has(e.source) ? 'credential' : browserIds.has(e.target) ? 'drive' : e.kind
       setEdges(
         (b?.edges ?? []).map((e) => ({
           id: e.id,
           source: e.source,
           target: e.target,
-          ...edgeStyle(credIds.has(e.source) ? 'credential' : e.kind)
+          ...edgeStyle(fixKind(e))
         }))
       )
       viewportRef.current = b?.viewport ?? null
@@ -1035,10 +1058,24 @@ function Board(): React.JSX.Element {
 
   // 连线规则：简报→终端=上下文注入；终端→终端=派活通道；终端→浏览器=允许驱动该浏览器；其余拒绝
   const onConnect = useCallback(
-    (c: Connection) => {
-      const src = nodes.find((n) => n.id === c.source)
-      const tgt = nodes.find((n) => n.id === c.target)
+    (rawConn: Connection) => {
+      let c = rawConn
+      let src = nodes.find((n) => n.id === c.source)
+      let tgt = nodes.find((n) => n.id === c.target)
       if (!src || !tgt || src.id === tgt.id) return
+      /* **反着拉也要认**。原来严格要求 source 是 credential/context，反向拉就静默 return ——
+         没线、没提示、没抖动，用户只会觉得"这软件坏了"。
+         而"附着线不画箭头"这个决定恰恰加剧了它：线上没有方向指示，
+         用户更没理由知道该从哪头开始拉。
+         用户的意图是明确的（把这两个连起来），方向是我们的实现细节，不该让用户来记。 */
+      const needsSwap =
+        (tgt.type === 'credential' && src.type === 'terminal') ||
+        (tgt.type === 'context' && src.type === 'terminal') ||
+        (tgt.type === 'terminal' && src.type === 'browser')
+      if (needsSwap) {
+        c = { ...c, source: rawConn.target, target: rawConn.source }
+        ;[src, tgt] = [tgt, src]
+      }
       /* 凭证 → 终端：这条线**不只是标注**，它会真的把该终端切到这个账号，
          而切换凭证 = 杀掉 tmux 会话重开（identityId 变更即 destroy + respawn）。
          拉一根线是很轻的手势，后果却是重启用户正在跑的活 —— 必须先确认。 */
@@ -1078,11 +1115,10 @@ function Board(): React.JSX.Element {
         return
       }
 
-      let kind: 'context' | 'delegate' | null = null
+      let kind: EdgeKind | null = null
       if (src.type === 'context' && tgt.type === 'terminal') kind = 'context'
-      else if (src.type === 'terminal' && (tgt.type === 'terminal' || tgt.type === 'browser')) {
-        kind = 'delegate'
-      }
+      else if (src.type === 'terminal' && tgt.type === 'terminal') kind = 'delegate'
+      else if (src.type === 'terminal' && tgt.type === 'browser') kind = 'drive'
       if (!kind) return
       setEdges((es) => addEdge({ ...c, ...edgeStyle(kind) }, es))
     },
@@ -1162,6 +1198,23 @@ function Board(): React.JSX.Element {
       return changed ? next : ns
     })
   }, [edges])
+
+  /* 派活流光：只在**此刻真有一次注入在飞**时点亮那一条线。
+     常驻 animated 在全景视图里是纯噪声，还和 agent 状态 glow 抢注意力 ——
+     屏幕上唯一在动的东西，应该是"现在真有事发生"。 */
+  useEffect(
+    () =>
+      window.termscape.onDelegateFlight(({ source, target, active }) => {
+        setEdges((es) =>
+          es.map((e) =>
+            e.source === source && e.target === target && !!e.animated !== active
+              ? { ...e, animated: active }
+              : e
+          )
+        )
+      }),
+    []
+  )
 
   const onNodesChange = useCallback(
     (changes: NodeChange<BoardNode>[]) => setNodes((ns) => applyNodeChanges(changes, ns)),
@@ -1481,7 +1534,12 @@ function Board(): React.JSX.Element {
           status: n.data.status
         })),
       links: edges
-        .filter((e) => (e.data?.kind ?? 'delegate') === 'delegate')
+        /* **drive 也要算进授权图**：主进程的 authorizeLink 同时管派活和浏览器驱动，
+           漏掉 drive 会让"连了线的浏览器"每次都弹确认框 */
+        .filter((e) => {
+          const k = (e.data?.kind as EdgeKind) ?? 'delegate'
+          return k === 'delegate' || k === 'drive'
+        })
         .map((e) => `${e.source}>${e.target}`),
       /* 上下文连线单独报：`tb context` 要按当前连线**现算**内容。
          spawn 时那份 contextNodeIds 是快照，用户改完连线不会重新传上来。 */

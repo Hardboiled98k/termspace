@@ -278,6 +278,17 @@ export interface DelegateDeps {
 const busy = new Set<string>()
 
 /**
+ * 有派活正在飞。画布上那条线据此点亮流光。
+ *
+ * **常驻动画是噪声**：这个产品的招牌交互是"缩到全景看颜色分布即知谁在等你"，
+ * 而全景里唯一在动的东西应该是"此刻真有事发生"，不是"这里存在一条线"。
+ */
+let onFlight: ((e: { source: string; target: string; active: boolean }) => void) | null = null
+export function setDelegateFlightListener(fn: typeof onFlight): void {
+  onFlight = fn
+}
+
+/**
  * 注入任务 → 轮询等这一轮的 Stop（相对发起时刻的新 Stop）→ 取 transcript 尾。
  * 超时/无 transcript 有明确回话，绝不无限挂起。
  */
@@ -332,10 +343,12 @@ tb ask 只能派给正在跑 agent 的终端 —— 往普通 shell 注入文本
   }
   if (busy.has(targetId)) return `派活被拒：${targetId} 上已有一次派活在进行中。`
   busy.add(targetId)
+  onFlight?.({ source: sourceId, target: targetId, active: true })
   try {
     return await runDelegation(deps, now, targetId, task, timeoutMs)
   } finally {
     busy.delete(targetId)
+    onFlight?.({ source: sourceId, target: targetId, active: false })
   }
 }
 

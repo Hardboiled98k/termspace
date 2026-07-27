@@ -30,7 +30,14 @@ import { startQuotaHub, type QuotaHub, type QuotaAccount } from './quota'
 import { evaluate as evaluatePolicy, type PolicyVerdict } from './approval-policy'
 import { getSettings, setSettings, type Settings } from './settings-store'
 import { searchSkills, loadSkill, listSkills } from './skill-index'
-import { delegate, noteTranscript, noteStatus, dropNode, isAgentSession } from './delegate'
+import {
+  delegate,
+  noteTranscript,
+  noteStatus,
+  dropNode,
+  isAgentSession,
+  setDelegateFlightListener
+} from './delegate'
 import {
   ensureTmux,
   hasSession,
@@ -1437,6 +1444,8 @@ app.whenReady().then(async () => {
   void syncQuotaAccounts()
   // identity 的三个 handler 在模块级注册（早于 whenReady），拿不到这个闭包 → 用引用挂过去
   syncQuotaAccountsRef = syncQuotaAccounts
+  // 派活开始/结束 → 画布上那条线点亮/熄灭流光
+  setDelegateFlightListener((e) => sendToWin('delegate:flight', e))
   app.on('before-quit', () => quotaHub?.dispose())
 
   const win = createWindow()

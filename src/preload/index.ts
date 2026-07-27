@@ -78,6 +78,14 @@ const api = {
     ipcRenderer.on('pty:spawn-error', listener)
     return () => ipcRenderer.removeListener('pty:spawn-error', listener)
   },
+  /** 派活在飞：画布据此只给"此刻真有事发生"的那条线加流光 */
+  onDelegateFlight: (
+    cb: (e: { source: string; target: string; active: boolean }) => void
+  ): (() => void) => {
+    const listener = (_e: IpcRendererEvent, ev: Parameters<typeof cb>[0]): void => cb(ev)
+    ipcRenderer.on('delegate:flight', listener)
+    return () => ipcRenderer.removeListener('delegate:flight', listener)
+  },
   loadContext: (nodeId: string): Promise<string> => ipcRenderer.invoke('context:load', nodeId),
   saveContext: (nodeId: string, text: string): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('context:save', nodeId, text),
