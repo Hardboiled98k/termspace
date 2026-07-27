@@ -2,7 +2,10 @@
  * GitHub Copilot 额度采集器。
  *
  * `GET https://api.github.com/copilot_internal/user` 的 `quota_snapshots`。
- * token 优先用 `gh auth token`（用户多半已经登录过 gh），其次环境变量。
+ *
+ * token **优先 `gh auth token`**，环境变量兜底。顺序不是随手定的：
+ * `GITHUB_TOKEN` 在很多环境里是 CI/脚本用的低权限或别的账号的 token，
+ * 而 `gh` 里那个才是用户此刻真正登录的那个人 —— HUD 上要显示的是后者的额度。
  *
  * ⚠️ 这是**未文档化**的内部路径。所以字段一旦不认识就报 unknown-shape，
  * 绝不猜、绝不拿 0 顶上。
@@ -70,13 +73,12 @@ export function toWindows(
 }
 
 function ghToken(): Promise<string> {
-  const env = process.env['GITHUB_TOKEN'] || process.env['GH_TOKEN']
-  if (env) return Promise.resolve(env)
+  const envToken = process.env['GITHUB_TOKEN'] || process.env['GH_TOKEN'] || ''
   const bin = ['/opt/homebrew/bin/gh', '/usr/local/bin/gh', '/usr/bin/gh'].find(existsSync)
-  if (!bin) return Promise.resolve('')
+  if (!bin) return Promise.resolve(envToken)
   return new Promise((resolve) => {
     execFile(bin, ['auth', 'token'], { timeout: 5000 }, (err, stdout) =>
-      resolve(err ? '' : stdout.trim())
+      resolve(err ? envToken : stdout.trim() || envToken)
     )
   })
 }
