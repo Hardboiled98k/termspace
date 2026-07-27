@@ -368,6 +368,32 @@ input:focus {
 #keys {
   padding-bottom: calc(var(--bot) + 8px);
 }
+/* 只读态：灰掉而不是藏掉。藏掉的话用户会以为 app 坏了，灰掉才看得出"是被关了" */
+#term.readonly #inputbar,
+#term.readonly #keys {
+  opacity: 0.45;
+}
+#inputbar input:disabled,
+#keys button:disabled,
+#send:disabled {
+  cursor: not-allowed;
+}
+/* 失联条：顶在最上层。宁可挡住一行标题，也不能让人对着旧画面当实时看 */
+#offline {
+  position: fixed;
+  top: calc(var(--top) + 4px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 30;
+  padding: 6px 14px;
+  border-radius: 980px;
+  font-size: 12px;
+  font-weight: 590;
+  color: #fff;
+  background: var(--orange);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+}
 .chip {
   padding: 3px 9px;
   border-radius: 980px;

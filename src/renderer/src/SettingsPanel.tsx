@@ -56,12 +56,15 @@ export function SettingsPanel({
   initial,
   onClose,
   renderPresets,
-  renderIdentities
+  renderIdentities,
+  getWorkspace
 }: {
   initial: Section
   onClose: () => void
   renderPresets: () => React.JSX.Element
   renderIdentities: () => React.JSX.Element
+  /** 取内存里的实时画布用于导出 */
+  getWorkspace: () => unknown
 }): React.JSX.Element {
   const [section, setSection] = useState<Section>(initial)
   const [s, setS] = useState<AppSettings | null>(null)
@@ -79,6 +82,9 @@ export function SettingsPanel({
   const [remote, setRemote] = useState<Awaited<
     ReturnType<typeof window.termscape.remoteStatus>
   > | null>(null)
+  const [info, setInfo] = useState<Awaited<ReturnType<typeof window.termscape.appInfo>>>(null)
+  /** 备份区的即时反馈。导出成功却一声不吭，用户不知道文件去哪了 */
+  const [backupMsg, setBackupMsg] = useState('')
 
   useEffect(() => {
     void window.termscape.getSettings().then(setS)
@@ -86,6 +92,7 @@ export function SettingsPanel({
     void window.termscape.listSkills().then(setSkills)
     void window.termscape.doctor().then(setDoctor)
     void window.termscape.remoteStatus().then(setRemote)
+    void window.termscape.appInfo().then(setInfo)
   }, [])
 
   const patch = (p: Partial<AppSettings>): void => {
@@ -159,6 +166,61 @@ export function SettingsPanel({
                   </div>
                 )}
               </div>
+
+              <h3 className="settings-h">工作区备份</h3>
+              <p className="settings-note">
+                app 已经在本机留了两层退路（<code>.bak</code> + 每小时一份、保留 24
+                份的存档），但都在同一块盘上。换机、重装、误删要靠导出的文件。
+              </p>
+              <div className="settings-actions">
+                <button
+                  className="settings-btn"
+                  onClick={() => {
+                    setBackupMsg('')
+                    void window.termscape.exportWorkspace(getWorkspace()).then((r) => {
+                      if (r.canceled) return
+                      setBackupMsg(r.ok ? `已导出到 ${r.path}` : `导出失败：${r.error}`)
+                    })
+                  }}
+                >
+                  导出工作区…
+                </button>
+                <button
+                  className="settings-btn"
+                  onClick={() => {
+                    setBackupMsg('')
+                    // 成功的话主进程会直接重启 app，这个 then 根本不会跑到
+                    void window.termscape.importWorkspace().then((r) => {
+                      if (!r.ok && !r.canceled) setBackupMsg(`导入失败：${r.error}`)
+                    })
+                  }}
+                >
+                  导入工作区…
+                </button>
+                <button className="settings-btn" onClick={() => void window.termscape.revealUserData()}>
+                  打开数据目录
+                </button>
+              </div>
+              {backupMsg && <p className="settings-note">{backupMsg}</p>}
+
+              <h3 className="settings-h">关于</h3>
+              {info && (
+                <>
+                  <p className="settings-note">
+                    Termscape {info.version} · Electron {info.electron}
+                    <br />
+                    数据目录 <code>{info.userData}</code>
+                  </p>
+                  {/* 崩溃过就说出来。白屏/闪退不留痕迹是这个项目最难查的一类问题 */}
+                  {(info.crashCount > 0 || info.crashBytes > 0) && (
+                    <p className="settings-note settings-err">
+                      崩溃日志里有内容（{Math.ceil(info.crashBytes / 1024)} KB
+                      {info.crashCount > 0 && `，本次运行 ${info.crashCount} 次`}）。
+                      「打开数据目录」会直接定位到 <code>crash.log</code>。
+                    </p>
+                  )}
+                </>
+              )}
             </>
           )}
 

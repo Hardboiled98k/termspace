@@ -1597,6 +1597,13 @@ function Board(): React.JSX.Element {
             renderIdentities={() => (
               <IdentityPanel identities={identities} onChanged={setIdentities} />
             )}
+            /* 导出取的是内存里的实时状态，不是磁盘那份 —— 磁盘那份最多落后一个 500ms 防抖周期，
+               但用户点「导出」时刚拖完的节点位置就该在里面 */
+            getWorkspace={() => ({
+              projects,
+              activeProjectId: activeProject,
+              boards: { ...boardsRef.current, [activeProject]: snapshot() }
+            })}
           />
         )}
         <ReactFlow

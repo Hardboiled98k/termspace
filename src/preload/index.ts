@@ -76,6 +76,20 @@ const api = {
   loadWorkspace: (): Promise<unknown> => ipcRenderer.invoke('workspace:load'),
   saveWorkspace: (data: unknown): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('workspace:save', data),
+  exportWorkspace: (
+    data: unknown
+  ): Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }> =>
+    ipcRenderer.invoke('workspace:export', data),
+  importWorkspace: (): Promise<{ ok: boolean; canceled?: boolean; error?: string }> =>
+    ipcRenderer.invoke('workspace:import'),
+  appInfo: (): Promise<{
+    version: string
+    electron: string
+    userData: string
+    crashBytes: number
+    crashCount: number
+  } | null> => ipcRenderer.invoke('app:info'),
+  revealUserData: (): Promise<void> => ipcRenderer.invoke('app:revealUserData'),
   onAgentStatus: (
     cb: (e: { nodeId: string; agentId: string; state: string; newTurn: boolean; event?: string }) => void
   ): (() => void) => {

@@ -524,6 +524,21 @@ async function send(text, target = currentId) {
   }
 }
 
+/**
+ * 把电脑端的「允许远程输入」开关映射到 UI。
+ *
+ * 不这么做也不会漏权限（服务端每次都重新 gate），但用户会打完一整段字才被 403 顶回来。
+ * 灰掉输入框是**如实告知**，不是安全措施 —— 服务端那道才是。
+ */
+function applyGates(data) {
+  const on = data.allowInput === true
+  $('cmd').disabled = !on
+  $('send').disabled = !on
+  for (const b of $('keys').querySelectorAll('button')) b.disabled = !on
+  $('cmd').placeholder = on ? '输入…（长按麦克风可语音转文字）' : '只读 —— 电脑上没开「允许远程输入」'
+  $('term').classList.toggle('readonly', !on)
+}
+
 $('inputbar').addEventListener('submit', (e) => {
   e.preventDefault()
   const input = $('cmd')
@@ -675,13 +690,33 @@ $('sheet').addEventListener('click', (e) => {
 
 let firstBoard = true
 
+/* 最近一次成功拿到 board 的时刻。**画布静止和画布断线在屏幕上长得一模一样** ——
+   没有这个指示器，手机进了电梯、电脑睡了，用户看到的还是一屏"运行中"的绿灯。
+   这个项目最怕的就是这种静默失败。 */
+let lastOk = Date.now()
+let visibleSince = Date.now()
+
+function checkStale() {
+  // 页面在后台时本来就不轮询，那不叫失联；刚切回来也给一拍的宽限，别闪一下红条
+  if (document.hidden || Date.now() - visibleSince < 4000) {
+    $('offline').hidden = true
+    return
+  }
+  const age = Math.round((Date.now() - lastOk) / 1000)
+  const bad = age > 8 // 轮询 2.5s 一拍，连丢三拍才算数
+  $('offline').hidden = !bad
+  if (bad) $('offline').textContent = `失联 ${age}s —— 画面是旧的`
+}
+
 async function refreshBoard() {
   if (!token || document.hidden) return
   try {
     const r = await api('/api/board')
     latest = await r.json()
+    lastOk = Date.now()
     renderBoard(latest)
     renderApprovals(latest)
+    applyGates(latest)
     // 必须等真的画出东西了才算"首屏" —— 电脑端主窗口还没上报时 board 是 null，
     // 那时候 fit 一个空画布，然后就再也不会 fit 了
     if (firstBoard && placed.length) {
@@ -691,8 +726,9 @@ async function refreshBoard() {
     // 正在看的终端在电脑上被删了 → 退回画布，别停在一块永远不更新的死屏上
     if (currentId && !nodeById(currentId)) closeTerm()
   } catch {
-    /* 401 已处理；其余等下一拍 */
+    /* 401 已处理；其余等下一拍。**故意不更新 lastOk** —— 失联要看得见 */
   }
+  checkStale()
 }
 
 function stopAll() {
@@ -707,6 +743,7 @@ function stopAll() {
   // 审批抽屉是全屏遮罩：不关掉的话，掉回配对页时它会盖住 token 输入框
   $('sheet').hidden = true
   $('btn-alerts').hidden = true
+  $('offline').hidden = true // 配对页上挂个"失联"条只会让人以为是配对失败
   note('')
 }
 
@@ -716,13 +753,20 @@ function stopAll() {
 function start() {
   screen('board')
   firstBoard = true // 重新配对后要再 fit 一次
+  lastOk = Date.now()
   refreshBoard()
   clearInterval(boardTimer)
-  boardTimer = setInterval(refreshBoard, 2500)
+  /* checkStale 也挂在这拍上，不能只靠 refreshBoard 里那次 ——
+     fetch 卡住（弱网常态）时 refreshBoard 迟迟不返回，那条路径根本不会执行到 */
+  boardTimer = setInterval(() => {
+    void refreshBoard()
+    checkStale()
+  }, 2500)
 }
 
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) return
+  visibleSince = Date.now()
   refreshBoard()
   if (currentId) refreshTerm()
 })

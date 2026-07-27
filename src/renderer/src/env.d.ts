@@ -169,6 +169,18 @@ interface TermscapeApi {
   saveContext: (nodeId: string, text: string) => Promise<{ ok: boolean; error?: string }>
   loadWorkspace: () => Promise<unknown>
   saveWorkspace: (data: unknown) => Promise<{ ok: boolean; error?: string }>
+  exportWorkspace: (
+    data: unknown
+  ) => Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }>
+  importWorkspace: () => Promise<{ ok: boolean; canceled?: boolean; error?: string }>
+  appInfo: () => Promise<{
+    version: string
+    electron: string
+    userData: string
+    crashBytes: number
+    crashCount: number
+  } | null>
+  revealUserData: () => Promise<void>
   onAgentStatus: (
     cb: (e: { nodeId: string; agentId: string; state: string; newTurn: boolean; event?: string }) => void
   ) => () => void

@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme, session, shell } from 'electron'
 import { readFile, writeFile, rename, mkdir, unlink, readdir } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
+import { existsSync, appendFileSync, statSync } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import * as pty from 'node-pty'
@@ -41,6 +41,32 @@ import {
 
 // dev 下 app 名默认是 "Electron"，userData 会指向共享目录 → 显式隔离
 app.setPath('userData', path.join(app.getPath('appData'), 'termboard'))
+
+/* ── 崩溃日志 ────────────────────────────────────────────────────────────────
+   打包后 stdout 没有去处：主进程一崩，用户看到的是"图标弹一下就没了"，手上零线索。
+   所以尽早挂上，写到 userData/crash.log，设置里给按钮打开。
+
+   注意 uncaughtException 有个副作用：装了 handler 之后 Electron 就**不再退出**了。
+   这里是刻意的 —— 终端节点全靠 tmux 续存，进程活着用户还能救；但状态可能已经不一致，
+   所以要在界面上说出来，不能装没事发生。 */
+const crashLogPath = (): string => path.join(app.getPath('userData'), 'crash.log')
+let crashCount = 0
+
+function logCrash(kind: string, err: unknown): void {
+  crashCount++
+  const stack = err instanceof Error ? (err.stack ?? err.message) : String(err)
+  console.error(`[${kind}]`, err)
+  try {
+    // 同步写：异步的话进程真要退时可能来不及落盘
+    appendFileSync(crashLogPath(), `\n[${new Date().toISOString()}] ${kind}\n${stack}\n`)
+  } catch {
+    // 日志都写不进去就算了 —— 绝不能在崩溃处理里再崩一次
+  }
+  sendToWin('app:crash', { kind, message: stack.split('\n')[0] ?? kind })
+}
+
+process.on('uncaughtException', (e) => logCrash('uncaughtException', e))
+process.on('unhandledRejection', (e) => logCrash('unhandledRejection', e))
 
 /* IPC 输入校验：nodeId 会被拼进文件路径、tmux 会话名、Map 键。各处虽都做了字符白名单
    替换，但在入口统一拒掉更省心，也挡住超长 id 把 Map 撑爆。画布真实 id 形如 t1/b2/g3/ctx-p1。 */
@@ -949,7 +975,11 @@ async function archiveWorkspace(json: string): Promise<void> {
   }
 }
 
+/** 导入已经把文件换掉、正在退出 —— renderer 那边的防抖保存不能再回写旧画布 */
+let workspaceFrozen = false
+
 ipcMain.handle('workspace:save', async (_e, data: unknown) => {
+  if (workspaceFrozen) return { ok: false, error: '正在导入，已冻结' }
   const f = workspacePath()
   try {
     const json = JSON.stringify(data, null, 2)
@@ -968,9 +998,116 @@ ipcMain.handle('workspace:save', async (_e, data: unknown) => {
   }
 })
 
+// ── 导出 / 导入 / 崩溃日志 ──
+// 工作区是用户攒了几周的画布。`.bak` 和每小时存档都只在本机 userData 里，
+// 换机、重装、误操作时够不着 —— 所以要有一个能拿走的文件。
+
+const fileStamp = (): string => new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+
+ipcMain.handle('workspace:export', async (e, data: unknown) => {
+  if (!fromMainWin(e) || !mainWin) return { ok: false, error: 'denied' }
+  const r = await dialog.showSaveDialog(mainWin, {
+    title: '导出工作区',
+    defaultPath: path.join(app.getPath('downloads'), `termscape-${fileStamp()}.json`),
+    filters: [{ name: 'JSON', extensions: ['json'] }]
+  })
+  if (r.canceled || !r.filePath) return { ok: false, canceled: true }
+  try {
+    // 存的是 renderer 手上的实时状态，不是磁盘上那份（那份可能还差一个防抖周期）
+    await writeFile(r.filePath, JSON.stringify(data, null, 2))
+    return { ok: true, path: r.filePath }
+  } catch (err) {
+    return { ok: false, error: String((err as Error)?.message ?? err) }
+  }
+})
+
+ipcMain.handle('workspace:import', async (e) => {
+  if (!fromMainWin(e) || !mainWin) return { ok: false, error: 'denied' }
+  const pick = await dialog.showOpenDialog(mainWin, {
+    title: '导入工作区',
+    properties: ['openFile'],
+    filters: [{ name: 'JSON', extensions: ['json'] }]
+  })
+  const src = pick.filePaths[0]
+  if (pick.canceled || !src) return { ok: false, canceled: true }
+
+  let json: string
+  let ws: Record<string, unknown> | null
+  try {
+    json = await readFile(src, 'utf8')
+    ws = parseWorkspace(json)
+  } catch (err) {
+    return { ok: false, error: `读不出来：${String((err as Error)?.message ?? err)}` }
+  }
+  if (!ws) return { ok: false, error: '这不是 Termscape 的工作区文件（缺 projects/nodes）' }
+
+  /* 导入是**整块替换**，且下次启动的 reap 会把不在新画布里的 tmux 会话当孤儿杀掉 ——
+     这是不可逆的，必须说清楚再动手。 */
+  const { response } = await dialog.showMessageBox(mainWin, {
+    type: 'warning',
+    buttons: ['取消', '导入并重启'],
+    defaultId: 0,
+    cancelId: 0,
+    message: '导入会整块替换当前画布',
+    detail:
+      '当前工作区会先存进 workspace-archive/ 备份目录，可手工救回。\n\n' +
+      '导入后 app 会重启。当前跑着的终端里，凡是不在新画布中的，' +
+      '其 tmux 会话会在重启时被当成孤儿结束。'
+  })
+  if (response !== 1) return { ok: false, canceled: true }
+
+  try {
+    const cur = await readFile(workspacePath(), 'utf8').catch(() => '')
+    if (cur) await archiveWorkspace(cur)
+    workspaceFrozen = true // 先冻结：renderer 的防抖保存随时可能把旧画布写回来
+    const f = workspacePath()
+    await writeFile(`${f}.tmp`, JSON.stringify(ws, null, 2))
+    await rename(`${f}.tmp`, f)
+  } catch (err) {
+    workspaceFrozen = false
+    return { ok: false, error: String((err as Error)?.message ?? err) }
+  }
+  app.relaunch()
+  app.exit(0)
+  return { ok: true }
+})
+
+ipcMain.handle('app:info', (e) => {
+  if (!fromMainWin(e)) return null
+  let crashBytes = 0
+  try {
+    crashBytes = statSync(crashLogPath()).size
+  } catch {
+    // 没崩过，正常
+  }
+  return {
+    version: app.getVersion(),
+    electron: process.versions.electron,
+    userData: app.getPath('userData'),
+    crashBytes,
+    crashCount
+  }
+})
+
+ipcMain.handle('app:revealUserData', (e) => {
+  if (!fromMainWin(e)) return
+  // 崩溃日志有就直接定位到它，没有就打开目录 —— 用户要找的多半是那个文件
+  if (existsSync(crashLogPath())) shell.showItemInFolder(crashLogPath())
+  else void shell.openPath(app.getPath('userData'))
+})
+
 app.whenReady().then(async () => {
   // 设计系统 dark-first：vibrancy 跟随系统会在浅色模式下透白，先锁深色
   nativeTheme.themeSource = 'dark'
+
+  /* 渲染进程/GPU 进程崩了主进程收不到 uncaughtException —— 单独接。
+     白屏比闪退更迷惑人，日志里必须留下痕迹。 */
+  app.on('render-process-gone', (_e, wc, d) =>
+    logCrash('render-process-gone', `${isMainWc(wc) ? '主窗口' : 'webview'} reason=${d.reason} exit=${d.exitCode}`)
+  )
+  app.on('child-process-gone', (_e, d) =>
+    logCrash('child-process-gone', `type=${d.type} reason=${d.reason} name=${d.name ?? '-'}`)
+  )
 
   /* 权限收口：画布浏览器（webview guest）只用来看页面/做测试，摄像头麦克风定位通知一律不给。
      但主窗口自己要读剪贴板 —— 终端粘贴走的就是 navigator.clipboard.readText()，别误伤。 */
