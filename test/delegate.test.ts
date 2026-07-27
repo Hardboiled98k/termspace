@@ -9,7 +9,7 @@ import assert from 'node:assert/strict'
 import { mkdtemp, writeFile, appendFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { delegate, noteStatus, noteTranscript, isAgentSession, dropNode, assistantText } from '../src/main/delegate.ts'
+import { delegate, noteStatus, noteTranscript, isAgentSession, dropNode, assistantText, isShellForeground } from '../src/main/delegate.ts'
 
 /** 记录所有注入，便于断言"到底写没写进去" */
 function deps(authorize = true): {
@@ -311,4 +311,63 @@ test('取回答对 user 行 / 撕裂行返回空，不误当成答案', () => {
     assistantText(JSON.stringify({ type: 'response_item', payload: { type: 'message', role: 'user', content: [] } })),
     ''
   )
+})
+
+// ── 注入前的前台进程闸（P0：SessionEnd 丢了就往 shell 里执行任务）─────────────
+
+test('前台是普通 shell 时拒绝注入 —— 一个字都不能写进去', async () => {
+  /* 复现路径：agent 退出 → SessionEnd 的 curl 失败（hook 是 fail-open 的）
+     → 主进程仍认为 live=true,status=done → 老实现直接把任务写进 pty，
+     而 pane 里是 zsh，那一行就是被执行的命令。实测过 `rm -rf …\r` 真的写进去了。 */
+  dropNode('sh1')
+  noteStatus('sh1', 'session', 'SessionStart', 's-sh1')
+  noteStatus('sh1', 'done', 'Stop', 's-sh1')
+  const writes: string[] = []
+  const r = await delegate(
+    {
+      hasNode: (): boolean => true,
+      writeToPty: (_id: string, d: string): void => {
+        writes.push(d)
+      },
+      foreground: async (): Promise<string> => 'zsh',
+      authorize: async (): Promise<boolean> => true
+    },
+    'src',
+    'sh1',
+    'rm -rf /tmp/DEMO',
+    3000
+  )
+  assert.equal(writes.length, 0, '被拒时绝不能有任何注入')
+  assert.match(r, /普通 shell/)
+})
+
+test('查不到前台进程时不一刀切拒（没开 tmux 的用户还要能用）', async () => {
+  dropNode('sh2')
+  noteStatus('sh2', 'session', 'SessionStart', 's-sh2')
+  noteStatus('sh2', 'done', 'Stop', 's-sh2')
+  const writes: string[] = []
+  await delegate(
+    {
+      hasNode: (): boolean => true,
+      writeToPty: (_id: string, d: string): void => {
+        writes.push(d)
+      },
+      foreground: async (): Promise<string> => '', // 查不到
+      authorize: async (): Promise<boolean> => true
+    },
+    'src',
+    'sh2',
+    '干活',
+    2000
+  )
+  assert.equal(writes.length, 1)
+})
+
+test('认不出的进程名放行（agent 的进程名列不全，别误拦新 CLI）', () => {
+  for (const shell of ['zsh', '-zsh', '/bin/bash', 'fish', 'SH']) {
+    assert.equal(isShellForeground(shell), true, `${shell} 应判成 shell`)
+  }
+  for (const agent of ['claude', 'codex', 'node', 'python3', 'bun', 'aider']) {
+    assert.equal(isShellForeground(agent), false, `${agent} 不该被当成 shell`)
+  }
 })

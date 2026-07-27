@@ -36,7 +36,8 @@ import {
   killSession,
   buildSpawnArgs,
   reapOrphanSessions,
-  capturePane
+  capturePane,
+  paneCommand
 } from './tmux'
 
 // dev 下 app 名默认是 "Electron"，userData 会指向共享目录 → 显式隔离
@@ -1211,6 +1212,8 @@ app.whenReady().then(async () => {
             {
               hasNode: (nid) => ptys.has(nid),
               writeToPty: (nid, data) => ptys.get(nid)?.write(data),
+              // 注入前查前台进程：agent 退出但 SessionEnd 丢了时，这是最后一道闸
+              foreground: (nid) => paneCommand(nid),
               authorize: (s, t, task2) =>
                 authorizeLink(
                   s,

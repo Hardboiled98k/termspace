@@ -150,6 +150,27 @@ export function capturePane(nodeId: string): Promise<string> {
   })
 }
 
+/**
+ * 该节点 pane 里此刻的前台进程名（`zsh` / `claude` / `codex` / `node`…）。
+ * 拿不到返回空串 —— 调用方据此决定要不要 fail-closed。
+ *
+ * 派活前必须查这个：hook 上报是 **fail-open** 的（curl 失败就静默跳过），
+ * agent 退出时那条 SessionEnd 一旦丢了，主进程会一直以为它还活着，
+ * 下一次 `tb ask` 就把任务文本写进一个**普通 shell** —— 那等于直接执行任意命令。
+ * 已实测复现：状态残留时 `rm -rf …\r` 真的被写进了 pty。
+ */
+export function paneCommand(nodeId: string): Promise<string> {
+  return new Promise((resolve) => {
+    if (!tmuxPath) return resolve('')
+    execFile(
+      tmuxPath,
+      ['-L', SOCKET, 'display-message', '-p', '-t', paneTarget(nodeId), '#{pane_current_command}'],
+      { timeout: 3000 },
+      (err, stdout) => resolve(err ? '' : stdout.trim())
+    )
+  })
+}
+
 /** 组装 PTY 程序与参数：tmux 可用 → tmux 客户端；否则纯 shell */
 export function buildSpawnArgs(
   tmux: string | null,

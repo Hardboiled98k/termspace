@@ -226,9 +226,34 @@ async function lastAssistantSince(path: string, sinceBytes: number): Promise<str
   return ''
 }
 
+/**
+ * 目标 pane 此刻的前台进程名。空串 = 查不到（没开 tmux / 查询失败）。
+ * 见 isShellForeground 的注释：这是防"任务被当成 shell 命令执行"的最后一道闸。
+ */
+export type ForegroundProbe = (id: string) => Promise<string>
+
+/**
+ * 这个前台进程是不是一个**光秃秃的 shell**。
+ *
+ * hook 上报是 fail-open 的：agent 退出时 SessionEnd 那条 curl 失败，主进程就永远
+ * 以为它还活着（live=true, status=done），下一次派活直接把任务文本写进 pty ——
+ * 而此刻 pane 里是 zsh，那一行就是**被执行的命令**。已实测复现。
+ *
+ * 判据用白名单式的"已知 shell"而不是"已知 agent"：agent 的进程名五花八门
+ * （claude / codex / node / python / bun…），列不全；而 shell 就那么几个。
+ * 认不出的进程名一律当成"不是 shell"放行 —— 否则任何新 CLI 都会被误拦。
+ */
+const SHELLS = new Set(['sh', 'bash', 'zsh', 'fish', 'dash', 'ksh', 'tcsh', 'csh', 'nu', 'xonsh'])
+export function isShellForeground(cmd: string): boolean {
+  const name = cmd.trim().replace(/^-/, '').split('/').pop() ?? ''
+  return SHELLS.has(name.toLowerCase())
+}
+
 export interface DelegateDeps {
   hasNode: (id: string) => boolean
   writeToPty: (id: string, data: string) => void
+  /** 可选：没提供就退回只靠 hook 状态（老行为） */
+  foreground?: ForegroundProbe
   /**
    * 授权判定：画布上有没有 source→target 的派活连线，没有就问用户。
    * 说明白：source 是调用方自报的（同 UID 进程本来就能直接 tmux send-keys 绕过这里），
@@ -309,6 +334,18 @@ async function runDelegation(
   task: string,
   timeoutMs: number
 ): Promise<string> {
+  /* 注入前最后一道闸：pane 里此刻跑的要是个光秃秃的 shell，说明 agent 早退了、
+     只是 SessionEnd 丢了。**这时注入 = 直接执行任意命令**，必须拒。
+     查不到（没开 tmux）就沿用 hook 状态那套判断，不把功能一刀切死。 */
+  if (deps.foreground) {
+    const cmd = await deps.foreground(targetId)
+    if (cmd && isShellForeground(cmd)) {
+      return `派活被拒：${targetId} 此刻前台是 ${cmd}（一个普通 shell），agent 已经退出了。
+状态里还标着"活着"是因为它退出时的上报丢了。往 shell 注入文本等于直接执行命令，所以拦下。
+在那个终端里重新起 agent 再试。`
+    }
+  }
+
   const startStop = r.lastStopAt
   const startSeq = r.workingSeq
   const startAt = Date.now()
