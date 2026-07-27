@@ -26,6 +26,10 @@ import { listPresets, upsertPreset, deletePreset } from './preset-store'
 import { startWorkerWatch, workerAction, type WorkerWatch } from './worker-watch'
 import { startRemoteApi, type RemoteApi } from './remote'
 import { resolveBind } from './net-iface'
+import { issueToken, loadTokens, revokeToken, toMeta } from './remote-tokens'
+
+/** remote token 表的位置。IPC 和启动处共用一个来源，别两边各拼一次路径 */
+const remoteTokenFile = (): string => path.join(app.getPath('userData'), 'remote-token')
 import { startQuotaHub, type QuotaHub, type QuotaAccount } from './quota'
 import { evaluate as evaluatePolicy, type PolicyVerdict } from './approval-policy'
 import { getSettings, setSettings, type Settings } from './settings-store'
@@ -787,6 +791,34 @@ ipcMain.handle('remote:status', async (e) => {
     pairUrl: remoteApi ? `http://${remoteApi.host}:${remoteApi.port}/#t=${remoteApi.token}` : ''
   }
 })
+/** 已发出的访问凭据（**只回元数据，token 本身绝不回**，刚签发那次除外） */
+ipcMain.handle('remote:tokens', async (e) => {
+  if (!fromMainWin(e)) return []
+  return (await loadTokens(remoteTokenFile())).map(toMeta)
+})
+
+/** 签发一把只读分享链接。返回完整链接（**这是 token 唯一一次出主进程**） */
+ipcMain.handle('remote:issueViewer', async (e, label: string) => {
+  if (!fromMainWin(e)) return null
+  if (!remoteApi) return { error: '远程访问没开' }
+  const { issued } = await issueToken(remoteTokenFile(), 'viewer', String(label ?? ''))
+  await remoteApi.reloadTokens()
+  return {
+    url: `http://${remoteApi.host}:${remoteApi.port}/#t=${issued.token}`,
+    expiresAt: issued.expiresAt
+  }
+})
+
+ipcMain.handle('remote:revoke', async (e, hint: string) => {
+  if (!fromMainWin(e)) return []
+  const list = await loadTokens(remoteTokenFile())
+  // 渲染层只有前 6 位（token 本身不出主进程），按它反查
+  const hit = list.find((t) => t.token.startsWith(String(hint ?? '')) && String(hint ?? '').length === 6)
+  if (hit) await revokeToken(remoteTokenFile(), hit.token)
+  await remoteApi?.reloadTokens()
+  return (await loadTokens(remoteTokenFile())).map(toMeta)
+})
+
 ipcMain.handle('skills:list', async () => {
   const dirs = (await getSettings()).skillDirs
   return (await listSkills(dirs)).map((s) => ({
@@ -1380,7 +1412,7 @@ app.whenReady().then(async () => {
     try {
       const bind = resolveBind(st.remoteBind)
       remoteApi = await startRemoteApi({
-        tokenFile: path.join(app.getPath('userData'), 'remote-token'),
+        tokenFile: remoteTokenFile(),
         port: st.remotePort,
         host: bind.host,
         // 打包后 mobile/ 在 asar 里（electron-builder.yml 的 files 收了它），fs 能直接读

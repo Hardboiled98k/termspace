@@ -12,10 +12,14 @@
  */
 import http from 'node:http'
 import { join } from 'node:path' // 不整个 import path：处理函数里有个局部变量也叫 path
-import { randomUUID, timingSafeEqual } from 'node:crypto'
-import { chmod, readFile, writeFile } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
-import { hostAllowed } from './net-iface'
+import { readFile } from 'node:fs/promises'
+import { hostAllowed } from './net-iface.ts'
+import {
+  ensureOwnerToken,
+  matchToken,
+  redactBoardForViewer,
+  type RemoteToken
+} from './remote-tokens.ts'
 
 export interface RemoteDeps {
   /** userData 下的 token 文件路径 */
@@ -41,7 +45,10 @@ export interface RemoteDeps {
 export interface RemoteApi {
   port: number
   host: string
+  /** owner 那把（配对二维码用）。viewer 的另发，见 remote-tokens.ts */
   token: string
+  /** token 表变了（签发/撤销）→ 立刻生效，不用重启服务 */
+  reloadTokens: () => Promise<void>
   /** 状态/审批有变化时推给所有 SSE 客户端 */
   push: (event: string, data: unknown) => void
   dispose: () => void
@@ -87,32 +94,16 @@ const CSP = [
   "frame-ancestors 'none'"
 ].join('; ')
 
-/** token 持久化：换设备/怀疑泄露时删掉这个文件即可重新生成 */
-async function loadOrCreateToken(file: string): Promise<string> {
-  if (existsSync(file)) {
-    try {
-      const t = (await readFile(file, 'utf8')).trim()
-      if (t.length >= 16) return t
-    } catch {
-      // 读不出来就重建
-    }
-  }
-  const t = randomUUID().replace(/-/g, '')
-  await writeFile(file, t)
-  await chmod(file, 0o600)
-  return t
-}
-
 export async function startRemoteApi(deps: RemoteDeps): Promise<RemoteApi> {
-  const token = await loadOrCreateToken(deps.tokenFile)
-  const tokenBuf = Buffer.from(token)
+  let tokens = await ensureOwnerToken(deps.tokenFile)
+  const ownerToken: string = tokens.find((t) => t.role === 'owner')!.token
   const clients = new Set<http.ServerResponse>()
   const boundHost = deps.host
 
-  const authed = (req: http.IncomingMessage): boolean => {
+  /** 认出是谁。**返回主体而不是布尔** —— 只读分享的全部前提就是服务端知道来的是谁 */
+  const authed = (req: http.IncomingMessage): RemoteToken | null => {
     const raw = String(req.headers['authorization'] ?? '')
-    const given = Buffer.from(raw.replace(/^Bearer\s+/i, ''))
-    return given.length === tokenBuf.length && timingSafeEqual(given, tokenBuf)
+    return matchToken(tokens, raw.replace(/^Bearer\s+/i, ''))
   }
 
   const json = (res: http.ServerResponse, code: number, body: unknown): void => {
@@ -198,15 +189,33 @@ export async function startRemoteApi(deps: RemoteDeps): Promise<RemoteApi> {
         return serveStatic(res, path)
       }
 
-      if (!authed(req)) return json(res, 401, { error: 'unauthorized' })
+      const who = authed(req)
+      if (!who) return json(res, 401, { error: 'unauthorized' })
+      /* **只读角色靠身份挡，不靠那两个全局开关。**
+         开关是"我允许远程输入"，角色是"这个人本来就不该能输入" ——
+         两者是不同的东西，混在一起的话，用户为了自己手机方便打开开关，
+         就等于把写权限一起给了拿着分享链接的人。 */
+      const viewer = who.role === 'viewer'
 
       // ── 画布快照 ──
       if (path === '/api/board' && req.method === 'GET') {
+        if (viewer) {
+          /* 只读的人拿到的是**脱敏后的布局**：没有绝对路径、没有审批清单
+             （审批摘要里有命令和文件名），两个开关一律报 false —— 他本来就不能写 */
+          return json(res, 200, {
+            board: redactBoardForViewer(deps.getBoard()),
+            approvals: [],
+            allowInput: false,
+            allowApprove: false,
+            role: 'viewer'
+          })
+        }
         return json(res, 200, {
           board: deps.getBoard(),
           approvals: deps.listApprovals(),
           allowInput: deps.allowInput(),
-          allowApprove: deps.allowApprove()
+          allowApprove: deps.allowApprove(),
+          role: 'owner'
         })
       }
 
@@ -231,12 +240,14 @@ export async function startRemoteApi(deps: RemoteDeps): Promise<RemoteApi> {
 
       // ── 审批 ──
       if (path === '/api/approvals' && req.method === 'GET') {
+        if (viewer) return json(res, 200, { approvals: [] })
         return json(res, 200, { approvals: deps.listApprovals() })
       }
       const decide = path.match(/^\/api\/approvals\/([A-Za-z0-9-]{1,64})$/)
       if (decide && req.method === 'POST') {
         /* 必须单独门控。此前只查 token 就放行，而写入终端反倒要开关——语义是倒挂的：
            批准一次工具调用（可能是 rm -rf / git push --force）比敲一行字危险得多。 */
+        if (viewer) return json(res, 403, { error: '只读访问不能批准工具调用' })
         if (!deps.allowApprove()) {
           return json(res, 403, { error: '远程审批未开启（设置 → 远程访问）' })
         }
@@ -253,6 +264,10 @@ export async function startRemoteApi(deps: RemoteDeps): Promise<RemoteApi> {
       // ── 终端当前屏文本（只读）──
       const peek = path.match(/^\/api\/terminal\/([A-Za-z0-9_-]{1,64})$/)
       if (peek && req.method === 'GET') {
+        /* **终端内容默认不给只读的人。** 屏幕上有路径、邮箱、客户名，
+           还可能有粘贴进去的 token —— 而"看一眼谁在等你"这个诉求不需要内容。
+           要给的话应当是 owner 逐节点显式开，不是默认全开。 */
+        if (viewer) return json(res, 403, { error: '只读访问看不到终端内容' })
         const lines = Math.min(200, Math.max(1, Number(url.searchParams.get('lines')) || 40))
         return json(res, 200, { nodeId: peek[1], text: await deps.peek(peek[1], lines) })
       }
@@ -260,6 +275,7 @@ export async function startRemoteApi(deps: RemoteDeps): Promise<RemoteApi> {
       // ── 写入终端（默认关闭）──
       const input = path.match(/^\/api\/terminal\/([A-Za-z0-9_-]{1,64})\/input$/)
       if (input && req.method === 'POST') {
+        if (viewer) return json(res, 403, { error: '只读访问不能写入终端' })
         if (!deps.allowInput()) {
           return json(res, 403, { error: '远程输入未开启（设置 → 远程访问）' })
         }
@@ -291,7 +307,12 @@ export async function startRemoteApi(deps: RemoteDeps): Promise<RemoteApi> {
   return {
     port,
     host: boundHost,
-    token,
+    token: ownerToken,
+    /* 签发/撤销后立刻生效。**不能靠重启服务** —— 撤销一个人要马上断，
+       而重启会把所有 SSE 连接一起掐掉，包括用户自己手机上那条 */
+    reloadTokens: async () => {
+      tokens = await ensureOwnerToken(deps.tokenFile)
+    },
     push: (event, data) => {
       const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`
       for (const c of clients) {

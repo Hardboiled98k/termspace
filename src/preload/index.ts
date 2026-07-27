@@ -22,6 +22,20 @@ const api = {
   uninstallHooks: (): Promise<{ ok: boolean; changed?: boolean }> =>
     ipcRenderer.invoke('hooks:uninstall'),
   doctor: (): Promise<unknown[]> => ipcRenderer.invoke('app:doctor'),
+  /** 已发出的访问凭据（只有元数据，没有 token 本身） */
+  remoteTokens: (): Promise<
+    { label: string; role: 'owner' | 'viewer'; createdAt: number; expiresAt?: number; hint: string }[]
+  > => ipcRenderer.invoke('remote:tokens'),
+  /** 签发只读分享链接。**token 一生只出主进程这一次**，之后只剩前 6 位 */
+  issueViewerLink: (
+    label: string
+  ): Promise<{ url?: string; expiresAt?: number; error?: string } | null> =>
+    ipcRenderer.invoke('remote:issueViewer', label),
+  revokeRemoteToken: (
+    hint: string
+  ): Promise<
+    { label: string; role: 'owner' | 'viewer'; createdAt: number; expiresAt?: number; hint: string }[]
+  > => ipcRenderer.invoke('remote:revoke', hint),
   remoteStatus: (): Promise<unknown> => ipcRenderer.invoke('remote:status'),
   reapSessions: (knownIds: string[]): Promise<number> =>
     ipcRenderer.invoke('sessions:reap', knownIds),

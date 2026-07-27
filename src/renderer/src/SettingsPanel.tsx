@@ -79,6 +79,10 @@ export function SettingsPanel({
   >([])
   /** 设置落盘失败的原因。静默失败 = 用户以为改好了，其实没有 */
   const [saveErr, setSaveErr] = useState('')
+  const [tokens, setTokens] = useState<RemoteTokenMeta[]>([])
+  const [shareLabel, setShareLabel] = useState('')
+  /** 刚签发的完整链接。**只在内存里活一次** —— 主进程之后只回前 6 位 */
+  const [shareUrl, setShareUrl] = useState('')
   const [remote, setRemote] = useState<Awaited<
     ReturnType<typeof window.termscape.remoteStatus>
   > | null>(null)
@@ -92,6 +96,7 @@ export function SettingsPanel({
     void window.termscape.listSkills().then(setSkills)
     void window.termscape.doctor().then(setDoctor)
     void window.termscape.remoteStatus().then(setRemote)
+    void window.termscape.remoteTokens().then(setTokens)
     void window.termscape.appInfo().then(setInfo)
   }, [])
 
@@ -452,6 +457,80 @@ export function SettingsPanel({
                     </div>
                   </div>
                 </>
+              )}
+
+              <h3 className="settings-h">只读分享</h3>
+              <p className="settings-note">
+                发一条<b>只读</b>链接给别人：他能看到画布布局、节点状态和谁在等你，
+                <b>看不到终端内容、看不到审批、不能输入</b>。
+                默认 24 小时后自动失效，也可以随时单独撤销 —— 这是每条链接一把 token
+                （不是共用那把），撤一个不影响别人。
+              </p>
+              {remote?.running ? (
+                <>
+                  <div className="settings-actions">
+                    <button
+                      className="settings-btn"
+                      onClick={async () => {
+                        setShareUrl('')
+                        const r = await window.termscape.issueViewerLink(shareLabel)
+                        if (!r || r.error) return setShareUrl(`失败：${r?.error ?? '未知'}`)
+                        setShareUrl(r.url ?? '')
+                        setTokens(await window.termscape.remoteTokens())
+                      }}
+                    >
+                      生成只读链接
+                    </button>
+                    <input
+                      placeholder="给谁看（可留空）"
+                      value={shareLabel}
+                      onChange={(e) => setShareLabel(e.currentTarget.value)}
+                    />
+                  </div>
+                  {shareUrl && (
+                    <p className="settings-note">
+                      {/* token 一生只在这里出现一次，之后主进程只回前 6 位 */}
+                      <b>只显示这一次，关掉就看不到了：</b>
+                      <br />
+                      <code className="settings-token">{shareUrl}</code>
+                      <br />
+                      <button
+                        className="settings-btn"
+                        onClick={() => void navigator.clipboard.writeText(shareUrl)}
+                      >
+                        复制
+                      </button>
+                    </p>
+                  )}
+                  <div className="skill-list">
+                    {tokens.map((t) => (
+                      <div key={t.hint} className="skill-row">
+                        <span className="skill-name">
+                          {t.role === 'owner' ? '本机' : '只读'} · {t.label}
+                        </span>
+                        <span className="skill-desc">
+                          {t.hint}…
+                          {t.expiresAt
+                            ? `　${new Date(t.expiresAt).toLocaleString('zh-CN')} 失效`
+                            : '　不过期'}
+                        </span>
+                        {t.role === 'viewer' && (
+                          <button
+                            className="identity-del"
+                            onClick={async () =>
+                              setTokens(await window.termscape.revokeRemoteToken(t.hint))
+                            }
+                          >
+                            撤销
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                    {tokens.length === 0 && <div className="identity-empty">还没有发出去的链接</div>}
+                  </div>
+                </>
+              ) : (
+                <p className="settings-note">远程访问没开，先打开上面的开关并重启。</p>
               )}
 
               <h3 className="settings-h">怎么从外面连</h3>

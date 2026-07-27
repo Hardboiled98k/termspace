@@ -67,6 +67,16 @@ interface IdentityMeta {
   envKeys: string[]
 }
 
+/** 一条访问凭据的元数据。**没有 token 本身** —— 它只在签发那一刻出过主进程一次 */
+interface RemoteTokenMeta {
+  label: string
+  role: 'owner' | 'viewer'
+  createdAt: number
+  expiresAt?: number
+  /** 前 6 位，够在列表里认出是哪条 */
+  hint: string
+}
+
 interface Preset {
   id: string
   name: string
@@ -117,6 +127,11 @@ interface TermscapeApi {
   doctor: () => Promise<
     { key: string; label: string; ok: boolean; detail: string; hint: string }[]
   >
+  remoteTokens: () => Promise<RemoteTokenMeta[]>
+  issueViewerLink: (
+    label: string
+  ) => Promise<{ url?: string; expiresAt?: number; error?: string } | null>
+  revokeRemoteToken: (hint: string) => Promise<RemoteTokenMeta[]>
   reapSessions: (knownIds: string[]) => Promise<number>
   listSkills: () => Promise<{ name: string; description: string; source: string }[]>
   reportAgents: (payload: {
