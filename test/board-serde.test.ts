@@ -36,7 +36,15 @@ const SAMPLES: Record<string, BoardNode> = {
     ...pos,
     data: { title: '页面', url: 'https://example.com' }
   } as BoardNode,
-  credential: { id: 'c1', type: 'credential', ...pos, data: { identityId: 'i9' } } as BoardNode
+  /* 凭证样本**故意投毒**：原来只有 `{ identityId }`，根本没有 env 字段可漏 ——
+     那条"存盘里绝不能出现 env 值"的用例结构上就抓不到它要防的事。
+     将来有人给节点 data 加了 env 并在 toSaved 里顺手带上，也照样绿。 */
+  credential: {
+    id: 'c1',
+    type: 'credential',
+    ...pos,
+    data: { identityId: 'i9', envKeys: ['OPENAI_API_KEY'], env: { OPENAI_API_KEY: 'sk-LEAK' } }
+  } as unknown as BoardNode
 }
 
 test('每个可存盘的节点类型都有样本（加了新类型就来补）', () => {
@@ -73,6 +81,7 @@ test('组的折叠态要持久化（不然重开组身缩着、子终端全冒�
 test('凭证节点存盘里**绝不能**出现 env 值', () => {
   // 渲染层本来就拿不到值，但这条用例是防将来有人"顺手"把它带过来
   const raw = JSON.stringify(toSaved(SAMPLES.credential as never))
+  assert.ok(!raw.includes('sk-LEAK'), `env 值进了存盘：${raw}`)
   assert.ok(!/env|token|key|secret/i.test(raw), `存盘内容混进了敏感字段：${raw}`)
 })
 

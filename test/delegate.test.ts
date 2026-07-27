@@ -155,9 +155,10 @@ test('空任务拒绝', async () => {
 test('放行路径：回答必须是**本轮新写入**的，不能是 transcript 里原有的旧答案', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'termscape-test-'))
   const tp = path.join(dir, 'transcript.jsonl')
-  /* 关键：派活**之前**文件里就已经有一条 assistant 回答。
-     老实现直接取"最后一条 assistant"，于是这条陈年旧答案会被当成本轮结果交回去 ——
-     而原来的测试正是在派活前把"干完了"写好，等于把这个 bug 钉成了正确行为。 */
+  /* 这条验的是**放行路径能跑通** + 注入内容原样带一个回车。
+     ⚠️ 它**不能**证明"不会返回旧答案"：旧答案写在前面、新答案 append 在后面，
+     一个完全忽略 sinceBytes 的实现（读整份、倒着找最后一条 assistant）照样返回新答案。
+     真正钉住那条的是下面那个用例（本轮只有 tool_use 没有正文），别以为这条兜着。 */
   const stale = JSON.stringify({
     type: 'assistant',
     message: { content: [{ type: 'text', text: '这是上一轮的旧答案' }] }
@@ -525,4 +526,47 @@ test('等待期间目标换了会话 → 中止，不得把新会话的回答当
 
   const r = await p
   assert.match(r, /换了会话/, `应该中止，实际返回：${r}`)
+})
+
+test('答完就退出（Stop → SessionEnd）仍要返回本轮答案，不得误判成「换了会话」', async () => {
+  /* 这是「判据用 path 不用 epoch」那个选择的互补面。
+     `SessionEnd` 自己也推进 epoch，而"答完就退出"是完全正常的一轮 ——
+     若用 epoch 判中止，用户明明做完了却会收到「本轮结果不可取，去该终端确认」。
+     transcript 路径没变，所以按 path 判就不会误杀。 */
+  const dir = await mkdtemp(path.join(tmpdir(), 'termscape-exit-'))
+  const tp = path.join(dir, 'transcript.jsonl')
+  await writeFile(tp, `${JSON.stringify({ type: 'user', message: { content: 'hi' } })}\n`)
+
+  dropNode('n9')
+  noteStatus('n9', 'session', 'SessionStart', 's-n9')
+  noteStatus('n9', 'done', 'Stop', 's-n9')
+  noteTranscript('n9', tp)
+
+  const r = await delegate(
+    {
+      hasNode: (): boolean => true,
+      writeToPty: (): void => {
+        noteStatus('n9', 'working', 'UserPromptSubmit', 's-n9')
+        setTimeout(() => {
+          void appendFile(
+            tp,
+            `${JSON.stringify({
+              type: 'assistant',
+              message: { content: [{ type: 'text', text: '干完了，我退了' }] }
+            })}\n`
+          ).then(() => {
+            noteStatus('n9', 'done', 'Stop', 's-n9')
+            // 答完随即退出 —— epoch 会 +1，但这一轮是合法完成的
+            noteStatus('n9', 'session', 'SessionEnd', 's-n9')
+          })
+        }, 60)
+      },
+      authorize: async () => true
+    },
+    'src',
+    'n9',
+    '干活',
+    8000
+  )
+  assert.equal(r, '干完了，我退了', `合法答案被误杀了：${r}`)
 })

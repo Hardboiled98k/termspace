@@ -102,7 +102,18 @@ export function assembleSpawnArgs(
     if (explicit.has(k) || providerPrefix.test(k)) args.push('-e', `${k}=${v}`)
   }
   for (const [k, v] of Object.entries(env)) {
-    if (k.startsWith('TERMBOARD_')) args.push('-e', `${k}=${v}`)
+    if (!k.startsWith('TERMBOARD_')) continue
+    /* **HOOK_TOKEN 绝不进 argv。** 上面那个循环判密钥之前就 `continue` 掉了
+       所有 `TERMBOARD_*`，这里再无条件推回去 —— 于是这把 token 整条出现在
+       `ps -Ao args` 里，同机任何用户都读得到。而它能伪造该节点的 SessionStart，
+       **SessionStart 在 delegate 的状态机里先于墓碑、无条件置活**
+       （所以它才按 0600 落盘、创建那刻就给权限，见 hooks.ts）。
+
+       这个 `-e` 本来就是冗余的：endpoint 文件会按 `TERMBOARD_NODE_ID`
+       从 token 目录**现读**这把 token，而 hook 脚本和 tb 脚本都是 source 完再用 ——
+       跨 app 重启接回老会话时也只有现读这条路管用。删掉它两条脚本路径都不受影响。 */
+    if (k === 'TERMBOARD_HOOK_TOKEN') continue
+    args.push('-e', `${k}=${v}`)
   }
   args.push('-c', cwd, '-s', session)
   if (secretFile) {

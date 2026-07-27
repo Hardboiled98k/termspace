@@ -13,9 +13,17 @@ export APPLE_API_ISSUER=APPLE_ISSUER_ID
 export APPLE_TEAM_ID=85V88J2F3F
 npm run dist:signed
 
-# 3. 验收三连
+# 3. 验收
 codesign --verify --deep --strict dist/mac-arm64/Termscape.app
 spctl --assess --type execute dist/mac-arm64/Termscape.app   # 要看到 source=Notarized Developer ID
+
+# 只有要把 dmg 发给人手动下载时才需要下面两步。
+# electron-builder 只公证 .app，**dmg 默认没有 ticket** —— 不做这两步就直接
+# stapler validate 必然报 "does not have a ticket stapled to it"。
+# 自动更新走的是 zip，不受影响；publish.sh 也只发 zip + yml。
+xcrun notarytool submit dist/Termscape-<版本>-arm64.dmg \
+  --key "$APPLE_API_KEY" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER" --wait
+xcrun stapler staple dist/Termscape-<版本>-arm64.dmg
 xcrun stapler validate dist/Termscape-<版本>-arm64.dmg
 
 # 4. 发布（第一次要先填 ~/.termscape-publish.env，见脚本头部）

@@ -67,8 +67,9 @@ test('ssh 参数里主机名在 -- 之后，且 BatchMode 开着', () => {
   assert.ok(dashdash >= 0, '必须有 --')
   assert.ok(a.indexOf('mini') > dashdash, '主机名必须在 -- 之后')
   assert.ok(a.includes('BatchMode=yes'), '没配免密时要立刻失败，不能挂在密码提示上')
-  // 任务正文不在 argv 里 —— ps 对同机所有用户可见
-  assert.ok(!a.some((s) => s.includes('任务')), 'argv 里不该有任务正文')
+  /* 「任务正文不进 argv」这条不变量**不住在这里**：sshArgs 压根没有 task 参数，
+     怎么写都不可能失败。它实际住在 index.ts 的 `child.stdin?.end(payload)`。
+     此处不放一条恒真的装饰性断言，免得给假信心。 */
 })
 
 test('helper 的 stdin 解析：形状不对一律拒', () => {

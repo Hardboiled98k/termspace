@@ -339,7 +339,10 @@ feed URL 做成用户可改的是有代价的（能被诱导改源），现在�
 - `allowDowngrade = false` 要**显式写**：默认就是它，但签名不提供版本单调性，
   防降级全靠这一层，将来启用 prerelease / channel 时很容易无意改掉
 - `checking` / `downloading` 期间要拒绝新一轮 check：electron-updater 的 check
-  promise 在**自动下载完成之前**就 resolve，此时再 check 会让两轮事件交错
+  promise 在**自动下载完成之前**就 resolve，此时再 check 会让两轮事件交错。
+  **例行检查还要额外挡住 `available` / `ready`**：包已下好等安装时，一次失败的检查会把
+  phase 冲成 `error`，而 install 有 `phase !== 'ready'` 门禁 —— 用户从此装不了那个
+  已经在磁盘上的包，只能重启 app
 - 版本号要单独存，**不能从展示状态反推**：第一次 `download-progress` 之后
   phase 已是 `downloading`，再按 `phase === 'available'` 取就只剩空串
 - macOS 上 `quitAndInstall` 的两个参数**不按 BaseUpdater 语义解释**（MacUpdater 重写了它）

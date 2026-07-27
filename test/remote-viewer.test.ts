@@ -130,3 +130,34 @@ test('认不出的 token 一律 401', async () => {
   assert.equal((await call('x'.repeat(64), '/api/board')).status, 401)
   assert.equal((await call('', '/api/board')).status, 401)
 })
+
+test('viewer 拿不到实时推送 —— push 推的是未脱敏的完整快照', async () => {
+  /* 快照那三条路径都做了脱敏，SSE 曾经没有。同一份数据两个出口、只守住一个 ——
+     项目里出过一次（toPublicApproval 只写在两条外发路径中的一条），这里是高一层重演。
+     手机端本来就是轮询（EventSource 设不了 Authorization 头），viewer 不需要这条。 */
+  const r = await fetch(`${base}/api/events`, {
+    headers: { authorization: `Bearer ${viewerTok}` }
+  })
+  assert.equal(r.status, 403)
+  await r.text()
+})
+
+test('owner 的 SSE 照常可用，且能收到推送', async () => {
+  const ctl = new AbortController()
+  const r = await fetch(`${base}/api/events`, {
+    headers: { authorization: `Bearer ${ownerTok}` },
+    signal: ctl.signal
+  })
+  assert.equal(r.status, 200)
+  const reader = r.body!.getReader()
+  const first = await reader.read() // hello
+  assert.ok(new TextDecoder().decode(first.value).includes('hello'))
+
+  api.push('board', { projects: [{ cwd: SECRET_PATH }] })
+  const pushed = await reader.read()
+  assert.ok(
+    new TextDecoder().decode(pushed.value).includes(SECRET_PATH),
+    'owner 是自己，推送不脱敏'
+  )
+  ctl.abort()
+})

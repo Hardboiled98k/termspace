@@ -127,3 +127,36 @@ test('shellQuote 挡得住带引号的值', () => {
   assert.equal(shellQuote("a'b"), `'a'\\''b'`)
   assert.equal(shellQuote('has space'), `'has space'`)
 })
+
+test('TERMBOARD_HOOK_TOKEN 绝不进 argv —— 它能伪造 SessionStart', () => {
+  /* 这把 token 能伪造该节点的 SessionStart，而 SessionStart 在 delegate 的状态机里
+     **先于墓碑、无条件置活** —— 所以它按 0600 落盘、创建那刻就给权限。
+     可它一度整条出现在 `tmux -e` 里，也就是 `ps -Ao args` 里，同机任何用户都读得到。
+
+     上面那条用例的 env 样本只有 provider 密钥，恰好避开了它 ——
+     所以它验的是"provider 密钥不进 argv"，不是本文件头声明的那条通用不变量。 */
+  for (const secretFile of ['/tmp/env-x.sh', undefined]) {
+    const { args } = assembleSpawnArgs(
+      '/usr/bin/tmux',
+      'tb-t1',
+      '/c.conf',
+      '/bin/zsh',
+      '/tmp',
+      {
+        TERMBOARD_HOOK_TOKEN: 'HOOKTOK-SECRET',
+        TERMBOARD_NODE_ID: 't1',
+        TERMBOARD_HOOK_ENDPOINT: '/x/endpoint.env'
+      },
+      undefined,
+      secretFile
+    )
+    const flat = args.join(' ')
+    assert.ok(
+      !flat.includes('HOOKTOK-SECRET'),
+      `hook token 泄漏进 argv（secretFile=${secretFile}）：${flat}`
+    )
+    // 其余 TERMBOARD_* 照常下发 —— 状态上报和 tb 命令全靠它们
+    assert.ok(flat.includes('TERMBOARD_NODE_ID=t1'), '节点 id 必须下发')
+    assert.ok(flat.includes('TERMBOARD_HOOK_ENDPOINT=/x/endpoint.env'), 'endpoint 路径必须下发')
+  }
+})

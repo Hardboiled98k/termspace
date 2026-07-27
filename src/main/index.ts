@@ -233,8 +233,10 @@ ipcMain.on(
   boardCtxLinks = new Set(
     Array.isArray(p?.ctxLinks) ? p.ctxLinks.filter((s) => typeof s === 'string') : []
   )
-    /* 节点 id 会被复用（nextId 取 max+1）：删掉 b1 再建一个新的 b1，
-       旧授权就白送给了陌生节点。所以节点一消失就撤销与它有关的一次性授权。 */
+    /* 节点一消失就撤销与它有关的一次性授权，防悬空。
+       新 id 已经不可复用了（board-serde.ts 的 newNodeId 是随机后缀），
+       但**老工作区里还有 `t1`/`b3` 这种老格式 id**，它们仍可能被复用 ——
+       所以这段补偿要留着。 */
     if (Array.isArray(p?.nodeIds)) {
       const alive = new Set(p.nodeIds.filter((s) => typeof s === 'string'))
       for (const g of [...grants]) {

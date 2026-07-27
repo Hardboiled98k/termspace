@@ -221,6 +221,19 @@ export async function startRemoteApi(deps: RemoteDeps): Promise<RemoteApi> {
 
       // ── 状态推送（SSE）──
       if (path === '/api/events' && req.method === 'GET') {
+        /* **只读的人不给实时流。**
+           `push()` 推的是**完整**画布快照（含项目 cwd 这类绝对路径）和**完整**审批列表
+           （summary 里有命令和文件名）。快照那三条路径（/api/board、/api/approvals、
+           /api/terminal）都做了脱敏，唯独这条推送没有 —— 于是同一份数据有两个出口，
+           只有一个被守住。这正是项目里出过一次的那个形状（`toPublicApproval` 曾经
+           只写在两条外发路径中的一条），在高一层原样重演。
+
+           为什么是 403 而不是"推脱敏版"：手机端本来就是**轮询**不是 SSE
+           （EventSource 设不了 Authorization 头，见 CLAUDE.md），
+           所以这条路对 viewer 没有任何功能价值，堵死是最省事也最不会再漏的做法。
+           真要给 viewer 实时流，得给每个 client 打上角色标签、push 时按角色分发 ——
+           那是另一件事，别顺手在这里加半套。 */
+        if (viewer) return json(res, 403, { error: '只读访问没有实时推送' })
         if (clients.size >= MAX_CLIENTS) return json(res, 429, { error: 'too many clients' })
         res.writeHead(200, {
           'content-type': 'text/event-stream',
