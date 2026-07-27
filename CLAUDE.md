@@ -310,6 +310,27 @@ npm run dist:signed
 - 发布流程：`npm run dist:signed` → 把 `latest-mac.yml` 和 `*.zip`
   （dmg 可选，给人手动下）传到那个 HTTPS 目录
 
+**这条链路到底保证了什么**（注释里别写含糊的话，codex 逐条纠过）：
+
+| | |
+|---|---|
+| Squirrel.Mac 的签名校验 | 只保证候选包满足**当前 app 签名导出的 designated requirement**。**不**保证来自官方目录、yml 为真、版本更新、过了公证、私钥没泄漏 |
+| `latest-mac.yml` 的 sha512 | **下载完整性**，不是发布者认证 —— 控制了发布目录就能给恶意包算一个匹配的 |
+| https | 只保证"连上了你填的那台服务器"，不保证那台服务器可信 |
+
+所以信任根是**发布目录的控制权**，代码签名是最后一道而不是第一道。
+feed URL 做成用户可改的是有代价的（能被诱导改源），现在靠 UI 上的显著警告 +
+显示当前生效域名兜着；等有了正式发布渠道应当焊死官方源。
+
+- `allowDowngrade = false` 要**显式写**：默认就是它，但签名不提供版本单调性，
+  防降级全靠这一层，将来启用 prerelease / channel 时很容易无意改掉
+- `checking` / `downloading` 期间要拒绝新一轮 check：electron-updater 的 check
+  promise 在**自动下载完成之前**就 resolve，此时再 check 会让两轮事件交错
+- 版本号要单独存，**不能从展示状态反推**：第一次 `download-progress` 之后
+  phase 已是 `downloading`，再按 `phase === 'available'` 取就只剩空串
+- macOS 上 `quitAndInstall` 的两个参数**不按 BaseUpdater 语义解释**（MacUpdater 重写了它）
+- `publishAutoUpdate: true` 是"生成更新元数据"，**不是**"自动上传"
+
 ## 授权模型（同 UID 前提，务必如实描述）
 
 跨节点动作（`tb ask` / `tb browser`）走「连线即授权」+ 弹窗兜底。但所有终端与 app 同 UID，
