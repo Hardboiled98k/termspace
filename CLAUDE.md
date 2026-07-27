@@ -235,6 +235,14 @@ export APPLE_TEAM_ID=85V88J2F3F
 npm run dist:signed
 ```
 
+**自用出包走 `npm run dist:local`**（签名但跳过公证）：
+- Apple 的公证队列**说慢就慢**，实测排过 40 分钟还是 `In Progress`，而
+  electron-builder 等不到就报一条**空错误**（`Failed with unexpected result:` 后面什么都没有）。
+  看到它别急着查代码，先 `xcrun notarytool history` 看真实状态
+- 公证是给**别人下载**用的：quarantine 属性只有浏览器/AirDrop 会加，
+  本机构建出来的包和 `scp` 传过去的包都没有，直接 `cp` 到 `/Applications` 就能跑。
+  `spctl --assess` 会报 `rejected`，那是预期的，不代表装不上
+
 坑：
 - **hardened runtime 必须配 entitlements**（`build/entitlements.mac.plist`），
   放行 V8 的 JIT 和 node-pty，否则签完能过公证但**一启动就崩**
@@ -279,6 +287,29 @@ npm run dist:signed
   打进 pty，靠 1 MiB 的 HTTP body 兜是不够的
 - 未做：`requestId` 幂等（人工重试仍会重复注入）；`tb agents` 看不到远端节点
 
+## 自动更新（2026-07-27）
+
+`src/main/updater.ts`，electron-updater + Squirrel.Mac。后台检测 → 后台下载 →
+提示 → **用户点了才装**。
+
+- **不自动装是刻意的**：终端里跑着用户的活，自动重启会把正在跑的那一轮 agent
+  对话掐掉（tmux 会话本身能续存，对话不能）。`autoInstallOnAppQuit` 也要关 ——
+  默认那个会在退出时静默替换掉 app，用户下次打开发现版本变了且没人问过他
+- **mac target 必须有 zip**：Squirrel 只认 zip，dmg 是给人手动装的。
+  少了它能查到新版本但下载不下来
+- **更新源只收 https**（`update-url.ts`，有独立用例）：更新包下下来是要替换掉
+  整个 app 的，明文 http 意味着路上任何人都能换掉它。Squirrel 的签名同源校验
+  是第二道防线，不该拿它当第一道
+- **feed URL 在设置里，不焊进打包配置**：`electron-builder.yml` 里那个是占位，
+  运行期 `setFeedURL` 覆盖 —— 换发布源不用重新打包。每次 check 都要重设一遍
+  （autoUpdater 是单例，feed 只在 setFeedURL 时更新）
+- **必须有 publish 配置**（哪怕是占位）：没有的话 electron-builder 不生成
+  `app-update.yml`，electron-updater 一启动就找不到配置文件
+- dev 下整个降级成 no-op（没有 `app-update.yml`，否则直接抛）
+- `update:install` 只认主窗口的调用 —— 装 = 重启 app
+- 发布流程：`npm run dist:signed` → 把 `latest-mac.yml` 和 `*.zip`
+  （dmg 可选，给人手动下）传到那个 HTTPS 目录
+
 ## 授权模型（同 UID 前提，务必如实描述）
 
 跨节点动作（`tb ask` / `tb browser`）走「连线即授权」+ 弹窗兜底。但所有终端与 app 同 UID，
@@ -294,7 +325,7 @@ M1–M6 与 F1–F8 均有可用实现；签名公证、手机端、三家额度
 |------|--------|
 | **MCP 形态** | F7/F8 现在走 `tb` + 回环 HTTP，够用 |
 | `tb agents` 列远端节点 | 目标 id 现在得去对面画布上看。逐台 ssh 查会拖慢默认命令，等真觉得烦了再做 `tb agents <peer>` |
-| **CI / 自动更新 / x64 包** | 仓库还没有 remote，`publish: null`。等真要发了再配，现在纯投机 |
+| **CI / x64 包** | 仓库还没有 remote。等真要发了再配，现在纯投机 |
 | **手机端完整 PWA / 后台推送** | 受安全上下文与 Web Push 限制（见上） |
 | **手机端按设备可撤销 token** | 单用户单机时轮换那把 token 就是撤销，够了 |
 | **记忆系统统筹** | 还没想清形态 |
