@@ -60,7 +60,7 @@ import {
   paneCommand
 } from './tmux'
 import { isSecretEnvKey, shellQuote, tmuxClientEnv } from './tmux-args'
-import { applyIdentityEnv, type ResolvedEnv } from './identity-env'
+import { applyIdentityEnv, billingKind, type ResolvedEnv } from './identity-env'
 
 // dev 下 app 名默认是 "Electron"，userData 会指向共享目录 → 显式隔离
 app.setPath('userData', path.join(app.getPath('appData'), 'termboard'))
@@ -268,8 +268,9 @@ async function askPeer(
   return new Promise<string>((resolve) => {
     const child = execFile(
       'ssh',
-      // 自测时可以把 helper 指到别处（比如本机的那份）
-      sshArgs(peer.alias, process.env['TERMBOARD_PEER_HELPER'] || undefined),
+      /* 自测时可以把 helper 指到别处。**只在开发构建里认这个 env** ——
+         它整段进 ssh 的远端命令，打包版里留一个能改执行目标的环境变量没有理由。 */
+      sshArgs(peer.alias, (!app.isPackaged && process.env['TERMBOARD_PEER_HELPER']) || undefined),
       { timeout: PEER_TIMEOUTS.sshMs, maxBuffer: 4 * 1024 * 1024 },
       (err, stdout, stderr) => {
         if (err) {
@@ -1439,10 +1440,11 @@ app.whenReady().then(async () => {
               writeToPty: (nid, data) => ptys.get(nid)?.write(data),
               foreground: (nid) => paneCommand(nid),
               /* 开关就是这条链路的授权，不再逐次弹窗 —— 远端多半没人在电脑前，
-                 弹窗只会挂到超时。**但要在这里再查一遍**：authorize 是 delegate
-                 注入前最后一个可控点，上面那次查在几个 await 之前，
-                 用户完全可能在这中间把开关关掉。安全开关只能往收紧方向失败。 */
-              authorize: async () => (await getSettings()).peerDelegate
+                 弹窗只会挂到超时。 */
+              authorize: async () => (await getSettings()).peerDelegate,
+              /* 还要再查一遍：authorize 之后还有前台探测和 stat 两个 await，
+                 用户完全可能在这中间把开关关掉。finalGate 是注入前最后一步。 */
+              finalGate: async () => (await getSettings()).peerDelegate
             },
             `peer:${source || '?'}`,
             target,
@@ -1564,20 +1566,20 @@ app.whenReady().then(async () => {
     ]
     for (const i of ids) {
       if (i.provider !== 'codex' && i.provider !== 'claude') continue
-      const env = (await resolveIdentityEnv(i.id))?.set ?? {}
-      /* **只有指明了隔离目录的凭证才是"订阅号"**。
-         没有 CODEX_HOME / CLAUDE_CONFIG_DIR 的凭证（典型是纯 API key）若也建采集器，
-         采集器会回退到默认目录 / 默认钥匙串，**把系统默认订阅号的额度标在它名下** ——
-         用户看到的百分比属于另一个账号，而这个终端实际是按量计费。
-         界面显示的和真实计费方式正好相反，比不显示糟得多。 */
+      const resolved = await resolveIdentityEnv(i.id)
+      const env = resolved?.set ?? {}
+      /* 计费方式判据**和登录态那边共用 billingKind**，两处各写一套就会互相矛盾
+         （一个说"查不到订阅额度"、另一个说"已登录"）。看的是**最终生效的**环境：
+         用户 shell 里 export 的 API key 会被 app 继承，那也真的会生效。
+
+         另外，没有 CODEX_HOME / CLAUDE_CONFIG_DIR 的凭证不能当订阅号建采集器 ——
+         采集器会回退到默认目录 / 默认钥匙串，**把系统默认订阅号的额度标在它名下**，
+         用户看到的百分比属于另一个账号。 */
+      const probeEnv = applyIdentityEnv(process.env, resolved)
       const isolated = i.provider === 'codex' ? env['CODEX_HOME'] : env['CLAUDE_CONFIG_DIR']
-      accounts.push({
-        accountId: i.id,
-        provider: i.provider,
-        name: i.name,
-        env,
-        kind: isolated ? 'subscription' : 'api-key'
-      })
+      const kind =
+        billingKind(probeEnv, i.provider) === 'api-key' || !isolated ? 'api-key' : 'subscription'
+      accounts.push({ accountId: i.id, provider: i.provider, name: i.name, env, kind })
     }
     quotaHub?.setAccounts(accounts)
   }

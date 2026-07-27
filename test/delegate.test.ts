@@ -400,3 +400,52 @@ test('绕过 4：授权之后、落笔之前 agent 退出（前台探测那一�
   assert.equal(writes.length, 0, `agent 已退出却仍注入了：${JSON.stringify(writes)}`)
   assert.match(r, /最后一刻/)
 })
+
+test('绕过 5：授权之后、落笔之前开关被关掉，不得注入', async () => {
+  /* 跨机派活的授权是设置里的一个开关。authorize 里查过一次，但那之后还有
+     foreground 和 stat 两个 await —— 用户完全可能在这几十毫秒里把开关关掉。
+     "安全开关只能往收紧方向失败"要求关掉的那一刻起就不能再有注入。 */
+  dropNode('b5')
+  noteStatus('b5', 'session', 'SessionStart', 's5')
+  noteStatus('b5', 'done', 'Stop', 's5')
+
+  const writes: string[] = []
+  let allowed = true
+  const r = await delegate(
+    {
+      hasNode: () => true,
+      writeToPty: (_id: string, data: string): void => void writes.push(data),
+      foreground: async () => {
+        allowed = false // 用户就在这一拍关掉了开关
+        return 'node'
+      },
+      authorize: async () => allowed,
+      finalGate: async () => allowed
+    },
+    'peer:mac',
+    'b5',
+    'rm -rf /tmp/DEMO',
+    500
+  )
+  assert.equal(writes.length, 0, `开关已关却仍注入了：${JSON.stringify(writes)}`)
+  assert.match(r, /授权在最后一刻被撤销/)
+})
+
+test('没给 finalGate 时行为不变（本机派活不该被它影响）', async () => {
+  dropNode('b6')
+  noteStatus('b6', 'session', 'SessionStart', 's6')
+  noteStatus('b6', 'done', 'Stop', 's6')
+  const writes: string[] = []
+  await delegate(
+    {
+      hasNode: () => true,
+      writeToPty: (_id: string, data: string): void => void writes.push(data),
+      authorize: async () => true
+    },
+    'src',
+    'b6',
+    '干活',
+    600
+  )
+  assert.deepEqual(writes, ['干活\r'], '本机派活必须照常注入')
+})

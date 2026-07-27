@@ -81,3 +81,28 @@ export function materializeEnv(raw: Record<string, string>, home: string): Resol
   }
   return { set, unset }
 }
+
+/**
+ * 这个账号实际按什么计费。
+ *
+ * **判据只有一条：最终生效的环境里有没有 API key。** 有就是按量 —— CLI 见到
+ * `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` 就走它，`CODEX_HOME` 里躺着哪个订阅号
+ * 完全不影响这个事实。
+ *
+ * 原来两处各写各的、判据还不一样：
+ * - 登录态用 `有 API key && 没有隔离目录` → 两样都配的凭证会去查那个目录，
+ *   把里面另一个订阅号的「已登录」显示在这个凭证名下
+ * - 额度用 `有隔离目录 ? 订阅 : 按量` → 同样的凭证会去拉那个订阅号的额度百分比
+ *
+ * 于是用户看到"已登录、还剩 70%"，而每一次调用都在出账单。两处必须共用这一个函数。
+ *
+ * 传 `probeEnv` 而不是 identity 自己的 `set`：**用户 shell 里 export 的 key 会被
+ * app 继承下去**，那也是真的会生效；identity 用 `KEY=` 显式删掉的则已经不在里面了。
+ */
+export function billingKind(
+  probeEnv: NodeJS.ProcessEnv | Record<string, string | undefined>,
+  provider: string
+): 'api-key' | 'subscription' {
+  const key = provider === 'claude' ? 'ANTHROPIC_API_KEY' : 'OPENAI_API_KEY'
+  return probeEnv[key] ? 'api-key' : 'subscription'
+}

@@ -272,6 +272,17 @@ export interface DelegateDeps {
    * 所以这是**产品护栏**——防 agent 自己乱派、让画布连线成为真语义——不是安全边界。
    */
   authorize: (source: string, target: string, task: string) => Promise<boolean>
+  /**
+   * **落笔前的最后一道闸**，在所有 await 之后、`writeToPty` 之前调，返回 false 就不注入。
+   *
+   * 为什么 `authorize` 不够：它之后还有 `foreground()` 和 `fileSize()` 两个 await。
+   * 跨机派活的授权是设置里的一个开关，用户完全可能在这几十毫秒里把它关掉 ——
+   * 而"安全开关只能往收紧方向失败"这条，要求关掉的那一刻起就不能再有注入发生。
+   *
+   * 本机派活不需要（它的授权是画布连线，连线变化会走 epoch/节点校验那条路），
+   * 不给就当恒真。
+   */
+  finalGate?: () => Promise<boolean>
 }
 
 /** 同一目标同时只允许一次派活：两个请求都看到 idle 然后一起注入 = 输入流互相踩 */
@@ -382,12 +393,20 @@ async function runDelegation(
   const startPath = r.transcriptPath
   const startBytes = startPath ? await fileSize(startPath) : 0
 
+  /* 授权开关的最后一道闸。**必须在这里，不能只在 authorize 里** ——
+     authorize 之后还有上面那两个 await，跨机那条链路的授权是设置里的一个开关，
+     用户完全可能在这几十毫秒里关掉它。安全开关只能往收紧方向失败。 */
+  if (deps.finalGate && !(await deps.finalGate())) {
+    return `派活被拒：${targetId} 的授权在最后一刻被撤销了，未注入。`
+  }
+
   /* **落笔前的最后一次复查。**
-     上面两句各有一个 await（查前台进程 ~几十 ms、stat 文件），加起来足够 agent
-     在这中间退出：SessionEnd 一到，`live` 翻 false、`epoch` 前进，而 pane 里
-     此刻已经是光秃秃的 shell —— 下一行的 writeToPty 就成了**直接执行任意命令**。
-     授权那一步已经复查过一次，但那是在这两个 await **之前**；
-     检查和落笔之间只要还有 await，就得在落笔的那一刻再查一遍。 */
+     上面几句各有一个 await（查前台进程 ~几十 ms、stat 文件、最后这道闸），
+     加起来足够 agent 在这中间退出：SessionEnd 一到，`live` 翻 false、`epoch` 前进，
+     而 pane 里此刻已经是光秃秃的 shell —— 下一行的 writeToPty 就成了
+     **直接执行任意命令**。授权那一步已经复查过一次，但那是在这些 await **之前**；
+     检查和落笔之间只要还有 await，就得在落笔的那一刻再查一遍。
+     **这一段之后到 writeToPty 之间不许再出现任何 await。** */
   if (!r.live || !ACCEPTING.has(r.status) || r.epoch !== epoch) {
     return `派活被拒：${targetId} 在最后一刻${
       r.epoch !== epoch ? '换了会话' : r.live ? `状态变成了 ${r.status}` : '会话已结束'

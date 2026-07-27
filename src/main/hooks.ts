@@ -8,7 +8,7 @@
  */
 import { app } from 'electron'
 import http from 'node:http'
-import { buildPeerHelper, decodePeerAsk, PEER_TIMEOUTS } from './peer'
+import { buildPeerHelper, decodePeerAsk, PEER_TIMEOUTS, TASK_MAX_BYTES } from './peer'
 import { toPublicApproval, type PendingApproval, type PendingApprovalFull } from './approval-dto'
 import { createHash, randomUUID } from 'node:crypto'
 import { chmod, copyFile, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
@@ -153,10 +153,23 @@ function summarizeToolInput(toolName: string, input: unknown): string {
   return flat.length > 300 ? `${flat.slice(0, 300)}…` : flat || toolName
 }
 
-async function writeAtomic(file: string, content: string): Promise<void> {
+/**
+ * 原子写。
+ *
+ * `mode` **必须在创建时就给**，不能"先写完再 chmod" —— `writeFile` 用的是默认权限
+ * （umask 022 下就是 0644），rename 之后到 chmod 之前那个文件是**全局可读**的。
+ * 而 tb-peer 脚本正文里带着完整的 peer token：那个窗口里别的用户读走它，
+ * 就能打本机回环的 /tb/peer 往任意活 agent 里注入任务。
+ * 窗口只有几毫秒，但它是可被守候的（监听目录事件即可）。
+ */
+async function writeAtomic(file: string, content: string, mode?: number): Promise<void> {
   // 临时文件名带随机后缀：install 与 uninstall 若撞在一起，固定名会互相覆盖或 rename ENOENT
   const tmp = `${file}.${randomUUID().slice(0, 8)}.tmp`
-  await writeFile(tmp, content)
+  await writeFile(tmp, content, mode === undefined ? undefined : { mode })
+  /* writeFile 的 mode 会被 umask 掩掉（0700 & ~022 = 0700 没事，但 0600 遇到更严的
+     umask 会更小 —— 那是往收紧方向，可以接受）。反过来若文件**已存在**，
+     writeFile 完全不改它的权限，所以还要显式 chmod 一次兜底。 */
+  if (mode !== undefined) await chmod(tmp, mode)
   await rename(tmp, file)
 }
 
@@ -390,7 +403,7 @@ case "$cmd" in
     # target 含冒号 = 跨机（<ssh别名>:<节点>），主进程那边分流；
     # **ssh 由主进程跑，不在这个脚本里跑** —— 别名白名单在主进程设置里，
     # 脚本自己 ssh 就等于绕过白名单。跨机多一跳，所以超时比远端 delegate 更长。
-    curl -s -m 320 -H "$H" --get \
+    curl -s -m ${Math.round(PEER_TIMEOUTS.tbMs / 1000)} -H "$H" --get \
       --data-urlencode "target=$target" --data-urlencode "task=$*" "$BASE/tb/ask" ;;
   browser|web)
     action="$1"; shift 2>/dev/null
@@ -456,8 +469,7 @@ export async function startHookSystem(
   await mkdir(hooksDir, { recursive: true })
 
   const scriptPath = path.join(hooksDir, 'claude-status.sh')
-  await writeAtomic(scriptPath, buildScript())
-  await chmod(scriptPath, 0o755)
+  await writeAtomic(scriptPath, buildScript(), 0o755)
   if (installHooks) await installClaudeHooks(scriptPath)
 
   /* ── per-node token ──
@@ -543,14 +555,19 @@ export async function startHookSystem(
       const peerAsk = tb.peerAsk // 钉住：下面在异步回调里用，TS 那边也认这个形状
       let size = 0
       const bodyChunks: Buffer[] = []
+      let tooBig = false
       req.on('data', (c: Buffer) => {
         size += c.length
-        if (size > BODY_LIMIT) req.destroy()
+        /* 超限要**说出来**。直接 destroy 的话对面只拿到一个连接重置，
+           ssh 那头显示的是"curl: (56) Recv failure"，没人猜得到是任务太长。
+           不再收数据但让请求正常收尾，end 里回 413。 */
+        if (size > BODY_LIMIT) tooBig = true
         else bodyChunks.push(c)
       })
       req.on('end', () => {
+        if (tooBig) return reply(413, `任务太长（上限 ${TASK_MAX_BYTES} 字节）`)
         const p = decodePeerAsk(Buffer.concat(bodyChunks).toString('utf8'))
-        if (!p) return reply(400, '请求格式不对')
+        if (!p) return reply(400, `请求格式不对（任务为空、节点 id 非法，或任务超过 ${TASK_MAX_BYTES} 字节）`)
         void peerAsk(p.source, p.target, p.task)
           .then((t) => reply(200, t))
           .catch(() => reply(500, '内部错误'))
@@ -561,7 +578,7 @@ export async function startHookSystem(
     // ── tb 工具中枢路由（GET，纯文本返回，给 agent 直接读）──
     if (req.url?.startsWith('/tb/')) {
       // ask 是同步派活可能等几分钟，其余 tb 命令给 30s；hook 上报仍是 5s（下面）
-      req.setTimeout(req.url.startsWith('/tb/ask') ? 310_000 : 30_000, () => req.destroy())
+      req.setTimeout(req.url.startsWith('/tb/ask') ? PEER_TIMEOUTS.tbMs + 10_000 : 30_000, () => req.destroy())
       if (!authed || !tb) {
         res.statusCode = 403
         return res.end('forbidden')
@@ -713,25 +730,19 @@ export async function startHookSystem(
   const binDir = path.join(dir, 'bin')
   await mkdir(binDir, { recursive: true })
   const tbPath = path.join(binDir, 'tb')
-  await writeAtomic(tbPath, buildTbScript())
-  await chmod(tbPath, 0o755)
+  await writeAtomic(tbPath, buildTbScript(), 0o755)
 
   /* ── 跨机入口 ──
      别的机器通过 ssh 跑 `tb-peer`，它在**本机**读端口和 token 再打回环。
      为什么不让对面直接 curl：hook 端口每次启动都变、token 也在本机文件里，
      对面既拿不到也不该拿。helper 留在被派活这一侧，跨机链路上只传任务本身。 */
+  /* **每次启动换一把**。原来想着"保持不变，否则要重新分发 helper" —— 那是想错了：
+     helper 是**被派活这一侧自己生成**的（对面 ssh 过来直接执行它），
+     从来不需要分发。既然如此就没有任何理由让 token 长寿，轮换只缩短泄漏窗口。
+     落盘只为让用户能看到/手动吊销，链路本身不读它。 */
   const peerTokenFile = path.join(dir, 'peer-token')
-  let peerToken = await readFile(peerTokenFile, 'utf8')
-    .then((s) => s.trim())
-    .catch(() => '')
-  if (peerToken.length < 16) {
-    peerToken = randomUUID().replace(/-/g, '') + randomUUID().replace(/-/g, '')
-    await writeFile(peerTokenFile, peerToken)
-  }
-  /* **和 per-node token 不同，这把要跨 app 重启保持不变** ——
-     它写在 helper 脚本里，而 helper 是 ssh 过来直接跑的，
-     每次重启换 token 就等于每次重启都要重新分发一遍。 */
-  await chmod(peerTokenFile, 0o600)
+  const peerToken = randomUUID().replace(/-/g, '') + randomUUID().replace(/-/g, '')
+  await writeAtomic(peerTokenFile, peerToken, 0o600)
   const peerHelperPath = path.join(binDir, 'tb-peer')
 
   const endpointFile = path.join(dir, 'hook-endpoint.env')
@@ -747,15 +758,15 @@ export async function startHookSystem(
       `TERMBOARD_TOKEN_DIR='${tokenDir}'\n` +
       `if [ -n "$TERMBOARD_NODE_ID" ] && [ -f "$TERMBOARD_TOKEN_DIR/$TERMBOARD_NODE_ID" ]; then\n` +
       `  TERMBOARD_HOOK_TOKEN=$(cat "$TERMBOARD_TOKEN_DIR/$TERMBOARD_NODE_ID")\n` +
-      `fi\n`
+      `fi\n`,
+    0o600
   )
-  await chmod(endpointFile, 0o600)
 
   /* helper 里写死端口和 token —— 每次启动重写。ssh 过来的进程不继承任何 env，
-     所以这两样只能落在文件里。0700：同 UID 仍然读得到（整个 hook 体系都是这样，
-     见文件头的诚实说明），挡的是别的用户。 */
-  await writeAtomic(peerHelperPath, buildPeerHelper(port, peerToken))
-  await chmod(peerHelperPath, 0o700)
+     所以这两样只能落在文件里。**0700 要在创建那一刻就生效**（见 writeAtomic）：
+     脚本正文里带着完整 token，晚一步 chmod 就有一个全局可读的窗口。
+     同 UID 仍然读得到（整个 hook 体系都是这样，见文件头的诚实说明），挡的是别的用户。 */
+  await writeAtomic(peerHelperPath, buildPeerHelper(port, peerToken), 0o700)
 
   return {
     endpointFile,
@@ -767,9 +778,10 @@ export async function startHookSystem(
       const t = randomUUID().replace(/-/g, '')
       nodeToToken.set(nodeId, t)
       tokenToNode.set(t, nodeId)
+      /* 0600 同样要在创建那一刻生效 —— 这把 token 能伪造该节点的 SessionStart，
+         而 SessionStart 在 delegate 的状态机里先于墓碑、无条件置活。 */
       const f = tokenFile(nodeId)
-      await writeFile(f, t)
-      await chmod(f, 0o600)
+      await writeAtomic(f, t, 0o600)
       return t
     },
     revokeNodeToken: async (nodeId) => {

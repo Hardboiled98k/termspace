@@ -88,6 +88,38 @@ export function sshArgs(alias: string, helper = PEER_HELPER_REMOTE): string[] {
  */
 export const PEER_HELPER_REMOTE = '"$HOME/Library/Application Support/termboard/bin/tb-peer"'
 
+export const PEER_TIMEOUTS = {
+  /** 远端 delegate 自己的等待上限 */
+  remoteDelegateMs: 240_000,
+  /**
+   * 对端 helper 的 curl 上限。
+   * 比 delegate 多 30s 是因为 delegate **返回之前还要干活**：
+   * 最后一轮 1.5s 轮询 + 等 transcript 落盘 1.2s + 读整个 transcript 文件。
+   * 只给几秒余量的话，正常完成的派活会在最后一步被自己人掐断。
+   */
+  helperMs: 270_000,
+  /** 本机等 ssh 的上限。要比 helper 长，留出建连和把回答传回来的时间 */
+  sshMs: 300_000,
+  /** 发起方 tb 脚本里 curl 的上限。最外层，必须最长 */
+  tbMs: 320_000
+} as const
+
+/**
+ * 超时必须**逐层严格递增**。
+ *
+ * 反了或者持平，就会出现注释里一直想避免的那个状态：**内层刚注入并完成，
+ * 外层已经放弃** —— 用户看到的是"派活失败"，而对面那个 agent 真的开始干活了，
+ * 结果没人接得住。原来 helper 和 ssh 都是 260s，正是持平。
+ */
+/* 断线只能理解成 detach，不是 cancel：注入是不可撤回的。所以也**不自动重试** ——
+   重试一次就是把同一个任务往对面那个 agent 里注入两遍。 */
+export const TIMEOUT_LADDER = [
+  PEER_TIMEOUTS.remoteDelegateMs,
+  PEER_TIMEOUTS.helperMs,
+  PEER_TIMEOUTS.sshMs,
+  PEER_TIMEOUTS.tbMs
+] as const
+
 /**
  * 被派活那一侧的入口脚本。对端 ssh 过来直接执行它。
  *
@@ -103,7 +135,7 @@ export function buildPeerHelper(port: number, token: string): string {
   return `#!/bin/sh
 # Termscape 跨机派活入口（自动生成，每次启动重写 —— 端口会变）。
 # 由对端 ssh 过来执行，任务正文走 stdin。不接受命令行参数。
-exec curl -sS -m ${Math.round(PEER_TIMEOUTS.remoteDelegateMs / 1000) + 20} \\
+exec curl -sS -m ${Math.round(PEER_TIMEOUTS.helperMs / 1000)} \\
   -H 'X-Termboard-Peer: ${token}' \\
   -H 'Content-Type: application/json' \\
   --data-binary @- "http://127.0.0.1:${port}/tb/peer"
@@ -127,6 +159,15 @@ export function encodePeerAsk(p: PeerAskPayload): string {
   return JSON.stringify(p)
 }
 
+/**
+ * 任务正文的字节上限。
+ *
+ * HTTP body 的 1 MiB 限制**不够当这个用**：整段 task 会被一次 `writeToPty` 打进
+ * 目标终端，几百 KB 的输入会堵住 pty、撑爆 agent 的上下文，而链路上还挂着一条
+ * 等 4 分钟的同步请求。派活的任务是一段提示词，32 KiB 已经很宽了。
+ */
+export const TASK_MAX_BYTES = 32 * 1024
+
 /** 远端 helper 解析 stdin。任何不合形状的输入都要拒，别猜 */
 export function decodePeerAsk(raw: string): PeerAskPayload | null {
   let v: unknown
@@ -139,21 +180,12 @@ export function decodePeerAsk(raw: string): PeerAskPayload | null {
   const o = v as Record<string, unknown>
   if (typeof o.target !== 'string' || !NODE_RE.test(o.target)) return null
   if (typeof o.task !== 'string' || !o.task.trim()) return null
-  const source = typeof o.source === 'string' ? o.source.slice(0, 64) : ''
+  // 按**字节**算：中文一个字三字节，按字符数限会让实际长度是三倍
+  if (Buffer.byteLength(o.task, 'utf8') > TASK_MAX_BYTES) return null
+  /* source 只用于显示，但"只用于显示"正是要收敛控制字符的理由：
+     它会进 `peer:${source}` 和事件日志，带 ANSI/换行就能在终端和 UI 里伪装成别的行。 */
+  const source =
+    typeof o.source === 'string' ? o.source.replace(/[^\w.:@-]/g, '').slice(0, 64) : ''
   return { source, target: o.target, task: o.task }
 }
 
-/**
- * 跨机的超时分层。**外层必须比内层长**，否则调用方先放弃、远端还在跑，
- * 而任务已经注入进去了 —— 那次派活的结果没人接得住，用户看到的是超时，
- * 实际上目标终端过一会儿真的会开始干活。
- *
- * 断线只能理解成 detach，不是 cancel：注入是不可撤回的。所以也**不自动重试** ——
- * 重试一次就是把同一个任务往那个 agent 里注入两遍。
- */
-export const PEER_TIMEOUTS = {
-  /** 远端 delegate 自己的等待上限 */
-  remoteDelegateMs: 240_000,
-  /** 本机等 ssh 的上限，留 20s 给建连和回传 */
-  sshMs: 260_000
-} as const

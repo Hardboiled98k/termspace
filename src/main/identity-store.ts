@@ -10,6 +10,7 @@ import { execFile } from 'node:child_process'
 import path from 'node:path'
 import {
   applyIdentityEnv,
+  billingKind,
   isReservedEnvKey,
   materializeEnv,
   type ResolvedEnv
@@ -215,16 +216,15 @@ export async function identityLoginStatus(id: string): Promise<LoginStatus> {
      和这个终端实际的计费方式正好相反。 */
   const probeEnv = applyIdentityEnv(process.env, resolved)
 
+  /* **带着 API key 时别去查登录态。** CLI 见到 OPENAI_API_KEY / ANTHROPIC_API_KEY
+     就走按量计费，`CODEX_HOME` 里躺着哪个订阅号都不改变这个事实 —— 去查只会把
+     那个目录里**另一个订阅号**的"已登录"显示在这个凭证名下，用户以为在烧订阅额度，
+     实际每次调用都在出账单。判据和额度面板共用 billingKind，两处不能各写一套。 */
+  if (billingKind(probeEnv, found.provider) === 'api-key') {
+    return { state: 'unknown', detail: '按量计费（API key），没有订阅登录态' }
+  }
+
   if (found.provider === 'codex') {
-    /* **带着 API key 时别去查登录态。** codex CLI 见到 OPENAI_API_KEY 就走按量计费，
-       而 `codex login status` 查的是 CODEX_HOME 里的 auth.json —— 没配隔离目录时
-       那是**系统默认号**。于是界面会在这个凭证名下显示别人的"已登录"，
-       用户以为在烧订阅额度，实际每次调用都在出账单。
-       （额度面板那边判 kind 用的也是"有没有隔离目录"，两处必须一致，
-       否则一个说"查不到订阅额度"、另一个说"已登录"，自相矛盾。） */
-    if (probeEnv['OPENAI_API_KEY'] && !set['CODEX_HOME']) {
-      return { state: 'unknown', detail: '按量计费（API key），没有订阅登录态' }
-    }
     const home = set['CODEX_HOME'] || path.join(app.getPath('home'), '.codex')
     const bin = findBin('codex')
     if (!bin) return { state: 'unknown', detail: '本机没找到 codex', home }

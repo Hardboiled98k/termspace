@@ -15,7 +15,9 @@ import {
   decodePeerAsk,
   encodePeerAsk,
   PEER_TIMEOUTS,
-  buildPeerHelper
+  buildPeerHelper,
+  TIMEOUT_LADDER,
+  TASK_MAX_BYTES
 } from '../src/main/peer.ts'
 
 test('本机 target（不含冒号）返回 null，走原来的路', () => {
@@ -85,11 +87,39 @@ test('helper 收下合法输入；source 只截断不校验（它只用于显示
   assert.equal(long?.source.length, 64)
 })
 
-test('超时必须外层长于内层 —— 反了就会"本机已放弃、远端刚注入"', () => {
+test('超时必须逐层严格递增 —— 持平就会"内层刚注入、外层已放弃"', () => {
+  /* 只断言最外 > 最内是不够的：原来 helper curl 和 ssh 都是 260s，
+     两头同时放弃 —— 对端刚把答案发出来，本机已经杀掉了 ssh。
+     用户看到"失败"，而那个 agent 真的开始干活了，结果没人接得住。 */
+  for (let i = 1; i < TIMEOUT_LADDER.length; i++) {
+    assert.ok(
+      TIMEOUT_LADDER[i]! > TIMEOUT_LADDER[i - 1]!,
+      `第 ${i} 层 ${TIMEOUT_LADDER[i]} 必须严格大于第 ${i - 1} 层 ${TIMEOUT_LADDER[i - 1]}`
+    )
+  }
+  // helper 要比 delegate 多出足够余量：delegate 返回前还有 1.5s 轮询 + 1.2s 落盘 + 读文件
   assert.ok(
-    PEER_TIMEOUTS.sshMs > PEER_TIMEOUTS.remoteDelegateMs,
-    'ssh 的等待必须比远端 delegate 长，否则那次派活的结果没人接得住'
+    PEER_TIMEOUTS.helperMs - PEER_TIMEOUTS.remoteDelegateMs >= 10_000,
+    'helper 只多几秒的话，正常完成的派活会在最后一步被自己人掐断'
   )
+})
+
+test('任务超长要拒 —— 它会被一次性写进 pty', () => {
+  const ok = 'x'.repeat(TASK_MAX_BYTES)
+  assert.ok(decodePeerAsk(encodePeerAsk({ source: '', target: 't1', task: ok })))
+  const tooLong = 'x'.repeat(TASK_MAX_BYTES + 1)
+  assert.equal(decodePeerAsk(encodePeerAsk({ source: '', target: 't1', task: tooLong })), null)
+  // 按字节不按字符：中文一个字三字节，按字符数限的话实际长度会是三倍
+  const cn = '中'.repeat(Math.floor(TASK_MAX_BYTES / 3) + 1)
+  assert.equal(decodePeerAsk(encodePeerAsk({ source: '', target: 't1', task: cn })), null)
+})
+
+test('source 里的控制字符要收敛（它会进日志和 UI）', () => {
+  // ESC + 换行：终端里能把自己伪装成另一行输出
+  const dirty = `mac${String.fromCharCode(27)}[31m${String.fromCharCode(10)}FAKE`
+  const p = decodePeerAsk(JSON.stringify({ source: dirty, target: 't1', task: 'go' }))
+  assert.ok(p)
+  assert.equal(p.source, 'mac31mFAKE', `source 没收敛干净：${JSON.stringify(p.source)}`)
 })
 
 test('helper 脚本端到端：stdin 原样送达、token 在头里、任务不进 argv', async () => {
