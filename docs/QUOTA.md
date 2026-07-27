@@ -58,31 +58,49 @@ interface AccountQuota {
 
 ## 三、各家的接入路径（本机实测）
 
-### 已接入
-- **Claude 订阅** — `~/.claude/claude-usage.json`，由 Claude Code 渲染状态栏时的 tee 脚本写入。
-  含 `_captured_at`。⚠️ **只在有 Claude 会话刷状态栏时更新**，否则冻在最后一次的值上，
-  看起来跟实时数据一模一样 —— 必须校验新鲜度（已实现）。
+### 已接入（三家，均实机验过）
 
-### 下一步做（收益/成本比最高）
-- **Codex 订阅** — `codex app-server --stdio` 走 JSON-RPC：`initialize` 握手后发
-  `account/rate_limits/read`。返回 `rateLimits.primary/secondary`（`usedPercent`、
-  `windowDurationMins`、`resetsAt`）与 `rateLimitsByLimitId`、`credits`。
-  实测：冷启动到出结果 2.4s，稳态 ~2s，**不消耗任何推理额度**（就是一次账号查询）。
-  **没有静默失败** —— 未登录明确返回 `-32600 codex account authentication required`。
-  常驻一个 app-server 连接复用即可。
-  另有 `account/usage/read` 给历史（lifetimeTokens / dailyUsageBuckets），天级更新，1 小时拉一次够了。
-- **Codex 离线兜底** — `$CODEX_HOME/sessions/YYYY/MM/DD/rollout-*.jsonl` 里有额度快照。
+| Provider | 入口 | 凭证 | 实测 |
+|---|---|---|---|
+| Claude 订阅 | `GET https://api.anthropic.com/api/oauth/usage` | 钥匙串 `Claude Code-credentials` 里的 OAuth token，必须走 `execFile('/usr/bin/security')` | `limits[]`（session / weekly_all / weekly_scoped）+ `spend` |
+| Codex 订阅 | `codex app-server --stdio` 的 `account/rateLimits/read`（邮箱走 `account/read`） | `$CODEX_HOME` 里的登录态 | `rateLimits.primary/secondary` + `rateLimitsByLimitId` + `credits`；~3.4s |
+| GitHub Copilot | `GET https://api.github.com/copilot_internal/user` | `gh auth token` | `quota_snapshots`（chat / completions / premium_interactions） |
 
-### 再往后
-- **GitHub Copilot** — `GET https://api.github.com/copilot_internal/user`（订阅额度）；
-  个人 premium request 用量走 `/users/{u}/settings/billing/premium_request/usage`。
-- **Gemini Code Assist** — `POST https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota`。
-- **Windsurf** — `~/Library/Application Support/Windsurf/User/globalStorage/state.vscdb`（SQLite）。
-- **按量 API** — 各家都有干净的余额端点：
-  OpenRouter `GET /api/v1/credits` 与 `/api/v1/key`（还有 `/api/v1/activity` 出按天按模型明细）、
-  DeepSeek `GET /user/balance`、Moonshot `GET /v1/users/me/balance`。
-- **Anthropic API 用量** — Admin API `/v1/organizations/usage_report/messages`，
-  但要 admin key，个人按量用户拿不到 → 对多数用户不可行。
+这三条**都是各家 CLI 的 `/usage`、`/status` 背后走的同一条路**（codex 已核对其
+`slash_dispatch.rs`）。两家**都没有非交互的额度命令** —— `codex login status` 只报登录态，
+`claude` 也没有等价子命令（穷举过 `--help`）。所以 API 是唯一的程序化路径。
+
+⚠️ Claude 那条是 **Claude Code 客户端自用的内部端点，不是公开文档化的 API**。
+界面上的来源标注必须这么写，别写"官方 API"（会让人以为有稳定性承诺）。
+
+### 兜底与降级
+- **Claude 本机快照** `~/.claude/claude-usage.json` —— 用户自己的 statusline tee 脚本产物，
+  **不是官方文件**，换机就没有。只在主路径失败时用，且一律标 `stale`
+  （实测能和真值差 30 多个百分点）。
+- **Codex 的 rollout jsonl** —— 同理，是**上一次会话落盘的历史值**，codex 一停就冻住。
+  实测 `quota2.sh` 因为读它，在真值 0% 时报了 8%（那是 10 小时前的数）。**不采用。**
+
+### 下一步（按收益排，来源：codex 2026-07-27 的调研）
+1. **GLM Coding Plan** `GET https://open.bigmodel.cn/api/monitor/usage/quota/limit`
+   （国际站 `api.z.ai`）—— 官方插件源码公开，注意 Authorization **不加 `Bearer`**。
+2. **OpenRouter** `GET /api/v1/key`（单 key 的 limit/remaining/reset）；
+   全账户 credits 要 Management Key 走 `/api/v1/credits`。
+3. **DeepSeek** `GET https://api.deepseek.com/user/balance` —— 正式文档化，最干净。
+4. **Kimi**：订阅走 `GET https://api.kimi.com/coding/v1/usages`（仅官方 CLI 源码公开，
+   **契约未正式文档化，接的话必须标记并强容错**）；API 钱包走 Moonshot `/v1/users/me/balance`。
+5. **组织版 opt-in**：Cursor Teams Admin API、Windsurf Enterprise
+   `GetTeamCreditBalance`、Qoder Teams、Augment Enterprise analytics。
+
+### 明确不做（查证后的结论，别再来回试）
+
+| 目标 | 为什么不做 |
+|---|---|
+| Cursor 个人 Pro/Ultra | **只有网页控制台**。Admin API 仅 Teams/Business |
+| Windsurf 个人 | 同上；本机 `state.vscdb`（SQLite）是**内部实现细节，禁止采用** —— 撬客户端私有存储既脆又越界 |
+| Gemini Code Assist 个人 | `v1internal:retrieveUserQuota` 虽存在于 CLI 源码，但**官方条款不允许第三方复刻**。组织侧只能用 Cloud Monitoring，而且给的是历史用量不是剩余额度 |
+| Amazon Q 个人 | Pro 管理员的 S3 CSV 是**次日 usage-only**，不是 remaining quota |
+| Trae / Zed / JetBrains AI / Continue / aider | 没有公开 API/CLI，一律显示「不支持程序化查询」，**不碰网页 cookie** |
+| Anthropic / OpenAI API 用量 | 要 org admin key，个人按量用户拿不到；且都**没有公开的余额端点**，最多显示本月花费 |
 
 ### 明确不做（调研后否掉，别再重复踩）
 - **Cursor 个人订阅** — 只有网页端点，要浏览器 session cookie。团队版才有官方 API。

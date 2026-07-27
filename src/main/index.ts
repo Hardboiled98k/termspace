@@ -80,6 +80,8 @@ const PTY_WRITE_LIMIT = 256 * 1024
 
 /** 本次运行是否已经问过 hook 写入同意（renderer:ready 会被 reload 反复触发） */
 let askedConsent = false
+/** whenReady 里才建得起来的额度账号同步器；identity handler 在模块级注册，只能靠这个引用 */
+let syncQuotaAccountsRef: (() => Promise<void>) | null = null
 /** 远程端能否写入终端 / 批准工具调用。设置里改了要立刻生效，所以单独缓存 */
 let remoteAllowInput = false
 let remoteAllowApprove = false
@@ -842,14 +844,22 @@ ipcMain.handle('preset:upsert', (_e, input: Parameters<typeof upsertPreset>[0]) 
 ipcMain.handle('preset:delete', (_e, id: string) => deletePreset(id))
 
 // ── Identity（凭证）IPC：渲染层只见元数据，env 值不出主进程 ──
+/* 每次增删改都要重建额度账号表。**渲染层不负责通知** ——
+   之前只挂了一个 `quota:sync` 监听、没有任何发送方，所以加一个订阅号后
+   HUD 里要等下次重启才出现，而且改了 CODEX_HOME 还会继续显示旧号的额度。 */
+const afterIdentityChange = <T,>(r: T): T => {
+  void syncQuotaAccountsRef?.()
+  return r
+}
 ipcMain.handle('identity:list', () => listIdentities())
-ipcMain.handle(
-  'identity:upsert',
-  (_e, input: Parameters<typeof upsertIdentity>[0]) => upsertIdentity(input)
+ipcMain.handle('identity:upsert', async (_e, input: Parameters<typeof upsertIdentity>[0]) =>
+  afterIdentityChange(await upsertIdentity(input))
 )
-ipcMain.handle('identity:delete', (_e, id: string) => deleteIdentity(id))
-ipcMain.handle('identity:rename', (e, id: string, name: string) =>
-  fromMainWin(e) ? renameIdentity(String(id), String(name)) : []
+ipcMain.handle('identity:delete', async (_e, id: string) =>
+  afterIdentityChange(await deleteIdentity(id))
+)
+ipcMain.handle('identity:rename', async (e, id: string, name: string) =>
+  fromMainWin(e) ? afterIdentityChange(await renameIdentity(String(id), String(name))) : []
 )
 /** 凭证节点上的登录态。只读、不花额度；查不出来就如实报 unknown */
 ipcMain.handle('identity:loginStatus', (e, id: string) =>
@@ -1302,8 +1312,8 @@ app.whenReady().then(async () => {
     quotaHub?.setAccounts(accounts)
   }
   void syncQuotaAccounts()
-  // 凭证增删后要重建账号表，否则新加的号永远不出现在 HUD 里
-  ipcMain.on('quota:sync', () => void syncQuotaAccounts())
+  // identity 的三个 handler 在模块级注册（早于 whenReady），拿不到这个闭包 → 用引用挂过去
+  syncQuotaAccountsRef = syncQuotaAccounts
   app.on('before-quit', () => quotaHub?.dispose())
 
   const win = createWindow()
@@ -1354,6 +1364,26 @@ app.whenReady().then(async () => {
   if (shotPath) {
     setTimeout(async () => {
       try {
+        /* TERMBOARD_WEBGL_STRESS=1：截图前先把 WebGL context 打爆。
+           每个终端一个 context，Chromium 每页 ~16 个上限，超限**最老的被强制丢弃** ——
+           "一屏几十个终端"正是这个产品的卖点，降级路径必须验过。
+           这里直接制造失败（开一堆废 canvas），比真开 20 个终端省事得多，
+           而且不会留下一地 pty 和 tmux 会话。 */
+        if (process.env['TERMBOARD_WEBGL_STRESS']) {
+          const lost = await win.webContents.executeJavaScript(`(() => {
+            const keep = []
+            for (let i = 0; i < 32; i++) {
+              const c = document.createElement('canvas')
+              c.width = c.height = 64
+              const gl = c.getContext('webgl2') || c.getContext('webgl')
+              if (gl) keep.push(gl)
+            }
+            window.__stressHold = keep   // 别让 GC 把它们收走，否则 context 又还回来了
+            return keep.length
+          })()`)
+          console.log(`[webgl-stress] 额外占用 ${lost} 个 context`)
+          await new Promise((r) => setTimeout(r, 1500)) // 等 contextlost 事件跑完 + 重绘
+        }
         const img = await win.webContents.capturePage()
         await writeFile(shotPath, img.toPNG())
       } finally {

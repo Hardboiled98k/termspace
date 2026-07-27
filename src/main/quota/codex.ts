@@ -13,7 +13,7 @@
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
-import { now, windowLabel, type AccountQuota, type QuotaWindow } from './types'
+import { now, parseMoneyMinor, windowLabel, type AccountQuota, type QuotaWindow } from './types.ts'
 
 /**
  * 找 codex 可执行文件。
@@ -38,7 +38,7 @@ export function findCodexBin(home: string): string | null {
   )
 }
 
-interface RateSnapshot {
+export interface RateSnapshot {
   limitId?: string
   limitName?: string | null
   primary?: { usedPercent?: number; windowDurationMins?: number; resetsAt?: number } | null
@@ -59,6 +59,12 @@ function askRateLimits(
     })
     let buf = ''
     let email = ''
+    /* 两个响应各自到齐才能收工。**不能一拿到额度就 kill** ——
+       JSON-RPC 不保证按 id 顺序返回，rateLimits 先回的话邮箱就永远拿不到，
+       而邮箱是区分两个同 provider 订阅号的唯一手段。
+       account/read 是纯本地 ~3ms，等它不额外花时间。 */
+    let rate: { ok: true; data: Record<string, unknown> } | { ok: false; error: string } | null = null
+    let accountDone = false
     let settled = false
     const finish = (
       r: { ok: true; data: Record<string, unknown>; email?: string } | { ok: false; error: string }
@@ -72,9 +78,19 @@ function askRateLimits(
       }
       resolve(r)
     }
+    /** 两边都回来了才落地；超时那条路会绕过它直接 finish */
+    const tryFinish = (): void => {
+      if (!rate || !accountDone) return
+      clearTimeout(timer)
+      finish(rate.ok ? { ok: true, data: rate.data, email } : rate)
+    }
     /* 硬超时：实测未登录时 rateLimits/read 会**静默挂 25s 不返回**。
        没有这道闸，采集器会把自己吊死在那儿。 */
-    const timer = setTimeout(() => finish({ ok: false, error: '查询超时' }), 15_000)
+    const timer = setTimeout(() => {
+      // 额度已经拿到、只是邮箱没回来 → 用额度，别把整轮判死
+      if (rate) finish(rate.ok ? { ok: true, data: rate.data, email } : rate)
+      else finish({ ok: false, error: '查询超时' })
+    }, 15_000)
 
     p.on('error', (e) => {
       clearTimeout(timer)
@@ -112,10 +128,14 @@ function askRateLimits(
         } else if (m.id === 2) {
           const acc = (m.result as { account?: { email?: string } } | undefined)?.account
           if (acc?.email) email = acc.email
+          // 拿不到邮箱不算失败：额度才是主菜，邮箱只是用来区分同名账号
+          accountDone = true
+          tryFinish()
         } else if (m.id === 3) {
-          clearTimeout(timer)
-          if (m.error) finish({ ok: false, error: m.error.message ?? 'unknown' })
-          else finish({ ok: true, data: (m.result ?? {}) as Record<string, unknown>, email })
+          rate = m.error
+            ? { ok: false, error: m.error.message ?? 'unknown' }
+            : { ok: true, data: (m.result ?? {}) as Record<string, unknown> }
+          tryFinish()
         }
       }
     })
@@ -132,7 +152,7 @@ function askRateLimits(
   })
 }
 
-function toWindows(snap: RateSnapshot, prefix: string): QuotaWindow[] {
+export function toWindows(snap: RateSnapshot, prefix: string): QuotaWindow[] {
   const out: QuotaWindow[] = []
   for (const [key, w] of [
     ['primary', snap.primary],
@@ -199,26 +219,27 @@ export async function collectCodex(args: {
     windows.push(...toWindows(snap, `${args.accountId}:${id}`))
   }
 
-  const spend =
-    main.credits && (main.credits.hasCredits || main.credits.unlimited)
-      ? [
-          {
-            label: '额度信用',
-            usedMinor: 0,
-            currency: 'USD',
-            enabled: true,
-            limitMinor: Number(main.credits.balance ?? 0) * 100
-          }
-        ]
-      : undefined
+  /* credits.balance 是**余额字符串**（实测本机 `"0"`），不是上限。
+     之前把它当 limit 再配一个假的 used=0，界面上就成了「花了 0 / 上限 766」。 */
+  let spend: AccountQuota['spend']
+  if (main.credits?.unlimited) {
+    spend = [{ label: '额度信用', currency: 'USD', enabled: true, remainingMinor: undefined }]
+  } else if (main.credits?.hasCredits) {
+    const m = parseMoneyMinor(main.credits.balance)
+    // 认不出金额就整条不显示 —— 一个 NaN 画进 HUD 比没有这行糟得多
+    if (m) spend = [{ label: '额度信用余额', currency: m.currency, enabled: true, remainingMinor: m.minor }]
+  }
 
   return {
     ...base,
-    state: 'ok',
-    source: 'codex app-server（官方）',
+    /* 和另外两家对齐：拿到了响应但一个窗口都认不出来，说明上游改了 schema，
+       那是 unknown-shape，不是「一切正常，只是没数据」 */
+    state: windows.length ? 'ok' : 'unknown-shape',
+    source: 'codex app-server（官方机器接口）',
     plan: main.planType ?? undefined,
     email: r.email || undefined,
     windows,
-    spend
+    spend,
+    hint: windows.length ? undefined : 'codex 返回里没有认识的限额窗口（它升级了？）'
   }
 }

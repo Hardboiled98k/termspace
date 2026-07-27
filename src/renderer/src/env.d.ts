@@ -28,8 +28,11 @@ interface QuotaWindow {
 
 interface QuotaSpend {
   label: string
-  usedMinor: number
+  /** 已花。**和 remainingMinor 是两回事**，缺哪个就 undefined，绝不拿 0 顶上 */
+  usedMinor?: number
   limitMinor?: number
+  /** 余额（codex 的 credits 是「还剩多少」，不是「花了多少」） */
+  remainingMinor?: number
   currency: string
   enabled?: boolean
 }

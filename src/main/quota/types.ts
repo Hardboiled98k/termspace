@@ -42,12 +42,38 @@ export interface QuotaWindow {
 /** 花钱侧。和 windows **分开显示** —— 混在一起用户必然误读 */
 export interface QuotaSpend {
   label: string
-  /** 最小货币单位（分）。别用浮点存钱 */
-  usedMinor: number
+  /**
+   * 已花（最小货币单位，别用浮点存钱）。
+   * **和 remainingMinor 是两回事，缺哪个就留 undefined，绝不拿 0 顶上** ——
+   * codex 的 credits.balance 是「还剩多少」，一度被当成 limit 配上假的 used=0，
+   * 界面上就成了「花了 0 / 上限 766」，把余额说成了额度。
+   */
+  usedMinor?: number
   limitMinor?: number
+  /** 余额（最小货币单位） */
+  remainingMinor?: number
   currency: string
   /** false → 显示「未开启」而不是 0 */
   enabled?: boolean
+}
+
+/**
+ * 金额字符串 → 最小货币单位。认不出返回 null（**绝不返回 0**）。
+ * codex 的 credits.balance 是字符串，实测本机是 `"0"`，但上游也可能给 `"$766.76"` ——
+ * 直接 Number() 会得到 NaN，再乘 100 还是 NaN，最后画进界面就是 `NaN`。
+ */
+export function parseMoneyMinor(v: unknown): { minor: number; currency: string } | null {
+  if (typeof v === 'number' && Number.isFinite(v)) return { minor: Math.round(v * 100), currency: 'USD' }
+  if (typeof v !== 'string') return null
+  const s = v.trim()
+  if (!s) return null
+  const currency = s.includes('€') ? 'EUR' : s.includes('£') ? 'GBP' : s.includes('¥') ? 'CNY' : 'USD'
+  const digits = s.replace(/[^0-9.-]/g, '')
+  // `Number('')` 是 **0**，不是 NaN —— 少了这道闸，'unlimited' 会被解析成"余额 0.00"
+  if (!/[0-9]/.test(digits)) return null
+  const n = Number(digits)
+  if (!Number.isFinite(n)) return null
+  return { minor: Math.round(n * 100), currency }
 }
 
 export interface AccountQuota {
@@ -84,11 +110,19 @@ export interface Collector {
 
 export const now = (): number => Math.floor(Date.now() / 1000)
 
-/** 窗口时长 → 人能读的标签。**从分钟数推，不从位置推** */
+/**
+ * 窗口时长 → 人能读的标签。**从分钟数推，不从位置推**。
+ *
+ * 必须**从小到大**判，别反过来：老写法第一条是 `mins >= 10000 → '周'`，
+ * 于是 43200（一个月）也被标成"周" —— 又是一次窗口语义误标，
+ * 和 quota2.sh 把周窗口写成 5h 是同一类错。
+ */
 export function windowLabel(mins?: number): string {
-  if (!mins) return '?'
-  if (mins >= 10000) return '周'
-  if (mins >= 1400) return `${Math.round(mins / 1440)}天`
-  if (mins >= 60) return `${Math.round(mins / 60)}h`
-  return `${mins}m`
+  if (!mins || mins < 0) return '?'
+  if (mins < 60) return `${mins}m`
+  if (mins < 1440) return `${Math.round(mins / 60)}h`
+  const days = Math.round(mins / 1440)
+  if (days === 7) return '周'
+  if (days >= 28 && days <= 31) return '月'
+  return `${days}天`
 }

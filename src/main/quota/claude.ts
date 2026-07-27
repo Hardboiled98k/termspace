@@ -15,7 +15,7 @@
 import { execFile } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
-import { now, type AccountQuota, type QuotaWindow } from './types'
+import { now, type AccountQuota, type QuotaWindow } from './types.ts'
 
 const KEYCHAIN_SERVICE = 'Claude Code-credentials'
 
@@ -119,21 +119,28 @@ export async function collectClaude(args: {
       })
     }
     const sp = b.spend as
-      | { used?: { amount_minor?: number }; limit?: { amount_minor?: number }; enabled?: boolean }
+      | {
+          used?: { amount_minor?: number; currency?: string }
+          limit?: { amount_minor?: number }
+          enabled?: boolean
+        }
       | undefined
     return {
       ...base,
       state: windows.length ? 'ok' : 'unknown-shape',
-      source: 'Anthropic /api/oauth/usage（官方）',
+      /* 如实标注：这是 Claude Code 客户端自己用的内部 OAuth 端点（`/usage` 背后就是它），
+         **不是公开文档化的 API**。写"官方 API"会让人以为有稳定性承诺。 */
+      source: 'Claude Code 内部 OAuth 端点（未文档化）',
       windows,
       hint: windows.length ? undefined : '返回里没有认识的限额字段',
       spend: sp
         ? [
             {
               label: '超额信用',
-              usedMinor: sp.used?.amount_minor ?? 0,
+              usedMinor: sp.used?.amount_minor,
               limitMinor: sp.limit?.amount_minor,
-              currency: 'USD',
+              // 币种跟上游走，别硬编码 USD（这个账号在哪个区结算不由我们决定）
+              currency: sp.used?.currency ?? 'USD',
               // false 要显示成「未开启」，不是 0
               enabled: sp.enabled ?? false
             }

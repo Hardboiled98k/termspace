@@ -1,4 +1,6 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron'
+// 只引类型（编译期擦除），不会把主进程代码打进 preload bundle
+import type { AccountQuota } from '../main/quota/types'
 
 const api = {
   spawn: (
@@ -138,12 +140,10 @@ const api = {
     ipcRenderer.invoke('identity:rename', id, name),
   identityLoginStatus: (id: string): Promise<unknown> =>
     ipcRenderer.invoke('identity:loginStatus', id),
-  onQuota: (
-    cb: (q: {
-      five_hour?: { used_percentage: number; resets_at: number }
-      seven_day?: { used_percentage: number; resets_at: number }
-    }) => void
-  ): (() => void) => {
+  /* 类型直接从主进程的模型引进来。以前这里还写着早已换掉的单账号 Claude payload
+     （five_hour/seven_day），而主进程发的是 AccountQuota[] —— 两套声明各自自洽，
+     typecheck 全绿，实际字段一个都对不上。IPC 两端必须共用同一个类型。 */
+  onQuota: (cb: (list: AccountQuota[]) => void): (() => void) => {
     const listener = (_e: IpcRendererEvent, q: Parameters<typeof cb>[0]): void => cb(q)
     ipcRenderer.on('quota:update', listener)
     return () => ipcRenderer.removeListener('quota:update', listener)

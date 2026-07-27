@@ -4,12 +4,12 @@
  * **一个账号一个采集器，全局单例拉一次广播给所有节点** —— 额度是账号级的，
  * 绝不每个节点各拉一遍（同一个号会被查 N 次，还可能撞限流）。
  */
-import { collectClaude } from './claude'
-import { collectCodex } from './codex'
-import { collectCopilot } from './copilot'
-import { now, type AccountQuota } from './types'
+import { collectClaude } from './claude.ts'
+import { collectCodex } from './codex.ts'
+import { collectCopilot } from './copilot.ts'
+import { now, type AccountQuota } from './types.ts'
 
-export type { AccountQuota, QuotaWindow, QuotaSpend, QuotaState } from './types'
+export type { AccountQuota, QuotaWindow, QuotaSpend, QuotaState } from './types.ts'
 
 /** 5 分钟。Claude Code 自己的写节流就是 5min，比这更密没有信息增量，只是白打后端 */
 const INTERVAL_MS = 5 * 60_000
@@ -31,6 +31,20 @@ export interface QuotaHub {
   setAccounts: (list: QuotaAccount[]) => void
   refresh: (force?: boolean) => void
   dispose: () => void
+}
+
+/** 账号列表的稳定指纹。任一影响采集结果的字段变了就该重采 */
+export function fingerprint(list: QuotaAccount[]): string {
+  return list
+    .map((a) => {
+      const env = Object.entries(a.env)
+        .sort(([x], [y]) => (x < y ? -1 : 1))
+        .map(([k, v]) => `${k}=${v}`)
+        .join(',')
+      return `${a.accountId}|${a.provider}|${a.name}|${env}`
+    })
+    .sort()
+    .join('\n')
 }
 
 export function startQuotaHub(
@@ -109,9 +123,10 @@ export function startQuotaHub(
   return {
     snapshot: () => [...results.values()],
     setAccounts: (list) => {
-      const changed =
-        list.length !== accounts.length ||
-        list.some((a, i) => a.accountId !== accounts[i]?.accountId)
+      /* 指纹要含 provider / 名字 / 隔离目录 —— 只比 accountId 的话，
+         把凭证的 CODEX_HOME 改到另一个订阅号上，界面会继续显示旧号的额度，
+         而 accountId 一个字都没变。改名同理（名字就画在 HUD 上）。 */
+      const changed = fingerprint(list) !== fingerprint(accounts)
       accounts = list
       if (changed) void run(true)
     },

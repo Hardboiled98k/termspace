@@ -213,10 +213,31 @@ function QuotaRow({ w }: { w: QuotaWindow }): React.JSX.Element {
 }
 
 /** state 不是 ok 时 UI 上该说什么。「查不到」和「用了 0%」必须是两种东西 */
+/* 三种「没数」必须用不同的话说清，别共用一句含混的"暂无数据"：
+   未登录能自己修（去跑一次 login），查不到只能等，字段不认识是上游变了。
+   混成一句的话，用户会对着一个能修的问题干等。 */
 const STATE_NOTE: Record<string, string> = {
-  unavailable: '这次没取到',
-  'unknown-shape': '返回的字段不认识（对方升级了？）',
+  unconfigured: '未登录 —— 在用这个号的终端里跑一次登录命令',
+  unavailable: '⚠ 这次没取到',
+  'unknown-shape': '⚠ 返回的字段不认识（对方升级了？）',
   stale: '旧快照'
+}
+
+const money = (minor: number, cur: string): string => `${(minor / 100).toFixed(2)} ${cur}`
+
+/**
+ * 花钱那一行的文案。
+ * 「已花」和「余额」是两个方向相反的数，**绝不能都渲染成同一个位置的裸数字** ——
+ * codex 的 credits 是余额，曾被当成上限配上假的 used=0，界面上写着「0 / 766」。
+ */
+function spendText(sp: QuotaSpend): string {
+  if (sp.enabled === false) return '未开启'
+  if (typeof sp.remainingMinor === 'number') return `剩 ${money(sp.remainingMinor, sp.currency)}`
+  if (typeof sp.usedMinor === 'number') {
+    const limit = sp.limitMinor ? ` / ${(sp.limitMinor / 100).toFixed(0)}` : ''
+    return `${(sp.usedMinor / 100).toFixed(2)}${limit} ${sp.currency}`
+  }
+  return '∞'
 }
 
 /**
@@ -231,9 +252,15 @@ function AccountBlock({
   a: AccountQuota
   usingCount: number
 }): React.JSX.Element | null {
-  // 没装/没登录的账号整块不渲染，别拿一行 0% 去占地方
-  if (a.state === 'unconfigured') return null
+  /* unconfigured 分两种，不能一刀切隐藏：
+     - 自动探测的系统默认号（本机压根没装 codex）→ 隐藏，那是噪音
+     - **用户自己建的凭证，或正被节点引用的号** → 必须显示
+       否则「未登录」这个状态在界面上永远不存在，用户只会觉得那个号凭空消失了 */
+  const userMade = !a.accountId.startsWith('system:')
+  if (a.state === 'unconfigured' && !userMade && usingCount === 0) return null
   const stale = a.state === 'stale' || Date.now() / 1000 - a.capturedAt > STALE_SEC
+  // 只有真拿到数了才画进度条。查不到/未登录画一根空槽 = 看着就像"用了 0%"
+  const hasData = (a.state === 'ok' || a.state === 'stale') && a.windows.length > 0
   return (
     <div className={`quota-account${stale ? ' stale' : ''}`} title={`${a.source}｜${a.hint ?? ''}`}>
       <div className="quota-account-head">
@@ -244,7 +271,7 @@ function AccountBlock({
       </div>
       {/* 邮箱是区分两个同 provider 订阅号的唯一可靠标识 —— planType 都叫 'pro' */}
       {a.email && <div className="quota-email">{a.email}</div>}
-      {a.windows.length > 0 ? (
+      {hasData ? (
         <div className="quota-provider-rows">
           {a.windows.map((w) => (
             <QuotaRow key={w.id} w={w} />
@@ -253,17 +280,14 @@ function AccountBlock({
       ) : (
         <div className="quota-account-note">{STATE_NOTE[a.state] ?? '暂无数据'}</div>
       )}
-      {a.spend
-        ?.filter((sp) => sp.enabled !== false || sp.usedMinor > 0)
-        .map((sp) => (
-          <div key={sp.label} className="quota-row">
-            <span className="quota-label">{sp.label}</span>
-            <span className="quota-money">
-              {(sp.usedMinor / 100).toFixed(2)}
-              {sp.limitMinor ? ` / ${(sp.limitMinor / 100).toFixed(0)}` : ''} {sp.currency}
-            </span>
-          </div>
-        ))}
+      {/* 花钱侧不画进度条，只给金额 —— 和上面的百分比混在一起必然被读成一回事。
+          enabled:false 要显式说「未开启」，藏起来等于告诉用户"没这回事" */}
+      {a.spend?.map((sp) => (
+        <div key={sp.label} className="quota-row">
+          <span className="quota-label">{sp.label}</span>
+          <span className="quota-money">{spendText(sp)}</span>
+        </div>
+      ))}
       {(stale || a.hint) && (
         <div className="quota-account-note">
           {stale ? `⚠ ${ago(a.capturedAt)}的数` : ''}
@@ -319,23 +343,35 @@ function BoardHUD({
         : a.accountId === `system:${n.data.provider ?? 'claude'}`
     ).length
 
-  // 没装/没登录的账号整块不出现，别拿一行 0% 占地方
-  const accounts = quota.filter((a) => a.state !== 'unconfigured')
+  /* 隐藏规则和 AccountBlock 保持一致：自动探测到的、没装没登录、也没人用的系统号才藏。
+     用户自己建的凭证即使未登录也要占位，否则它在界面上就是凭空消失。 */
+  const accounts = quota.filter(
+    (a) => a.state !== 'unconfigured' || !a.accountId.startsWith('system:') || usingCount(a) > 0
+  )
   if (accounts.length === 0 && agentRows.length === 0) return null
 
-  // 折叠态：只留一行摘要 —— 取所有账号里最吃紧的那个数
-  const peak = Math.max(
-    0,
-    ...accounts.flatMap((a) => a.windows.map((w) => Math.round(w.usedPercent)))
-  )
+  /* 折叠态摘要。**不能无脑取 windows 的最大值** ——
+     只有花钱账号（API key）或全都查不到时，那个 Math.max 会得出 0，
+     折叠条上就写着一个自信的「0%」，而真相是"根本没数据"。 */
+  const withData = accounts.filter((a) => (a.state === 'ok' || a.state === 'stale') && a.windows.length)
+  const broken = accounts.filter((a) => a.state === 'unavailable' || a.state === 'unknown-shape').length
+  const peak = withData.length
+    ? Math.max(...withData.flatMap((a) => a.windows.map((w) => Math.round(w.usedPercent))))
+    : null
+  const summary =
+    peak !== null
+      ? `${withData.every((a) => a.state === 'stale') ? '~' : ''}${peak}%`
+      : broken
+        ? `${broken} 个查不到`
+        : ''
 
   return (
     <div className={`quota-hud${collapsed ? ' collapsed' : ''}`}>
       <button className="hud-toggle" onClick={() => setCollapsed((c) => !c)}>
         <span className="hud-toggle-label">
           {collapsed
-            ? `${accounts.length ? `${peak}%` : ''}${
-                attention > 0 ? ` · ${attention} 需要你` : running > 0 ? ` · ${running} 运行` : ''
+            ? `${summary}${
+                attention > 0 ? `${summary ? ' · ' : ''}${attention} 需要你` : running > 0 ? `${summary ? ' · ' : ''}${running} 运行` : ''
               }` || '概览'
             : '用量'}
         </span>
