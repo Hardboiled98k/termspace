@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import qrcode from 'qrcode-generator'
 
-type Section = 'general' | 'terminal' | 'presets' | 'identities' | 'hooks' | 'remote' | 'peers'
+type Section = 'general' | 'terminal' | 'presets' | 'identities' | 'hooks' | 'remote' | 'peers' | 'update'
 
 /**
  * 配对二维码。手机扫一下就带着 token 进去了 —— 32 位十六进制 token 手打一次
@@ -50,7 +50,8 @@ const SECTIONS: { key: Section; label: string }[] = [
   { key: 'identities', label: '凭证' },
   { key: 'hooks', label: 'Hooks 与状态' },
   { key: 'remote', label: '远程访问' },
-  { key: 'peers', label: '跨机协作' }
+  { key: 'peers', label: '跨机协作' },
+  { key: 'update', label: '更新' }
 ]
 
 export function SettingsPanel({
@@ -212,77 +213,6 @@ export function SettingsPanel({
                 </button>
               </div>
               {backupMsg && <p className="settings-note">{backupMsg}</p>}
-
-              <h3 className="settings-h">更新</h3>
-              <label className="settings-row">
-                <span>后台检查更新</span>
-                <input
-                  type="checkbox"
-                  checked={s.autoUpdate}
-                  onChange={(e) => patch({ autoUpdate: e.currentTarget.checked })}
-                />
-                <button
-                  className="btn-ghost"
-                  onClick={() => void window.termscape.checkUpdate()}
-                  disabled={upd?.phase === 'checking' || upd?.phase === 'downloading'}
-                >
-                  立即检查
-                </button>
-              </label>
-              <label className="settings-row">
-                <span>更新源</span>
-                <input
-                  type="text"
-                  value={s.updateFeedUrl}
-                  placeholder="https://你的域名/termscape/"
-                  onChange={(e) => patch({ updateFeedUrl: e.currentTarget.value })}
-                />
-              </label>
-              <p className="settings-note">
-                指向一个存着 <code>latest-mac.yml</code> 和 <code>*.zip</code> 的 HTTPS 目录
-                （打包产物在 <code>dist/</code>，把这两样传上去即可）。留空则更新功能不工作。
-              </p>
-              <p className="settings-note settings-err">
-                <b>只填你自己的地址。</b>这一栏决定这台机器从哪里取更新包 ——
-                填成别人的地址，等于让那个人决定给你装什么。
-                <br />
-                https 只保证「连上了你填的那台服务器」，不保证那台服务器是可信的。
-                最后拦住恶意包的是 macOS 的代码签名校验（候选包必须满足当前 app
-                签名导出的要求），但那是最后一道，不该拿它当第一道。
-                {s.updateFeedUrl && (
-                  <>
-                    <br />
-                    当前会从 <code>{(() => {
-                      try {
-                        return new URL(s.updateFeedUrl).host
-                      } catch {
-                        return s.updateFeedUrl
-                      }
-                    })()}</code> 取更新。
-                  </>
-                )}
-              </p>
-              <p className="settings-note">
-                {upd?.phase === 'checking' && '正在检查…'}
-                {upd?.phase === 'current' && `已是最新（${upd.version}）`}
-                {upd?.phase === 'available' && `发现 ${upd.version}，正在后台下载…`}
-                {upd?.phase === 'downloading' && `正在下载 ${upd.version}… ${upd.percent}%`}
-                {upd?.phase === 'ready' && `${upd.version} 已下载好，随时可以装。`}
-                {/* 查不了就如实说，但不打断 —— 离线、发布源没配都会走到这里 */}
-                {upd?.phase === 'error' && `查不了更新：${upd.message}`}
-                {(!upd || upd.phase === 'idle') && '还没检查过。'}
-              </p>
-              {upd?.phase === 'ready' && (
-                <>
-                  <button className="btn-primary" onClick={() => void window.termscape.installUpdate()}>
-                    重启并安装 {upd.version}
-                  </button>
-                  <p className="settings-note">
-                    <b>会关掉这个窗口重开。</b>终端会话本身由 tmux 续存、重开后能接回来，
-                    但<b>正在跑的那一轮 agent 对话会断</b>。挑个空档再点。
-                  </p>
-                </>
-              )}
 
               <h3 className="settings-h">关于</h3>
               {info && (
@@ -635,6 +565,82 @@ export function SettingsPanel({
                 这条路还更安全 —— 此时「监听网卡」可以留在<b>仅本机</b>，
                 由 Tailscale 从 tailnet 转发到回环，本进程一个对外端口都不开。
               </p>
+            </>
+          )}
+
+          {section === 'update' && s && (
+            <>
+              <h3 className="settings-h">更新</h3>
+              <label className="settings-row">
+                <span>后台检查更新</span>
+                <input
+                  type="checkbox"
+                  checked={s.autoUpdate}
+                  onChange={(e) => patch({ autoUpdate: e.currentTarget.checked })}
+                />
+                <button
+                  className="btn-ghost"
+                  onClick={() => void window.termscape.checkUpdate()}
+                  disabled={upd?.phase === 'checking' || upd?.phase === 'downloading'}
+                >
+                  立即检查
+                </button>
+              </label>
+              <label className="settings-row">
+                <span>更新源</span>
+                <input
+                  type="text"
+                  value={s.updateFeedUrl}
+                  placeholder="https://你的域名/termscape/"
+                  onChange={(e) => patch({ updateFeedUrl: e.currentTarget.value })}
+                />
+              </label>
+              <p className="settings-note">
+                指向一个存着 <code>latest-mac.yml</code> 和 <code>*.zip</code> 的 HTTPS 目录
+                （打包产物在 <code>dist/</code>，把这两样传上去即可）。留空则更新功能不工作。
+              </p>
+              <p className="settings-note settings-err">
+                <b>只填你自己的地址。</b>这一栏决定这台机器从哪里取更新包 ——
+                填成别人的地址，等于让那个人决定给你装什么。
+                <br />
+                https 只保证「连上了你填的那台服务器」，不保证那台服务器是可信的。
+                最后拦住恶意包的是 macOS 的代码签名校验（候选包必须满足当前 app
+                签名导出的要求），但那是最后一道，不该拿它当第一道。
+                {s.updateFeedUrl && (
+                  <>
+                    <br />
+                    当前会从 <code>{(() => {
+                      try {
+                        return new URL(s.updateFeedUrl).host
+                      } catch {
+                        return s.updateFeedUrl
+                      }
+                    })()}</code> 取更新。
+                  </>
+                )}
+              </p>
+              <p className="settings-note">
+                {upd?.phase === 'checking' && '正在检查…'}
+                {upd?.phase === 'current' && `已是最新（${upd.version}）`}
+                {upd?.phase === 'available' && `发现 ${upd.version}，正在后台下载…`}
+                {upd?.phase === 'downloading' && `正在下载 ${upd.version}… ${upd.percent}%`}
+                {upd?.phase === 'ready' && `${upd.version} 已下载好，随时可以装。`}
+                {/* 查不了就如实说，但不打断 —— 离线、发布源没配都会走到这里 */}
+                {upd?.phase === 'error' && `查不了更新：${upd.message}`}
+                {(!upd || upd.phase === 'idle') && '还没检查过。'}
+              </p>
+              {upd?.phase === 'ready' && (
+                <>
+                  <button className="btn-primary" onClick={() => void window.termscape.installUpdate()}>
+                    重启并安装 {upd.version}
+                  </button>
+                  <p className="settings-note">
+                    <b>会关掉这个窗口重开。</b>终端会话本身由 tmux 续存、重开后能接回来，
+                    但<b>正在跑的那一轮 agent 对话会断</b>。挑个空档再点。
+                  </p>
+                </>
+              )}
+
             </>
           )}
 
