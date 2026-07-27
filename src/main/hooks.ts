@@ -8,6 +8,7 @@
  */
 import { app } from 'electron'
 import http from 'node:http'
+import { buildPeerHelper, decodePeerAsk, PEER_TIMEOUTS } from './peer'
 import { toPublicApproval, type PendingApproval, type PendingApprovalFull } from './approval-dto'
 import { createHash, randomUUID } from 'node:crypto'
 import { chmod, copyFile, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
@@ -346,6 +347,8 @@ export interface HookSystem {
   /** 节点销毁时吊销 */
   revokeNodeToken: (nodeId: string) => Promise<void>
   binDir: string // 注入 PATH 的目录（内含 tb 命令）
+  /** 跨机入口脚本的绝对路径。对端 ssh 过来跑的就是它 —— 要显示在设置里让用户抄走 */
+  peerHelperPath: string
   /** 用户在画布上批准/拒绝一次工具调用；返回是否命中一个仍然挂着的请求 */
   decideApproval: (id: string, allow: boolean) => boolean
   /** 当前挂起的审批快照（renderer reload 后要重放，否则既有审批一直不可见直到超时） */
@@ -383,8 +386,11 @@ case "$cmd" in
   ask|delegate)
     target="$1"; shift 2>/dev/null
     if [ -z "$target" ] || [ -z "$*" ]; then echo "用法: tb ask <节点id> <任务>" >&2; exit 2; fi
-    # 派活是同步等待（可能几分钟），拉长超时
-    curl -s -m 300 -H "$H" --get \
+    # 派活是同步等待（可能几分钟），拉长超时。
+    # target 含冒号 = 跨机（<ssh别名>:<节点>），主进程那边分流；
+    # **ssh 由主进程跑，不在这个脚本里跑** —— 别名白名单在主进程设置里，
+    # 脚本自己 ssh 就等于绕过白名单。跨机多一跳，所以超时比远端 delegate 更长。
+    curl -s -m 320 -H "$H" --get \
       --data-urlencode "target=$target" --data-urlencode "task=$*" "$BASE/tb/ask" ;;
   browser|web)
     action="$1"; shift 2>/dev/null
@@ -403,6 +409,7 @@ tb — Termscape 工具中枢
   tb agents                列出本画布上的其他 agent 终端
   tb context               读取连到本终端的共享上下文（实时，改了立刻能看到）
   tb ask <节点id> <任务>   把任务派给另一个终端里的 agent，等它做完返回结果
+  tb ask <机器>:<节点id> <任务>  派到另一台机器上的 Termscape（机器名在设置里配）
   tb browser open <url>    在画布上打开浏览器测试目标网页
   tb browser goto <url>    让画布浏览器导航到某地址
   tb browser text          抓取当前页面可见文本
@@ -427,6 +434,11 @@ export interface TbHandlers {
   /** 连到该终端的上下文节点，**现读现返**（会话启动时注入的那份可能已经过期） */
   context: (source: string) => Promise<string>
   ask: (source: string, target: string, task: string) => Promise<string>
+  /**
+   * 别的机器 ssh 过来派的活。`source` 是对方自报的，**只用于显示**，
+   * 不参与授权 —— 授权靠本机设置里的「接受跨机派活」开关（见 /tb/peer 路由）。
+   */
+  peerAsk?: (source: string, target: string, task: string) => Promise<string>
   browser: (source: string, action: string, arg: string, nodeId: string) => Promise<string>
 }
 
@@ -510,6 +522,41 @@ export async function startHookSystem(
     const given = String(req.headers['x-termboard-token'] ?? '')
     const callerNode = given ? (tokenToNode.get(given) ?? '') : ''
     const authed = !!callerNode
+
+    /* ── 跨机派活入口 ──
+       只有本机的 tb-peer helper 会打这里（它由对端 ssh 过来执行）。
+       和 /tb/* 分开是因为身份来源完全不同：那边按 per-node token 反查
+       "哪个节点在调"，这里根本没有本机节点 —— 调用方是另一台机器。
+
+       授权**不走 authorizeLink**：那个函数比对的是画布连线 `boardLinks`，
+       而 peer 不是画布上的节点，比对永远不成立，只会弹一个远端没人看的窗
+       并留下匹配不上的幽灵 grant。这里的判据是本机设置里的「接受跨机派活」开关。 */
+    if (req.url === '/tb/peer' && req.method === 'POST') {
+      req.setTimeout(PEER_TIMEOUTS.remoteDelegateMs + 30_000, () => req.destroy())
+      const tok = String(req.headers['x-termboard-peer'] ?? '')
+      const reply = (code: number, text: string): void => {
+        res.statusCode = code
+        res.setHeader('content-type', 'text/plain; charset=utf-8')
+        res.end(text)
+      }
+      if (!tb?.peerAsk || !peerToken || tok !== peerToken) return reply(403, 'forbidden')
+      const peerAsk = tb.peerAsk // 钉住：下面在异步回调里用，TS 那边也认这个形状
+      let size = 0
+      const bodyChunks: Buffer[] = []
+      req.on('data', (c: Buffer) => {
+        size += c.length
+        if (size > BODY_LIMIT) req.destroy()
+        else bodyChunks.push(c)
+      })
+      req.on('end', () => {
+        const p = decodePeerAsk(Buffer.concat(bodyChunks).toString('utf8'))
+        if (!p) return reply(400, '请求格式不对')
+        void peerAsk(p.source, p.target, p.task)
+          .then((t) => reply(200, t))
+          .catch(() => reply(500, '内部错误'))
+      })
+      return
+    }
 
     // ── tb 工具中枢路由（GET，纯文本返回，给 agent 直接读）──
     if (req.url?.startsWith('/tb/')) {
@@ -669,6 +716,24 @@ export async function startHookSystem(
   await writeAtomic(tbPath, buildTbScript())
   await chmod(tbPath, 0o755)
 
+  /* ── 跨机入口 ──
+     别的机器通过 ssh 跑 `tb-peer`，它在**本机**读端口和 token 再打回环。
+     为什么不让对面直接 curl：hook 端口每次启动都变、token 也在本机文件里，
+     对面既拿不到也不该拿。helper 留在被派活这一侧，跨机链路上只传任务本身。 */
+  const peerTokenFile = path.join(dir, 'peer-token')
+  let peerToken = await readFile(peerTokenFile, 'utf8')
+    .then((s) => s.trim())
+    .catch(() => '')
+  if (peerToken.length < 16) {
+    peerToken = randomUUID().replace(/-/g, '') + randomUUID().replace(/-/g, '')
+    await writeFile(peerTokenFile, peerToken)
+  }
+  /* **和 per-node token 不同，这把要跨 app 重启保持不变** ——
+     它写在 helper 脚本里，而 helper 是 ssh 过来直接跑的，
+     每次重启换 token 就等于每次重启都要重新分发一遍。 */
+  await chmod(peerTokenFile, 0o600)
+  const peerHelperPath = path.join(binDir, 'tb-peer')
+
   const endpointFile = path.join(dir, 'hook-endpoint.env')
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   const address = server.address()
@@ -686,8 +751,15 @@ export async function startHookSystem(
   )
   await chmod(endpointFile, 0o600)
 
+  /* helper 里写死端口和 token —— 每次启动重写。ssh 过来的进程不继承任何 env，
+     所以这两样只能落在文件里。0700：同 UID 仍然读得到（整个 hook 体系都是这样，
+     见文件头的诚实说明），挡的是别的用户。 */
+  await writeAtomic(peerHelperPath, buildPeerHelper(port, peerToken))
+  await chmod(peerHelperPath, 0o700)
+
   return {
     endpointFile,
+    peerHelperPath,
     issueNodeToken: async (nodeId) => {
       // 每次 spawn 换新 token：老 token 立即失效，节点重建不会继承旧身份
       const prev = nodeToToken.get(nodeId)

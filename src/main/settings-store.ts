@@ -4,6 +4,7 @@ import { readFile, writeFile, rename } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
+import { isPeerAlias } from './peer'
 
 export interface Settings {
   defaultFontSize: number
@@ -28,6 +29,18 @@ export interface Settings {
    * 手机加入同一 tailnet 后可访问。**没有 0.0.0.0 这个选项，也不要加**。
    */
   remoteBind: 'loopback' | 'tailscale'
+  /**
+   * 可以跨机派活过去的 ssh alias 白名单（`tb ask mini:t-abc <任务>` 里的 `mini`）。
+   * **只存 alias，不存任何密钥** —— 认证完全交给用户已有的 ssh 配置。
+   * 白名单是必须的：alias 直接进 ssh 的 argv，见 peer.ts 的 peerAllowed。
+   */
+  peers: string[]
+  /**
+   * 本机是否接受**别的机器**派过来的活。默认关。
+   * 诚实说明：能 ssh 进本机的人本来就有完整 shell 权限，所以这个开关
+   * 和 peers 白名单一样是产品护栏（挡误用、挡 agent 自作主张），不是安全边界。
+   */
+  peerDelegate: boolean
 }
 
 export const DEFAULTS: Settings = {
@@ -41,7 +54,9 @@ export const DEFAULTS: Settings = {
   remoteAllowInput: false,
   remoteAllowApprove: false,
   remotePort: 7333,
-  remoteBind: 'loopback'
+  remoteBind: 'loopback',
+  peers: [],
+  peerDelegate: false
 }
 
 const file = (): string => path.join(app.getPath('userData'), 'settings.json')
@@ -80,6 +95,11 @@ function sanitize(s: Settings): Settings {
     remoteEnabled: bool(s.remoteEnabled),
     remoteAllowInput: bool(s.remoteAllowInput),
     remoteAllowApprove: bool(s.remoteAllowApprove),
+    peerDelegate: bool(s.peerDelegate),
+    /* alias 会进 ssh 的 argv，**读盘这一步就要把脏的滤掉**：
+       手改 settings.json 塞一个 `-oProxyCommand=...` 进去，等于让任何能派活的
+       agent 在本机执行任意命令。判据直接用 peer.ts 的，不另写一份正则。 */
+    peers: Array.isArray(s.peers) ? s.peers.filter(isPeerAlias) : [],
     // 绑定地址不接受任意输入：不是精确的 'tailscale' 一律当仅本机
     remoteBind: s.remoteBind === 'tailscale' ? 'tailscale' : 'loopback',
     claudeHooks: s.claudeHooks === 'on' ? 'on' : s.claudeHooks === 'off' ? 'off' : 'ask',

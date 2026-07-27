@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import qrcode from 'qrcode-generator'
 
-type Section = 'general' | 'terminal' | 'presets' | 'identities' | 'hooks' | 'remote'
+type Section = 'general' | 'terminal' | 'presets' | 'identities' | 'hooks' | 'remote' | 'peers'
 
 /**
  * 配对二维码。手机扫一下就带着 token 进去了 —— 32 位十六进制 token 手打一次
@@ -49,7 +49,8 @@ const SECTIONS: { key: Section; label: string }[] = [
   { key: 'presets', label: 'Agent 预设' },
   { key: 'identities', label: '凭证' },
   { key: 'hooks', label: 'Hooks 与状态' },
-  { key: 'remote', label: '远程访问' }
+  { key: 'remote', label: '远程访问' },
+  { key: 'peers', label: '跨机协作' }
 ]
 
 export function SettingsPanel({
@@ -558,6 +559,74 @@ export function SettingsPanel({
                 改用 <code>https://&lt;机器名&gt;.ts.net</code> 访问。
                 这条路还更安全 —— 此时「监听网卡」可以留在<b>仅本机</b>，
                 由 Tailscale 从 tailnet 转发到回环，本进程一个对外端口都不开。
+              </p>
+            </>
+          )}
+
+          {section === 'peers' && s && (
+            <>
+              <h3 className="settings-h">派活到别的机器</h3>
+              <p className="settings-note">
+                在终端里跑 <code>tb ask 机器名:节点id 任务</code>，任务会派到那台机器上
+                Termscape 里的那个终端，做完把回答带回来。走的是你已经配好的{' '}
+                <code>ssh</code>，<b>不新开任何网络端口</b>。
+              </p>
+              <label className="settings-row">
+                <span>可以派活过去的机器</span>
+                <input
+                  type="text"
+                  value={s.peers.join(' ')}
+                  placeholder="mac-mini nas"
+                  onChange={(e) =>
+                    patch({
+                      peers: e.currentTarget.value
+                        .split(/[\s,]+/)
+                        .map((x) => x.trim())
+                        .filter(Boolean)
+                    })
+                  }
+                />
+              </label>
+              <p className="settings-note">
+                空格分隔，填的是 <code>~/.ssh/config</code> 里的主机别名。
+                先在终端里跑一次 <code>ssh 机器名</code> 确认免密通了 ——
+                要密码的话派活会立刻失败（不会挂在密码提示上）。
+                <br />
+                这里是白名单不是摆设：别名会原样进 <code>ssh</code> 的参数，
+                不限制的话一个像 <code>-oProxyCommand=…</code> 的「机器名」就是本机任意命令执行。
+              </p>
+
+              <h3 className="settings-h">接受别的机器派来的活</h3>
+              <label className="settings-row">
+                <span>允许跨机派活进来</span>
+                <input
+                  type="checkbox"
+                  checked={s.peerDelegate}
+                  onChange={(e) => patch({ peerDelegate: e.currentTarget.checked })}
+                />
+                <span className={`status-chip ${s.peerDelegate ? 'attention' : 'idle'}`}>
+                  {s.peerDelegate ? '接受' : '不接受'}
+                </span>
+              </label>
+              <p className="settings-note">
+                关着时对面派过来会被直接拒绝。开着时，任务会像你自己敲字一样进到目标终端的
+                agent 里 —— 只进<b>正在跑 agent</b> 的终端，普通 shell 一律拒（那等于直接执行命令）。
+                这一项改完立刻生效。
+              </p>
+              <p className="settings-note">
+                说清楚边界：能 ssh 进这台机的人本来就有完整 shell 权限，
+                所以这个开关和上面的白名单是<b>产品护栏</b>（挡误用、挡 agent 自作主张），
+                <b>不是安全边界</b>。别把它当成"对外开放"的依据。
+              </p>
+
+              <h3 className="settings-h">对面要装什么</h3>
+              <p className="settings-note">
+                那台机器上也要跑 Termscape，并在这一页把「允许跨机派活进来」打开。
+                入口脚本是它自己生成的（<code>userData/bin/tb-peer</code>），
+                你不用手动拷任何东西 —— 本机 ssh 过去直接执行它。
+                <br />
+                派活是同步等的，最长 4 分钟。超时不会重试：任务已经注入进去了，
+                重试一次就是往对面那个 agent 里注两遍。
               </p>
             </>
           )}

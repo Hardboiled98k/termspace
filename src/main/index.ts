@@ -24,7 +24,15 @@ import {
 } from './identity-store'
 import { listPresets, upsertPreset, deletePreset } from './preset-store'
 import { startWorkerWatch, workerAction, type WorkerWatch } from './worker-watch'
+import { execFile } from 'node:child_process'
 import { startRemoteApi, type RemoteApi } from './remote'
+import {
+  parsePeerTarget,
+  peerAllowed,
+  sshArgs,
+  encodePeerAsk,
+  PEER_TIMEOUTS
+} from './peer'
 import { resolveBind } from './net-iface'
 import { issueToken, loadTokens, revokeToken, toMeta } from './remote-tokens'
 
@@ -237,6 +245,49 @@ ipcMain.on(
 /* 本次运行内用户当场批准过的跨节点调用（连线之外的逃生口）。
    连线被删掉后授权立即失效，但这里的一次性批准按 app 生命周期保留。 */
 const grants = new Set<string>()
+
+/**
+ * 跨机派活：ssh 到对端跑它自己的 tb-peer，任务正文走 stdin。
+ *
+ * 三件事是刻意的：
+ * - **白名单在这里查**，不在 tb 脚本里。脚本自己 ssh 就等于绕过白名单，
+ *   而 alias 会进 ssh 的 argv（`-oProxyCommand=…` 在**本机**执行任意命令）。
+ * - **任务正文不进 argv**：`ps` 对同机所有用户可见，而任务是自由文本。
+ * - **超时到了就放弃，不重试**：注入是不可撤回的，重试一次就是把同一个任务
+ *   往对面那个 agent 里注两遍。断线只能理解成 detach。
+ */
+async function askPeer(
+  source: string,
+  peer: { alias: string; nodeId: string },
+  task: string
+): Promise<string> {
+  const { peers } = await getSettings()
+  if (!peerAllowed(peer.alias, peers)) {
+    return `派活失败：机器「${peer.alias}」不在白名单里。先去设置 → 跨机协作把它加上（那里也写着对端要怎么配）。`
+  }
+  return new Promise<string>((resolve) => {
+    const child = execFile(
+      'ssh',
+      // 自测时可以把 helper 指到别处（比如本机的那份）
+      sshArgs(peer.alias, process.env['TERMBOARD_PEER_HELPER'] || undefined),
+      { timeout: PEER_TIMEOUTS.sshMs, maxBuffer: 4 * 1024 * 1024 },
+      (err, stdout, stderr) => {
+        if (err) {
+          const hint = /Permission denied|Host key|Could not resolve|Connection refused/i.test(
+            stderr
+          )
+            ? `\n（先在终端里手动跑一次 ssh ${peer.alias} 确认免密通了）`
+            : ''
+          return resolve(
+            `跨机派活失败：ssh ${peer.alias} —— ${(stderr || err.message).slice(0, 300)}${hint}`
+          )
+        }
+        resolve(stdout.trim() || '[对端没有返回内容]')
+      }
+    )
+    child.stdin?.end(encodePeerAsk({ source, target: peer.nodeId, task }))
+  })
+}
 
 /**
  * 跨节点动作授权：先看画布连线，没有就弹窗问用户。
@@ -1351,8 +1402,11 @@ app.whenReady().then(async () => {
             })
             .join('\n')
         },
-        ask: (source, target, task) =>
-          delegate(
+        ask: async (source, target, task) => {
+          // `mini:t-abc` = 派到另一台机器。不含冒号则是本机，走下面原路。
+          const peer = parsePeerTarget(target)
+          if (peer) return askPeer(source, peer, task)
+          return delegate(
             {
               hasNode: (nid) => ptys.has(nid),
               writeToPty: (nid, data) => ptys.get(nid)?.write(data),
@@ -1369,7 +1423,33 @@ app.whenReady().then(async () => {
             source,
             target,
             task
-          ),
+          )
+        },
+        /* 别的机器 ssh 过来派的活。**授权判据和本机那条完全不同**：
+           本机比对画布连线，跨机比对设置里的开关 —— peer 不是画布上的节点，
+           拿它去比连线永远不成立，只会弹一个远端没人看的窗。
+           `source` 是对方自报的，只写进弹不出去的日志和返回文案，不参与判定。 */
+        peerAsk: async (source, target, task) => {
+          if (!(await getSettings()).peerDelegate) {
+            return '派活被拒：这台机器没开「接受跨机派活」（设置 → 跨机协作）。'
+          }
+          return delegate(
+            {
+              hasNode: (nid) => ptys.has(nid),
+              writeToPty: (nid, data) => ptys.get(nid)?.write(data),
+              foreground: (nid) => paneCommand(nid),
+              /* 开关就是这条链路的授权，不再逐次弹窗 —— 远端多半没人在电脑前，
+                 弹窗只会挂到超时。**但要在这里再查一遍**：authorize 是 delegate
+                 注入前最后一个可控点，上面那次查在几个 await 之前，
+                 用户完全可能在这中间把开关关掉。安全开关只能往收紧方向失败。 */
+              authorize: async () => (await getSettings()).peerDelegate
+            },
+            `peer:${source || '?'}`,
+            target,
+            task,
+            PEER_TIMEOUTS.remoteDelegateMs
+          )
+        },
         browser: async (source, action, arg, nodeId) => {
           // list 之外的动作都碰得到已登录页面的内容（text/shot 同样能读走邮箱、后台、token），
           // 所以一律要授权；open 是新建一个空白节点，创建者当场获授权。

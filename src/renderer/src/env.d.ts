@@ -12,6 +12,10 @@ interface AppSettings {
   remoteAllowApprove: boolean
   remotePort: number
   remoteBind: 'loopback' | 'tailscale'
+  /** 可以跨机派活过去的 ssh 别名白名单（只是别名，不含任何密钥） */
+  peers: string[]
+  /** 本机是否接受别的机器派进来的活 */
+  peerDelegate: boolean
 }
 
 /** 额度：一个窗口（5h / 周 / 按模型）。语义只能从 windowMinutes 推，不许按位置认 */
