@@ -7,7 +7,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { parseCodexLogin } from '../src/main/login-status.ts'
+import { parseClaudeAuth, parseCodexLogin } from '../src/main/login-status.ts'
 
 test('未登录不能被判成已登录（回归：Not logged in 含 "logged in" 子串）', () => {
   const r = parseCodexLogin('Not logged in')
@@ -33,4 +33,38 @@ test('认不出的输出报 unknown，不猜成 in', () => {
 
 test('home 原样带回给界面', () => {
   assert.equal(parseCodexLogin('Not logged in', '/tmp/x').home, '/tmp/x')
+})
+
+// ── Claude：`claude auth status --json` 真实存在（项目一度以为没有）─────────
+
+test('Claude 已登录：显示套餐和邮箱', () => {
+  // 本机实测的真实返回形状
+  const out = JSON.stringify({
+    loggedIn: true,
+    authMethod: 'claude.ai',
+    apiProvider: 'firstParty',
+    email: 'a@b.com',
+    subscriptionType: 'max'
+  })
+  const r = parseClaudeAuth(out)
+  assert.equal(r.state, 'in')
+  assert.match(r.detail, /max/)
+  assert.match(r.detail, /a@b\.com/)
+})
+
+test('Claude 未登录（隔离目录里是空的）', () => {
+  const r = parseClaudeAuth(JSON.stringify({ loggedIn: false, authMethod: 'none' }))
+  assert.equal(r.state, 'out')
+})
+
+test('Claude 走 api_key 时要标出「按量计费」', () => {
+  /* 订阅和按量在界面上长得一样但账单完全不同 —— 这正是那条
+     "用户 shell export 的 ANTHROPIC_API_KEY 让订阅号白开"的坑 */
+  const r = parseClaudeAuth(JSON.stringify({ loggedIn: true, authMethod: 'api_key' }))
+  assert.equal(r.state, 'in')
+  assert.match(r.detail, /按量计费/)
+})
+
+test('Claude 输出不是 JSON 时报 unknown，不编一个登录态出来', () => {
+  assert.equal(parseClaudeAuth('command not found').state, 'unknown')
 })

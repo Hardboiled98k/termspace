@@ -121,18 +121,32 @@ function shortPath(p: string): string {
 }
 
 /* 连线语义：简报→终端 = 注入上下文；终端→终端 = 派活通道（M5-p3 接 MCP） */
-function edgeStyle(kind: 'context' | 'delegate'): Partial<Edge> {
-  return kind === 'context'
-    ? {
-        animated: false,
-        style: { stroke: '#BF5AF2', strokeWidth: 1.6, strokeDasharray: '5 4' },
-        data: { kind }
-      }
-    : {
-        animated: true,
-        style: { stroke: '#0A84FF', strokeWidth: 1.8 },
-        data: { kind }
-      }
+/**
+ * 连线的三种语义。**凭证边一度被标成 `context`** —— 类型上没人管，
+ * 但"按 kind 找上下文源"的地方（`ctxLinks` → `tb context`）就会把凭证节点也算进去。
+ * 连线是这个产品的协议本身，标错 kind = 协议本身说了假话。
+ */
+function edgeStyle(kind: 'context' | 'delegate' | 'credential'): Partial<Edge> {
+  if (kind === 'context') {
+    return {
+      animated: false,
+      style: { stroke: '#BF5AF2', strokeWidth: 1.6, strokeDasharray: '5 4' },
+      data: { kind }
+    }
+  }
+  if (kind === 'credential') {
+    // 身份线：实线、暖色，和上下文的紫色虚线区分开
+    return {
+      animated: false,
+      style: { stroke: '#FF9F0A', strokeWidth: 1.8 },
+      data: { kind }
+    }
+  }
+  return {
+    animated: true,
+    style: { stroke: '#0A84FF', strokeWidth: 1.8 },
+    data: { kind }
+  }
 }
 
 /* 成组自动排列参数 */
@@ -1004,7 +1018,7 @@ function Board(): React.JSX.Element {
                 nodesRef.current.find((n) => n.id === e.source)?.type === 'credential'
               )
           ),
-          ...addEdge({ ...c, ...edgeStyle('context') }, [])
+          ...addEdge({ ...c, ...edgeStyle('credential') }, [])
         ])
         void window.termscape.destroy(tgt.id)
         setNodes((ns) =>
@@ -1028,6 +1042,9 @@ function Board(): React.JSX.Element {
     [nodes]
   )
 
+  /** 上一拍有凭证连线的终端。用来识别「线被删了」这个瞬间 */
+  const prevBoundRef = useRef<Set<string>>(new Set())
+
   /* 连线是凭证的唯一真相源之一 —— 有线连过来时把节点头部的下拉锁掉，
      否则同一件事两个入口，用户改了下拉却发现被连线覆盖，或反过来。 */
   useEffect(() => {
@@ -1036,6 +1053,51 @@ function Board(): React.JSX.Element {
         .filter((e) => nodesRef.current.find((n) => n.id === e.source)?.type === 'credential')
         .map((e) => e.target)
     )
+
+    /* **删线必须真撤销**。原来断线只解锁下拉、`identityId` 原样留着 ——
+       画布上看着没线了，那个终端还在用刚被撤掉的账号 / API key 跑着，
+       连 tmux 会话都还attach 在旧身份上。「用户已撤销、进程仍持有 secret」
+       是确定的错误，不是可以商量的语义。
+
+       撤销要重开会话（和连线时同一个代价），所以要确认；
+       **用户若不同意，就把线加回去** —— 画布必须始终等于真相，
+       不能出现"线没了但身份还在"的中间态。 */
+    const revoked = [...prevBoundRef.current].filter((id) => !bound.has(id))
+    prevBoundRef.current = bound
+    for (const termId of revoked) {
+      const term = nodesRef.current.find((n) => n.id === termId)
+      if (!term || term.type !== 'terminal' || !term.data.identityId) continue
+      const ok = window.confirm(
+        `撤掉「${term.data.title}」的凭证？\n\n` +
+          '这个终端会关掉当前会话、用系统默认身份重开，正在跑的进程会结束。\n' +
+          '点取消则把连线加回去（保持现在的身份）。'
+      )
+      if (!ok) {
+        // 还原连线：画布不能停在"线没了但身份还在"的中间态
+        const credNode = nodesRef.current.find(
+          (n) => n.type === 'credential' && n.data.identityId === term.data.identityId
+        )
+        if (credNode) {
+          prevBoundRef.current.add(termId) // 加回去后别再当成一次新的撤销
+          setEdges((es) =>
+            addEdge(
+              { id: `${credNode.id}-${termId}`, source: credNode.id, target: termId, ...edgeStyle('credential') },
+              es
+            )
+          )
+        }
+        continue
+      }
+      void window.termscape.destroy(termId)
+      setNodes((ns) =>
+        ns.map((n) =>
+          n.id === termId && n.type === 'terminal'
+            ? { ...n, data: { ...n.data, identityId: undefined } }
+            : n
+        )
+      )
+    }
+
     setNodes((ns) => {
       let changed = false
       const next = ns.map((n) => {

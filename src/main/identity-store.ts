@@ -9,7 +9,7 @@ import { randomUUID } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import path from 'node:path'
 import { materializeEnv, type ResolvedEnv } from './identity-env'
-import { parseCodexLogin, type LoginStatus } from './login-status.ts'
+import { parseClaudeAuth, parseCodexLogin, type LoginStatus } from './login-status.ts'
 
 // 展开规则搬到 identity-env.ts（不依赖 electron，才能被 node --test 覆盖）
 export { materializeEnv } from './identity-env'
@@ -136,16 +136,16 @@ const findBin = (name: string): string | null =>
     .find(existsSync) ?? null
 
 /**
- * 这个凭证到底登没登录。
+ * 这个凭证到底登没登录。**两家都能真查**，都是只读、不花额度：
+ *   codex   `codex login status`
+ *   claude  `claude auth status --json` → loggedIn / authMethod / email / subscriptionType
  *
- * **只有 codex 能真查**：`codex login status` 是只读的、~1s、不花任何额度。
- * Claude 没有等价命令（穷举过 `claude --help`），凭证又在 Keychain 里按 config dir 分区，
- * 从外面看不出来 —— 那就如实报 unknown，别猜。猜错了比不说更糟：
- * 用户会以为已登录，然后对着一个永远不动的终端发呆。
+ * ⚠️ 项目里一度写着"Claude 没有等价命令（穷举过 --help）"，**那是错的**
+ * （codex 审查指出后实测通过，claude 2.1.220）。别再照抄那句话。
  *
- * 为什么这条必须有：`CODEX_HOME` 只负责**隔离**，指向一个新目录时那个号是空的，
- * 第一次仍然要在终端里跑一次 `codex login`。不显示登录态的话，
- * 用户拉完线会以为"连上了就是登录了"。
+ * 为什么这条必须有：`CODEX_HOME` / `CLAUDE_CONFIG_DIR` 只负责**隔离**，
+ * 指向一个新目录时那个号是空的，第一次仍要登录一次。不显示登录态的话，
+ * 用户拉完线会以为"连上了就是登录了"，然后对着一个永远不动的终端发呆。
  */
 export async function identityLoginStatus(id: string): Promise<LoginStatus> {
   const found = (await load()).find((i) => i.id === id)
@@ -160,7 +160,8 @@ export async function identityLoginStatus(id: string): Promise<LoginStatus> {
       execFile(
         bin,
         ['login', 'status'],
-        { timeout: 8000, env: { ...process.env, CODEX_HOME: home } },
+        // 同上：整个 identity env 都传，凭证里配了 OPENAI_API_KEY 时认证来源就不是订阅
+        { timeout: 8000, env: { ...process.env, ...set, CODEX_HOME: home } },
         (err, stdout, stderr) => resolve(err ? `${stdout}${stderr}` : stdout)
       )
     })
@@ -172,13 +173,21 @@ export async function identityLoginStatus(id: string): Promise<LoginStatus> {
 
   if (found.provider === 'claude') {
     const home = set['CLAUDE_CONFIG_DIR']
-    return {
-      state: 'unknown',
-      detail: home
-        ? 'Claude 没有只读的查询命令，登录态只能进终端看'
-        : '用系统默认的 Claude 登录态',
-      home
-    }
+    const bin = findBin('claude')
+    if (!bin) return { state: 'unknown', detail: '本机没找到 claude', home }
+    /* `claude auth status --json` 是只读的、不花额度。
+       **整个 identity env 都要传**，不能只传 CLAUDE_CONFIG_DIR ——
+       凭证里若配了 ANTHROPIC_API_KEY，认证来源就是 api_key 而不是订阅，
+       只传目录会把这种情况报成"未登录"。 */
+    const out = await new Promise<string>((resolve) => {
+      execFile(
+        bin,
+        ['auth', 'status', '--json'],
+        { timeout: 8000, env: { ...process.env, ...set } },
+        (err, stdout, stderr) => resolve(err ? `${stdout}${stderr}` : stdout)
+      )
+    })
+    return parseClaudeAuth(out, home)
   }
   return { state: 'unknown', detail: '该 provider 无法从外部查询登录态' }
 }

@@ -24,6 +24,42 @@ const OUT = /\b(not logged in|logged out|no (stored )?credentials|please (run )?
 /** 已登录：必须**先排除**上面那些否定式再判 */
 const IN = /\b(logged in|authenticated as|signed in)\b/i
 
+/**
+ * `claude auth status --json` 的输出。
+ *
+ * **这个命令是存在的** —— 项目里一度写着"Claude 没有等价命令（穷举过 --help）"，
+ * 是错的（codex 审查指出后实测：本机 claude 2.1.220 直接返回下面这个 JSON）。
+ * 它比 codex 那边给得还多：邮箱能区分两个订阅号，subscriptionType 能看出 max/pro。
+ */
+export interface ClaudeAuth {
+  loggedIn?: boolean
+  authMethod?: string
+  email?: string
+  subscriptionType?: string
+}
+
+export function parseClaudeAuth(stdout: string, home?: string): LoginStatus {
+  let j: ClaudeAuth
+  try {
+    j = JSON.parse(stdout) as ClaudeAuth
+  } catch {
+    // 认不出就 unknown，**不猜**（命令换形状了也不能编一个登录态出来）
+    return { state: 'unknown', detail: stdout.trim().slice(0, 80) || '查不出来', home }
+  }
+  if (j.loggedIn !== true) {
+    return { state: 'out', detail: '未登录 —— 在连着的终端里跑一次 claude 登录', home }
+  }
+  /* authMethod 要显示出来：`api_key` 意味着这个终端**走按量计费**，不是订阅额度。
+     两者在界面上长得一样但账单完全不同 —— 这正是 identity 里那条
+     "用户 shell export 的 ANTHROPIC_API_KEY 会让订阅号白开"的坑。 */
+  const bits = [
+    j.subscriptionType ?? j.authMethod ?? '已登录',
+    j.email,
+    j.authMethod === 'api_key' ? '按量计费（非订阅）' : undefined
+  ].filter(Boolean)
+  return { state: 'in', detail: bits.join(' · ').slice(0, 80), home }
+}
+
 export function parseCodexLogin(out: string, home?: string): LoginStatus {
   const text = out.trim()
   if (!text) return { state: 'unknown', detail: '查不出来', home }
