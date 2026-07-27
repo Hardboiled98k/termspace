@@ -10,7 +10,14 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { fromSaved, toSaved, SAVED_TYPES, type BoardNode } from '../src/renderer/src/board-serde.ts'
+import {
+  fromSaved,
+  toSaved,
+  newNodeId,
+  NODE_ID_RE,
+  SAVED_TYPES,
+  type BoardNode
+} from '../src/renderer/src/board-serde.ts'
 
 const pos = { position: { x: 10, y: 20 }, width: 300, height: 200 }
 
@@ -67,4 +74,53 @@ test('凭证节点存盘里**绝不能**出现 env 值', () => {
   // 渲染层本来就拿不到值，但这条用例是防将来有人"顺手"把它带过来
   const raw = JSON.stringify(toSaved(SAMPLES.credential as never))
   assert.ok(!/env|token|key|secret/i.test(raw), `存盘内容混进了敏感字段：${raw}`)
+})
+
+// ── 节点 id 不可复用 ─────────────────────────────────────────────────────────
+
+test('新 id 不会复用：删掉再建不会拿到同一个', () => {
+  /* 老实现是 max+1，删掉 t7 再建一个还叫 t7。而 nodeId 同时是 tmux 会话名、
+     scrollback 文件名、上下文文件名、hook token 文件名、pty 表的键、授权图的键 ——
+     一复用这六条链路一起串台。 */
+  const seen = new Set<string>()
+  let ids: string[] = []
+  for (let i = 0; i < 500; i++) {
+    const id = newNodeId('t', ids)
+    assert.ok(!seen.has(id), `第 ${i} 次生成了重复 id：${id}`)
+    seen.add(id)
+    ids.push(id)
+    // 模拟"删掉一半再继续建"——老实现在这里就会开始发重复号
+    if (i % 50 === 0) ids = ids.slice(-5)
+  }
+})
+
+test('新 id 必须能过主进程的字符校验', () => {
+  // 生成一个主进程会拒收的 id，症状是终端**静默起不来**
+  for (let i = 0; i < 200; i++) {
+    const id = newNodeId('t')
+    assert.ok(NODE_ID_RE.test(id), `${id} 过不了 NODE_ID_RE`)
+  }
+})
+
+test('新 id 当 tmux 会话名时不会被改写', () => {
+  /* tmux 会话名是 `tb-<id>`，src/main/tmux.ts 的 sessionName 会把
+     [^a-zA-Z0-9_-] 换成下划线。**若 id 被改写，两个不同的 id 可能映射到同一个会话名** */
+  for (let i = 0; i < 200; i++) {
+    const id = newNodeId('b')
+    assert.equal(id.replace(/[^a-zA-Z0-9_-]/g, '_'), id, `${id} 会被 sessionName 改写`)
+  }
+})
+
+test('避开已存在的 id（含老工作区里的 t1/b3 那种）', () => {
+  const legacy = ['t1', 't2', 'b3', 'g1', 'ctx-p1']
+  for (let i = 0; i < 100; i++) {
+    assert.ok(!legacy.includes(newNodeId('t', legacy)))
+  }
+})
+
+test('各前缀互不干扰，且看得出是哪类节点', () => {
+  // id 是用户和 agent 要念出来的东西（tb ask <节点id> <任务>），不能是一串 UUID
+  assert.match(newNodeId('t'), /^t-[a-z0-9]{1,8}$/)
+  assert.match(newNodeId('b'), /^b-[a-z0-9]{1,8}$/)
+  assert.ok(newNodeId('t').length <= 12, 'id 要短到能让人念出来')
 })

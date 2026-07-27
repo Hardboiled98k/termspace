@@ -25,7 +25,14 @@ import WorkerNode, { type WorkerNodeT } from './nodes/WorkerNode'
 import ContextNode from './nodes/ContextNode'
 import BrowserNode, { browserViews } from './nodes/BrowserNode'
 import { CredentialNode } from './nodes/CredentialNode'
-import { fromSaved, toSaved, DEFAULT_SIZE, type BoardNode, type SavedNode } from './board-serde'
+import {
+  fromSaved,
+  toSaved,
+  newNodeId,
+  DEFAULT_SIZE,
+  type BoardNode,
+  type SavedNode
+} from './board-serde'
 
 export type { BoardNode }
 import { IdentityContext, TmuxContext, RequestDeleteContext } from './identity-context'
@@ -743,20 +750,9 @@ function seedNodes(): BoardNode[] {
   ]
 }
 
-function nextIdFrom(ids: string[], prefix: string): string {
-  const max = ids.reduce((m, i) => {
-    if (!i.startsWith(prefix)) return m
-    const num = parseInt(i.slice(prefix.length), 10)
-    return Number.isFinite(num) && num > m ? num : m
-  }, 0)
-  return `${prefix}${max + 1}`
-}
-
+/** 当前画布里取一个新 id（见 board-serde.ts 的 newNodeId：不可复用是它存在的理由） */
 function nextId(nodes: BoardNode[], prefix: string): string {
-  return nextIdFrom(
-    nodes.map((n) => n.id),
-    prefix
-  )
+  return newNodeId(prefix, nodes.map((n) => n.id))
 }
 
 function Board(): React.JSX.Element {
@@ -1024,13 +1020,14 @@ function Board(): React.JSX.Element {
   const addProject = useCallback(async () => {
     const dir = await window.termscape.pickFolder()
     if (!dir) return
-    const pid = `p${Date.now().toString(36)}`
+    // 加随机后缀：纯时间戳在同一毫秒建两个项目会撞，而 pid 决定上下文节点的文件名
+    const pid = newNodeId('p', projects.map((p) => p.id))
     boardsRef.current[activeProject] = snapshot()
     boardsRef.current[pid] = { nodes: [], edges: [] }
     setProjects((ps) => [...ps, { id: pid, name: dir.split('/').pop() || '项目', cwd: dir }])
     setActiveProject(pid)
     applyBoard(boardsRef.current[pid])
-  }, [activeProject, snapshot, applyBoard])
+  }, [activeProject, snapshot, applyBoard, projects])
 
   const closeProject = useCallback(
     (pid: string) => {
@@ -1300,7 +1297,7 @@ function Board(): React.JSX.Element {
           ...ns.map((n) => n.id),
           ...Object.values(boardsRef.current).flatMap((b) => b.nodes.map((n) => n.id))
         ]
-        const id = nextIdFrom(allIds, 't')
+        const id = newNodeId('t', allIds)
         const n = ns.length
         return [
           ...ns,
@@ -1601,7 +1598,8 @@ function Board(): React.JSX.Element {
     [menu]
   )
   /** 删节点必须连带删它的连线：连线就是授权图，而节点 id 会复用
-      （nextIdFrom 取 max+1），留下悬空连线等于让新节点白捡旧节点的授权 */
+      —— 老 id 是 max+1 会复用，新 id 已改成不可复用（board-serde.ts 的 newNodeId），
+      但**老工作区里的 t1/b3 仍然存在**，而且这条清理本身是对的：删了节点就该收回它的授权 */
   const dropEdgesOf = useCallback((ids: Set<string>) => {
     setEdges((es) => es.filter((e) => !ids.has(e.source) && !ids.has(e.target)))
   }, [])
@@ -1733,7 +1731,8 @@ function Board(): React.JSX.Element {
         text ? window.termscape.seedScrollback(id, text) : Promise.resolve(false)
       )
     )
-    /* id 会被复用（nextIdFrom 取 max+1），所以恢复前先看清现在都有谁：
+    /* 老 id（t1/t2…）是 max+1 生成的、会被复用；新 id 已不可复用。
+       但老工作区里那些 id 还在，这道判定要留着：
        - 被删过、现在又出现了 = 有**新节点占了这个 id**，既不恢复它也不恢复它的连线
          （连线是授权图，还给新节点等于让陌生人白捡旧节点的授权）
        - 没被删过、现在还在 = 原封不动的幸存者，安全 */

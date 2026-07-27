@@ -65,8 +65,14 @@ TERMBOARD_PANEL=terminal npm run dev      # 自检：直接展开设置面板某
 - 启动状态推送必须走 renderer:ready 握手（首推早于订阅会竞态丢失）
 - **workspace 落盘必须原子**：tmp+rename + `.bak` + 损坏隔离。裸 writeFile 写一半被杀 =
   JSON 截断 → load 当成首次启动 → 画布归零，且随后 reap 把所有 tmux 会话当孤儿杀光
-- **删节点必须连带删连线**：连线是授权图，节点 id 又复用（`nextIdFrom` 取 max+1），
-  悬空连线 = 新节点白捡旧节点的授权
+- **删节点必须连带删连线**：连线是授权图，悬空连线 = 新节点白捡旧节点的授权
+- **节点 id 不可复用**（`board-serde.ts` 的 `newNodeId`，形如 `t-7k3f9a`）。
+  老实现是 `max+1`，删掉 `t7` 再建一个还叫 `t7` —— 而 nodeId 同时是 **tmux 会话名
+  `tb-<id>`、scrollback 文件名、上下文文件名、hook token 文件名、pty 表的键、授权图的键**，
+  一复用这六条链路一起串台。代码里为此写过四处补偿逻辑，前提都是"复用发生在删除之后"。
+  ⚠️ **老工作区里的 `t1`/`b3` 还在**，那四处补偿要留着；改 id 格式时必须同步核对
+  `src/main/index.ts` 的 `NODE_ID_RE`（两处必须一致，不一致 = 终端静默起不来）
+  和 `tmux.ts` 的 `sessionName` 字符替换（被替换 = 两个 id 撞同一个会话）
 - **pinch 缩放要用原生 non-passive wheel 监听**：React 的 wheel 是 passive 委托，
   合成事件里 `preventDefault()` 是空操作
 - **WebGL context 上限已实测，不用再猜**：`TERMBOARD_WEBGL_STRESS=20 npm run dev`

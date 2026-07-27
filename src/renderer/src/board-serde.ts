@@ -29,6 +29,40 @@ export const DEFAULT_SIZE = { width: 580, height: 380 }
 /** 画布上所有可持久化的节点类型。加新类型时这里和 fromSaved 都要动 */
 export const SAVED_TYPES = ['terminal', 'group', 'context', 'browser', 'credential'] as const
 
+/**
+ * 主进程对 nodeId 的字符白名单。**这里必须和 src/main/index.ts 的 NODE_ID_RE 一致** ——
+ * 生成一个主进程会拒收的 id，症状是终端静默起不来。
+ */
+export const NODE_ID_RE = /^[A-Za-z0-9_-]{1,64}$/
+
+/**
+ * 新节点 id。**不可复用**，这是它存在的全部理由。
+ *
+ * 原来是 `max + 1`（`t1` `t2` …），删掉 `t7` 再建一个还叫 `t7`。而 nodeId 同时是：
+ * tmux 会话名 `tb-<id>`、scrollback 快照文件名、上下文文件名、hook token 文件名、
+ * pty 表的键、连线授权图的键。**id 一复用，这六条链路一起串台** ——
+ * 新节点白捡旧节点的授权、回灌到别人的历史、顶着别人的身份上报。
+ * 代码里为此写过四处补偿逻辑，它们的共同前提是"复用发生在删除之后"；
+ * 一旦有第二个客户端，就变成"复用发生在同时"，四处全部失效。
+ *
+ * **没用完整 UUID**：nodeId 是用户和 agent 要念出来的东西（`tb ask <节点id> <任务>`），
+ * 36 位 UUID 会让这个招牌功能变得没法用。6 位 base36 = 22 亿，
+ * 单张画布撞的概率可以忽略，而 `t-7k3f9a` 还看得出是个终端。
+ */
+export function newNodeId(prefix: string, existing: Iterable<string> = []): string {
+  const taken = new Set(existing)
+  for (let i = 0; i < 50; i++) {
+    const buf = new Uint32Array(2)
+    crypto.getRandomValues(buf)
+    const suffix = `${buf[0]!.toString(36)}${buf[1]!.toString(36)}`.slice(0, 6)
+    const id = `${prefix}-${suffix}`
+    // 撞了就重摇。也挡住和老 id（t1/b3/g2）重名的极端情况
+    if (!taken.has(id) && NODE_ID_RE.test(id)) return id
+  }
+  // 50 次都撞几乎不可能；真到了就用时间戳兜底，绝不返回一个可能重复的 id
+  return `${prefix}-${Date.now().toString(36)}`
+}
+
 export interface SavedNode {
   id: string
   x: number
