@@ -136,6 +136,47 @@ export function dropNode(id: string): void {
   r.status = 'idle'
 }
 
+/**
+ * 从一行 transcript JSON 里取 assistant 正文。**两家格式完全不同，都要认**：
+ *
+ *   Claude Code  `{type:"assistant",     message:{content:[{type:"text",        text}]}}`
+ *   codex        `{type:"response_item", payload:{type:"message", role:"assistant",
+ *                                                 content:[{type:"output_text", text}]}}`
+ *
+ * 只认 Claude 那套的话，claude → codex 的派活会「注入成功、完成检测成功、但取不回答案」——
+ * 半通的链路比不通更难查，因为界面上一切正常，只有回话是一句"未取到文本回答"。
+ */
+export function assistantText(line: string): string {
+  let obj: unknown
+  try {
+    obj = JSON.parse(line)
+  } catch {
+    return '' // 撕裂行（transcript 正在被写）
+  }
+  const o = obj as {
+    type?: string
+    message?: { content?: unknown }
+    payload?: { type?: string; role?: string; content?: unknown }
+  }
+  let content: unknown
+  if (o.type === 'assistant') content = o.message?.content
+  else if (o.type === 'response_item' && o.payload?.type === 'message' && o.payload.role === 'assistant') {
+    content = o.payload.content
+  } else return ''
+
+  if (typeof content === 'string') return content.trim()
+  if (!Array.isArray(content)) return ''
+  // text（Claude）和 output_text（codex）都收；工具调用等其他块跳过
+  return content
+    .filter((b): b is { type: string; text: string } => {
+      const t = (b as { type?: string })?.type
+      return (t === 'text' || t === 'output_text') && typeof (b as { text?: unknown }).text === 'string'
+    })
+    .map((b) => b.text)
+    .join('\n')
+    .trim()
+}
+
 /** 读 transcript 最后一条 assistant 文本消息 */
 async function lastAssistant(path: string): Promise<string> {
   let text = ''
@@ -146,27 +187,8 @@ async function lastAssistant(path: string): Promise<string> {
   }
   const lines = text.split('\n')
   for (let i = lines.length - 1; i >= 0; i--) {
-    const line = lines[i]
-    if (!line.includes('"assistant"')) continue
-    try {
-      const obj = JSON.parse(line) as {
-        type?: string
-        message?: { content?: unknown }
-      }
-      if (obj.type !== 'assistant') continue
-      const c = obj.message?.content
-      if (typeof c === 'string' && c.trim()) return c.trim()
-      if (Array.isArray(c)) {
-        const t = c
-          .filter((b): b is { type: string; text: string } => (b as { type?: string })?.type === 'text')
-          .map((b) => b.text)
-          .join('\n')
-          .trim()
-        if (t) return t
-      }
-    } catch {
-      // 撕裂行，继续往前
-    }
+    const t = assistantText(lines[i] ?? '')
+    if (t) return t
   }
   return ''
 }

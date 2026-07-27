@@ -9,7 +9,7 @@ import assert from 'node:assert/strict'
 import { mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { delegate, noteStatus, noteTranscript, isAgentSession, dropNode } from '../src/main/delegate.ts'
+import { delegate, noteStatus, noteTranscript, isAgentSession, dropNode, assistantText } from '../src/main/delegate.ts'
 
 /** 记录所有注入，便于断言"到底写没写进去" */
 function deps(authorize = true): {
@@ -184,4 +184,55 @@ test('放行路径：注入任务，等到新的 Stop 后取回 transcript 末�
   assert.equal(writes.length, 1)
   assert.equal(writes[0], '干活\r', '注入内容必须原样带一个回车')
   assert.equal(r, '干完了')
+})
+
+// ── transcript 解析：两家格式都要认 ─────────────────────────────────────────
+
+test('取回答认得 Claude Code 的 transcript 行', () => {
+  const line = JSON.stringify({
+    type: 'assistant',
+    message: { content: [{ type: 'text', text: '做完了' }] }
+  })
+  assert.equal(assistantText(line), '做完了')
+})
+
+test('取回答认得 codex 的 rollout 行', () => {
+  /* 真实形状（取自 ~/.codex/sessions/.../rollout-*.jsonl）。
+     只认 Claude 那套时，claude → codex 派活会"注入成功、完成检测成功、
+     但取不回答案"—— 半通的链路比不通更难查 */
+  const line = JSON.stringify({
+    timestamp: '2026-07-27T05:19:43.746Z',
+    type: 'response_item',
+    payload: {
+      type: 'message',
+      id: 'msg_0c2',
+      role: 'assistant',
+      content: [{ type: 'output_text', text: 'codex 干完了' }]
+    }
+  })
+  assert.equal(assistantText(line), 'codex 干完了')
+})
+
+test('取回答跳过工具调用块，只要文本', () => {
+  const line = JSON.stringify({
+    type: 'assistant',
+    message: {
+      content: [
+        { type: 'tool_use', name: 'Bash', input: { command: 'rm -rf /' } },
+        { type: 'text', text: '正文' }
+      ]
+    }
+  })
+  assert.equal(assistantText(line), '正文')
+})
+
+test('取回答对 user 行 / 撕裂行返回空，不误当成答案', () => {
+  assert.equal(assistantText(JSON.stringify({ type: 'user', message: { content: '问题' } })), '')
+  assert.equal(assistantText('{"type":"assis'), '')
+  assert.equal(assistantText(''), '')
+  // codex 的非 assistant response_item（工具输出等）也不能当答案
+  assert.equal(
+    assistantText(JSON.stringify({ type: 'response_item', payload: { type: 'message', role: 'user', content: [] } })),
+    ''
+  )
 })
