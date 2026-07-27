@@ -93,6 +93,17 @@ TERMBOARD_PANEL=terminal npm run dev      # 自检：直接展开设置面板某
   学 TerminalNode：保持挂载 + `visibility:hidden`
 - **派活是最危险的一段**：注入 = 替用户敲回车。只接受当前活着的 agent 会话
   （靠 session_id 挡 SessionEnd 之后的迟到事件），状态判定 fail-closed，改动后跑 `npm test`
+- **任务正文必须过 `sanitizeTask` 才能落笔**（在 delegate 里收口，所有调用方共用）。
+  所有闸都在 `writeToPty` **之前**查，而载荷在 write **之后**起作用 —— 顺序天生错开：
+  `\x03`/`\x04`/`\x1a` 是 agent TUI 的退出键，agent 一退，队列里剩下的字节就由
+  重新拿回终端的 shell 读走。这不是提权（调用方本来就有 shell 权限），
+  挡的是**上游 agent 被提示词注入**后，把「给一个有审批闸的 agent 发提示词」
+  降级成「在目标终端裸跑 shell 命令」—— 而控制字符在授权弹窗里根本不可见
+- **完成判定要认 transcript 文件有没有换**：换了 = 换了会话，这个 Stop 不是本轮的。
+  老写法在文件变了时把偏移**归零**再读整份 —— 于是目标中途退出重开、新会话随便
+  产生一个 Stop，就会**把新会话的回答当成本轮结果返回**。
+  ⚠️ 判据用 path 不用 epoch：`SessionEnd` 自己也推进 epoch，而"答完就退出"
+  是完全正常的一轮，判 epoch 会误杀合法答案
 - **检查和落笔之间只要还有 await，就得在落笔那一刻再查一遍**：授权复查在
   前台探测和 stat **之前**，这两步各一个 await，足够 agent 退出 —— 那时 pane 里是
   光秃秃的 shell，`writeToPty` 就是直接执行命令。同类的还有 remote.ts 的"读 body

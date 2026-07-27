@@ -261,6 +261,42 @@ export function isShellForeground(cmd: string): boolean {
   return SHELLS.has(name.toLowerCase())
 }
 
+/**
+ * 净化任务正文。**这是落笔前的最后一层，所有调用方共用** ——
+ * 别在 peer / tb 各写一份，本机那条路会漏。
+ *
+ * 为什么必须有：整条链路的安全叙事是「只往活着的 agent 落笔，绝不往 shell 注入」，
+ * 而闸（前台进程探测、live/status/epoch）全都在 `writeToPty` **之前**查。
+ * 载荷是在 write **之后**才起作用的 —— 顺序天生错开：
+ *
+ * - `\x03`（Ctrl-C）/ `\x04`（Ctrl-D）/ `\x1a`（Ctrl-Z）是 agent TUI 公认的
+ *   退出/挂起键。任务正文里塞几个，agent 当场退出，pty 输入队列里剩下的字节
+ *   由重新拿回终端的 shell 以规范模式读走，末尾那个 `\r` 就是回车。
+ *   （要稳定利用得把 tty 输入队列填满，32 KiB 的上限够用。）
+ * - `\x1b[` 开头的转义序列能改终端状态、伪造光标位置、覆盖已显示的内容。
+ *
+ * 威胁模型上这**不是提权**：能走到这里的调用方（同 UID 的进程 / 已有免密 ssh 的对端）
+ * 本来就有完整 shell 权限，直接 `tmux send-keys` 就绕过了整条链路。
+ * 真正被这条修复挡住的是**上游 agent 被提示词注入**：它经画布连线派活时零弹窗、
+ * 经弹窗时控制字符在 dialog 里根本不可见（用户看到「整理一下 README」就点了允许），
+ * 于是能把「给一个自带审批闸的 agent 发提示词」降级成
+ * 「在目标终端里裸跑 shell 命令，跳过目标 agent 的全部审批」。
+ *
+ * 换行也一并压平：注入语义就是「敲一行回车」，多行会被当成多条输入。
+ */
+export function sanitizeTask(task: string): string {
+  return (
+    task
+      // 换行/制表压成空格 —— 它们是合法字符，但在"敲一行"的语义里没有位置
+      .replace(/[\r\n\t\v\f]+/g, ' ')
+      /* 其余 C0 与 DEL 直接剔除：没有任何合法用途，只用来操纵终端。
+         用 \u 转义写，别在源码里放裸控制字符 —— 那种字符任何编辑器里都看不见，
+         一次复制粘贴或格式化就可能悄悄变成别的东西。 */
+      .replace(/[\u0000-\u001f\u007f]/g, '')
+      .trim()
+  )
+}
+
 export interface DelegateDeps {
   hasNode: (id: string) => boolean
   writeToPty: (id: string, data: string) => void
@@ -413,8 +449,8 @@ async function runDelegation(
     }，未注入。`
   }
 
-  // 注入任务（等同用户在目标终端敲一行回车）
-  deps.writeToPty(targetId, `${task}\r`)
+  // 注入任务（等同用户在目标终端敲一行回车）。**只写净化后的文本**，见 sanitizeTask
+  deps.writeToPty(targetId, `${sanitizeTask(task)}\r`)
 
   /** 这一轮到底动过没有。计数器 + 采样双保险，见 workingSeq 的注释 */
   const moved = (): boolean => r.status === 'working' || r.workingSeq > startSeq
@@ -427,12 +463,29 @@ async function runDelegation(
     }
     if (r.stopSeq > startStop && moved()) {
       await new Promise((res) => setTimeout(res, 1200)) // 等 transcript 落盘完整
-      // 路径中途变了 = 换了会话文件，那整份都是新的，偏移归零
-      const same = r.transcriptPath === startPath
+      /* **transcript 文件换了 = 换了会话，这个 Stop 不是本轮的。**
+         老写法在这里把偏移归零、照样把整份内容读回来当结果 —— 于是目标在等待期间
+         退出重开、新会话随便干点什么产生一个 Stop，就会**把新会话的回答当成
+         本轮派活的结果返回**。和之前修过的"返回上一轮旧答案"是同一类，
+         只是这次拿的是别人的答案，而且看不出任何异常。
+
+         为什么用 path 而不是 epoch：`SessionEnd` 自己也会推进 epoch，
+         而"答完就退出"（Stop → SessionEnd）是完全正常的一轮，
+         判 epoch 会把这种合法答案误杀。换会话必然换文件，path 是更准的证据。 */
+      if (startPath && r.transcriptPath !== startPath) {
+        return `[派活中断：${targetId} 在等待期间换了会话（重开或被重建），本轮结果不可取。去该终端确认那个任务到底跑没跑。]`
+      }
       const ans = r.transcriptPath
-        ? await lastAssistantSince(r.transcriptPath, same ? startBytes : 0)
+        ? await lastAssistantSince(r.transcriptPath, startBytes)
         : ''
       return ans || `[${targetId} 已完成，但本轮没有新的文本回答，直接看该终端输出]`
+    }
+    /* 换了会话**且新会话一直没动静**时的早退。判定放在完成判定**之后** ——
+       Stop 与 SessionEnd 可能落在同一拍，先判完成才不会把一个已经答完的合法结果丢掉
+       （"答完就退出"是完全正常的一轮，而 SessionEnd 自己也推进 epoch）。
+       没有这条的话，目标退出后这个循环会一路空等到 4 分钟超时。 */
+    if (r.epoch !== epoch && !r.live) {
+      return `[派活中断：${targetId} 在等待期间会话结束了，本轮没有结果。去该终端确认那个任务到底跑没跑。]`
     }
   }
   return `[派活超时：${targetId} 在 ${Math.round(timeoutMs / 1000)}s 内未完成，任务可能仍在跑，去该终端查看]`

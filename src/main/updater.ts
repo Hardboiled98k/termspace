@@ -122,8 +122,16 @@ export function startUpdater(
     if (!userInitiated && !opts.enabled()) return
     /* 正在进行时不再发起新一轮：electron-updater 的 check promise 会在
        **自动下载完成之前**就 resolve，此时再 check 会让两轮的事件交错，
-       进度和版本号互相覆盖。界面禁用了按钮，但定时器不看界面。 */
+       进度和版本号互相覆盖。界面禁用了按钮，但定时器不看界面。
+
+       **`ready` 也要挡住**：包已经下好躺在磁盘上等用户点安装了，此时一次例行检查
+       只要失败（离线、服务器抽风）就会把 phase 冲成 `error` —— 而 install 有
+       `state.phase !== 'ready'` 的门禁，用户从此再也装不了那个已经下载好的包，
+       只能重启 app。已经有下好的包，再查一轮本来也没有任何收益。
+       用户手动点「立即检查」时放行（他明确想查），代价只是可能把 ready 冲掉，
+       那是他自己的动作、界面上也看得到。 */
     if (state.phase === 'checking' || state.phase === 'downloading') return
+    if (!userInitiated && (state.phase === 'available' || state.phase === 'ready')) return
     const feed = opts.feedUrl()
     /* 没配更新源就**明说**，不要去打包时那个占位域名。
        否则用户看到的是一条看不懂的 DNS 错误，而真正的问题是"你还没填地址"。 */

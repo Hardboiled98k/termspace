@@ -90,6 +90,8 @@ export function SettingsPanel({
   > | null>(null)
   const [info, setInfo] = useState<Awaited<ReturnType<typeof window.termscape.appInfo>>>(null)
   const [upd, setUpd] = useState<UpdateState | null>(null)
+  /** 更新源输入框的草稿。null = 没在编辑，显示已保存的值。见那个 input 上的注释 */
+  const [feedDraft, setFeedDraft] = useState<string | null>(null)
   /** 备份区的即时反馈。导出成功却一声不吭，用户不知道文件去哪了 */
   const [backupMsg, setBackupMsg] = useState('')
 
@@ -588,11 +590,35 @@ export function SettingsPanel({
               </label>
               <label className="settings-row">
                 <span>更新源</span>
+                {/* **这一栏不能每敲一个键就 patch**：主进程的 sanitize 对半截 URL
+                    （"h" / "ht" / "https:/"）一律返回空串，而 patch 会把返回值写回
+                    state —— 受控 input 当场被清空，逐字键入根本打不完一个地址。
+                    敲到 "https://x" 时又会被规范化成 "https://x/"，光标顶到末尾，
+                    后面的字符落到斜杠后面。所以本地留一份草稿，失焦时才提交。 */}
                 <input
                   type="text"
-                  value={s.updateFeedUrl}
+                  value={feedDraft ?? s.updateFeedUrl}
                   placeholder="https://你的域名/termscape/"
-                  onChange={(e) => patch({ updateFeedUrl: e.currentTarget.value })}
+                  onChange={(e) => setFeedDraft(e.currentTarget.value)}
+                  onBlur={() => {
+                    if (feedDraft === null || feedDraft === s.updateFeedUrl) return setFeedDraft(null)
+                    void window.termscape.setSettings({ updateFeedUrl: feedDraft }).then(
+                      (next) => {
+                        setS(next)
+                        /* 用 sanitize 之后的值回填，让用户看见"我填的被改成了什么"
+                           （补了结尾斜杠、或者因为不合法被清空）。 */
+                        setFeedDraft(null)
+                      },
+                      (e) => {
+                        setFeedDraft(null)
+                        setSaveErr(String((e as { message?: string })?.message ?? e))
+                      }
+                    )
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') e.currentTarget.blur()
+                    if (e.key === 'Escape') setFeedDraft(null)
+                  }}
                 />
               </label>
               <p className="settings-note">

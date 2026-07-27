@@ -50,6 +50,7 @@ import {
   noteStatus,
   dropNode,
   isAgentSession,
+  sanitizeTask,
   setDelegateFlightListener
 } from './delegate'
 import {
@@ -238,6 +239,10 @@ ipcMain.on(
       const alive = new Set(p.nodeIds.filter((s) => typeof s === 'string'))
       for (const g of [...grants]) {
         const [src, dst] = g.split('>')
+        /* 跨机授权的 dst 形如 `mac-mini:t1`，**不是本画布的节点**，
+           照着 alive 判会每次上报都被撤掉 —— 那等于每派一次弹一次窗，
+           勾了"不再询问"也没用。它跟着 app 生命周期走，和本机的一次性 grant 一样。 */
+        if (dst?.includes(':')) continue
         if (!alive.has(src) || !alive.has(dst)) grants.delete(g)
       }
     }
@@ -1441,7 +1446,27 @@ app.whenReady().then(async () => {
         ask: async (source, target, task) => {
           // `mini:t-abc` = 派到另一台机器。不含冒号则是本机，走下面原路。
           const peer = parsePeerTarget(target)
-          if (peer) return askPeer(source, peer, task)
+          if (peer) {
+            /* **跨机也要过授权闸**。原来这里直接 askPeer，于是本机派活要连线或弹窗、
+               后果更重的跨机（驱动另一台机器上有 Bash 权限的 agent，再把结果回灌进
+               本机 agent 的上下文）反而零摩擦。典型触发不是"agent 越权"，是**提示词注入**：
+               agent 读到一段带指令的网页或 issue，就能替用户把任务推到另一台机器上跑。
+
+               `peers` 白名单是机器级的一次性许可（"我允许往这台派"），
+               不等于"每个节点随时都能派"。这里补的是按目标、按次的那一层。
+               CLAUDE.md 为「跨机不弹窗」给的理由是"远端没人看窗"—— 那只覆盖**接收侧**，
+               发起侧用户就在本机，本机那套弹窗在这里完全适用。 */
+            const ok = await authorizeLink(
+              source,
+              `${peer.alias}:${peer.nodeId}`,
+              '把任务派到另一台机器',
+              `任务会通过 ssh 送到 ${peer.alias}，作为输入敲进那台机器上的 ${peer.nodeId}：\n${sanitizeTask(task).slice(0, 300)}`
+            )
+            if (!ok) {
+              return `派活被拒：${source} → ${peer.alias}:${peer.nodeId} 未获授权（跨机派活每对目标需要确认一次）。`
+            }
+            return askPeer(source, peer, task)
+          }
           return delegate(
             {
               hasNode: (nid) => ptys.has(nid),
