@@ -5,6 +5,7 @@ import { existsSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import { isPeerAlias } from './peer'
+import { sanitizeFeedUrl } from './update-url'
 
 export interface Settings {
   defaultFontSize: number
@@ -41,6 +42,19 @@ export interface Settings {
    * 和 peers 白名单一样是产品护栏（挡误用、挡 agent 自作主张），不是安全边界。
    */
   peerDelegate: boolean
+  /**
+   * 后台检查更新。默认开 —— 但「检查+下载」和「装」是两件事：
+   * 下载完只提示，装不装用户说了算（终端里跑着人家的活，自动重启会把那一轮掐掉）。
+   */
+  autoUpdate: boolean
+  /**
+   * 更新源。空 = 没配，更新功能整个不工作（设置里会如实说）。
+   *
+   * 放在设置里而不是焊进打包配置：换发布源不用重新打包，
+   * 也不用把某个域名固定在二进制里。指向一个存着
+   * `latest-mac.yml` + `*.zip` 的 HTTPS 目录即可。
+   */
+  updateFeedUrl: string
 }
 
 export const DEFAULTS: Settings = {
@@ -56,7 +70,9 @@ export const DEFAULTS: Settings = {
   remotePort: 7333,
   remoteBind: 'loopback',
   peers: [],
-  peerDelegate: false
+  peerDelegate: false,
+  autoUpdate: true,
+  updateFeedUrl: ''
 }
 
 const file = (): string => path.join(app.getPath('userData'), 'settings.json')
@@ -96,6 +112,10 @@ function sanitize(s: Settings): Settings {
     remoteAllowInput: bool(s.remoteAllowInput),
     remoteAllowApprove: bool(s.remoteAllowApprove),
     peerDelegate: bool(s.peerDelegate),
+    // 这个默认**开**，所以不能用 `=== true`（缺字段时会变成关）
+    autoUpdate: s.autoUpdate !== false,
+    // 只收 https + 补结尾斜杠，判据和理由见 update-url.ts
+    updateFeedUrl: sanitizeFeedUrl(s.updateFeedUrl),
     /* alias 会进 ssh 的 argv，**读盘这一步就要把脏的滤掉**：
        手改 settings.json 塞一个 `-oProxyCommand=...` 进去，等于让任何能派活的
        agent 在本机执行任意命令。判据直接用 peer.ts 的，不另写一份正则。 */

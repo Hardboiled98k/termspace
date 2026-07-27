@@ -88,6 +88,7 @@ export function SettingsPanel({
     ReturnType<typeof window.termscape.remoteStatus>
   > | null>(null)
   const [info, setInfo] = useState<Awaited<ReturnType<typeof window.termscape.appInfo>>>(null)
+  const [upd, setUpd] = useState<UpdateState | null>(null)
   /** 备份区的即时反馈。导出成功却一声不吭，用户不知道文件去哪了 */
   const [backupMsg, setBackupMsg] = useState('')
 
@@ -99,6 +100,9 @@ export function SettingsPanel({
     void window.termscape.remoteStatus().then(setRemote)
     void window.termscape.remoteTokens().then(setTokens)
     void window.termscape.appInfo().then(setInfo)
+    void window.termscape.updateState().then((u) => u && setUpd(u))
+    // 光靠开面板时拉一次是不够的：下载进度得能动
+    return window.termscape.onUpdateState(setUpd)
   }, [])
 
   const patch = (p: Partial<AppSettings>): void => {
@@ -208,6 +212,59 @@ export function SettingsPanel({
                 </button>
               </div>
               {backupMsg && <p className="settings-note">{backupMsg}</p>}
+
+              <h3 className="settings-h">更新</h3>
+              <label className="settings-row">
+                <span>后台检查更新</span>
+                <input
+                  type="checkbox"
+                  checked={s.autoUpdate}
+                  onChange={(e) => patch({ autoUpdate: e.currentTarget.checked })}
+                />
+                <button
+                  className="btn-ghost"
+                  onClick={() => void window.termscape.checkUpdate()}
+                  disabled={upd?.phase === 'checking' || upd?.phase === 'downloading'}
+                >
+                  立即检查
+                </button>
+              </label>
+              <label className="settings-row">
+                <span>更新源</span>
+                <input
+                  type="text"
+                  value={s.updateFeedUrl}
+                  placeholder="https://你的域名/termscape/"
+                  onChange={(e) => patch({ updateFeedUrl: e.currentTarget.value })}
+                />
+              </label>
+              <p className="settings-note">
+                指向一个存着 <code>latest-mac.yml</code> 和 <code>*.zip</code> 的 HTTPS 目录
+                （打包产物在 <code>dist/</code>，把这两样传上去即可）。
+                <b>只收 https</b> —— 更新包会替换掉整个 app，明文 http 意味着路上任何人
+                都能换掉它。留空则更新功能不工作。
+              </p>
+              <p className="settings-note">
+                {upd?.phase === 'checking' && '正在检查…'}
+                {upd?.phase === 'current' && `已是最新（${upd.version}）`}
+                {upd?.phase === 'available' && `发现 ${upd.version}，正在后台下载…`}
+                {upd?.phase === 'downloading' && `正在下载 ${upd.version}… ${upd.percent}%`}
+                {upd?.phase === 'ready' && `${upd.version} 已下载好，随时可以装。`}
+                {/* 查不了就如实说，但不打断 —— 离线、发布源没配都会走到这里 */}
+                {upd?.phase === 'error' && `查不了更新：${upd.message}`}
+                {(!upd || upd.phase === 'idle') && '还没检查过。'}
+              </p>
+              {upd?.phase === 'ready' && (
+                <>
+                  <button className="btn-primary" onClick={() => void window.termscape.installUpdate()}>
+                    重启并安装 {upd.version}
+                  </button>
+                  <p className="settings-note">
+                    <b>会关掉这个窗口重开。</b>终端会话本身由 tmux 续存、重开后能接回来，
+                    但<b>正在跑的那一轮 agent 对话会断</b>。挑个空档再点。
+                  </p>
+                </>
+              )}
 
               <h3 className="settings-h">关于</h3>
               {info && (

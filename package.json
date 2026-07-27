@@ -12,13 +12,15 @@
     "rebuild": "electron-rebuild -f -w node-pty",
     "dist": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-vite build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --config electron-builder.yml",
     "test": "node --test --experimental-strip-types test/*.test.ts",
-    "dist:signed": "electron-vite build && electron-builder --mac --config electron-builder.yml"
+    "dist:signed": "electron-vite build && electron-builder --mac --config electron-builder.yml",
+    "dist:local": "electron-vite build && electron-builder --mac --config electron-builder.yml -c.mac.notarize=false"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/addon-webgl": "^0.19.0",
     "@xterm/xterm": "^6.0.0",
     "@xyflow/react": "^12.11.2",
+    "electron-updater": "^6.8.9",
     "node-pty": "^1.1.0",
     "qrcode-generator": "^2.0.4",
     "react": "^19.2.8",

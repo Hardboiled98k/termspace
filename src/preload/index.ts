@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron'
 // 只引类型（编译期擦除），不会把主进程代码打进 preload bundle
 import type { AccountQuota } from '../main/quota/types'
+import type { UpdateState } from '../main/updater'
 
 const api = {
   spawn: (
@@ -100,6 +101,15 @@ const api = {
     ipcRenderer.on('delegate:flight', listener)
     return () => ipcRenderer.removeListener('delegate:flight', listener)
   },
+  /** 自动更新：状态推送 + 手动检查 + 「重启并安装」 */
+  onUpdateState: (cb: (s: UpdateState) => void): (() => void) => {
+    const listener = (_e: IpcRendererEvent, s: UpdateState): void => cb(s)
+    ipcRenderer.on('update:state', listener)
+    return () => ipcRenderer.removeListener('update:state', listener)
+  },
+  updateState: (): Promise<UpdateState> => ipcRenderer.invoke('update:get'),
+  checkUpdate: (): Promise<void> => ipcRenderer.invoke('update:check'),
+  installUpdate: (): Promise<void> => ipcRenderer.invoke('update:install'),
   loadContext: (nodeId: string): Promise<string> => ipcRenderer.invoke('context:load', nodeId),
   saveContext: (nodeId: string, text: string): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('context:save', nodeId, text),

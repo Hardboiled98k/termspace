@@ -26,6 +26,7 @@ import { listPresets, upsertPreset, deletePreset } from './preset-store'
 import { startWorkerWatch, workerAction, type WorkerWatch } from './worker-watch'
 import { execFile } from 'node:child_process'
 import { startRemoteApi, type RemoteApi } from './remote'
+import { startUpdater, type Updater } from './updater'
 import {
   parsePeerTarget,
   peerAllowed,
@@ -832,6 +833,22 @@ ipcMain.handle(
   }
 )
 
+// ── 自动更新 IPC ──
+let updater: Updater | null = null
+/** 设置里的「自动检查更新」。用户点「立即检查」时无视它 —— 那是明确的当下意图 */
+let autoUpdateEnabled = true
+/** 更新源。空 = 没配，check 会如实说而不是去撞打包时那个占位域名 */
+let updateFeedUrl = ''
+ipcMain.handle('update:get', (e) => (fromMainWin(e) ? (updater?.state() ?? null) : null))
+ipcMain.handle('update:check', (e) => {
+  if (fromMainWin(e)) updater?.check(true)
+})
+/* **装 = 重启 app**，所以必须只认主窗口来的调用。
+   webview 里随便一个页面能触发重启的话，用户正在跑的活就没了。 */
+ipcMain.handle('update:install', (e) => {
+  if (fromMainWin(e)) updater?.install()
+})
+
 // ── 设置 IPC ──
 ipcMain.handle('settings:get', () => getSettings())
 ipcMain.handle('settings:set', async (_e, patch: Partial<Settings>) => {
@@ -843,6 +860,8 @@ ipcMain.handle('settings:set', async (_e, patch: Partial<Settings>) => {
   const next = await setSettings(patch)
   remoteAllowInput = next.remoteAllowInput // 立刻生效，不用重启
   remoteAllowApprove = next.remoteAllowApprove
+  autoUpdateEnabled = next.autoUpdate
+  updateFeedUrl = next.updateFeedUrl // 改完地址不用重启，下次检查就用新的
   return next
 })
 
@@ -1588,7 +1607,21 @@ app.whenReady().then(async () => {
   syncQuotaAccountsRef = syncQuotaAccounts
   // 派活开始/结束 → 画布上那条线点亮/熄灭流光
   setDelegateFlightListener((e) => sendToWin('delegate:flight', e))
-  app.on('before-quit', () => quotaHub?.dispose())
+  /* 自动更新。**只在打包版里真的跑**（dev 没有 app-update.yml，见 updater.ts）。
+     开关默认开，但"检查"和"装"是两件事：下载完只提示，装不装用户说了算 ——
+     终端里跑着人家的活，自动重启会把那一轮掐掉。 */
+  const st0 = await getSettings()
+  autoUpdateEnabled = st0.autoUpdate
+  updateFeedUrl = st0.updateFeedUrl
+  updater = startUpdater(() => mainWin, {
+    enabled: () => autoUpdateEnabled,
+    feedUrl: () => updateFeedUrl
+  })
+
+  app.on('before-quit', () => {
+    quotaHub?.dispose()
+    updater?.dispose()
+  })
 
   const win = createWindow()
   mainWin = win

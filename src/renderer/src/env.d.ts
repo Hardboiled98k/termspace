@@ -16,7 +16,21 @@ interface AppSettings {
   peers: string[]
   /** 本机是否接受别的机器派进来的活 */
   peerDelegate: boolean
+  /** 后台检查更新。下载完只提示，装不装用户说了算 */
+  autoUpdate: boolean
+  /** 更新源（存 latest-mac.yml + zip 的 HTTPS 目录）。空 = 没配，更新不工作 */
+  updateFeedUrl: string
 }
+
+/** 更新状态。五档必须能区分 —— 界面据此决定显示什么 */
+type UpdateState =
+  | { phase: 'idle' }
+  | { phase: 'checking' }
+  | { phase: 'current'; version: string }
+  | { phase: 'available'; version: string }
+  | { phase: 'downloading'; version: string; percent: number }
+  | { phase: 'ready'; version: string; notes?: string }
+  | { phase: 'error'; message: string }
 
 /** 额度：一个窗口（5h / 周 / 按模型）。语义只能从 windowMinutes 推，不许按位置认 */
 interface QuotaWindow {
@@ -195,6 +209,10 @@ interface TermscapeApi {
     cb: (e: { source: string; target: string; active: boolean }) => void
   ) => () => void
   onSpawnError: (cb: (e: { nodeId: string; message: string }) => void) => () => void
+  onUpdateState: (cb: (s: UpdateState) => void) => () => void
+  updateState: () => Promise<UpdateState | null>
+  checkUpdate: () => Promise<void>
+  installUpdate: () => Promise<void>
   loadWorkspace: () => Promise<unknown>
   saveWorkspace: (data: unknown) => Promise<{ ok: boolean; error?: string }>
   exportWorkspace: (
