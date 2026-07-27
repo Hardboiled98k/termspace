@@ -1364,13 +1364,40 @@ app.whenReady().then(async () => {
   if (shotPath) {
     setTimeout(async () => {
       try {
-        /* TERMBOARD_WEBGL_STRESS=1：截图前先把 WebGL context 打爆。
-           每个终端一个 context，Chromium 每页 ~16 个上限，超限**最老的被强制丢弃** ——
-           "一屏几十个终端"正是这个产品的卖点，降级路径必须验过。
-           这里直接制造失败（开一堆废 canvas），比真开 20 个终端省事得多，
-           而且不会留下一地 pty 和 tmux 会话。 */
-        if (process.env['TERMBOARD_WEBGL_STRESS']) {
-          const lost = await win.webContents.executeJavaScript(`(() => {
+        /* TERMBOARD_WEBGL_STRESS=N：开 N 个终端，把 WebGL context 打爆，测降级。
+           每个终端一个 context，Chromium 每页 ~16 个上限，**超限时最老的被强制丢弃**；
+           "一屏几十个终端"正是这个产品的卖点，这条降级路径必须验过而不是想当然。
+
+           判据是**终端还有没有在渲染字**，不是"截图看着还行"：
+           WebGL renderer 画在 canvas 上、`.xterm-rows` 是空的；掉回 DOM renderer 后
+           反过来 —— rows 里有字才说明 onContextLoss → dispose 那条路真的接住了。 */
+        const n = Number(process.env['TERMBOARD_WEBGL_STRESS'] ?? 0)
+        if (n > 0) {
+          // 先冻结落盘：不然这 N 个临时终端会被防抖保存写进用户真实的画布
+          workspaceFrozen = true
+          const probe = `(() => [...document.querySelectorAll('.xterm')].map((el) => ({
+            webgl: el.querySelectorAll('canvas').length >= 2,
+            dom: el.querySelectorAll('.xterm-rows > div').length > 0
+          })))()`
+          const sum = (r: { webgl: boolean; dom: boolean }[]): string =>
+            `${r.length} 个终端 · WebGL ${r.filter((x) => x.webgl).length} · DOM 渲染出字 ${r.filter((x) => x.dom).length}`
+          // 点工具栏的「新建终端」，走和用户完全一样的那条路
+          await win.webContents.executeJavaScript(
+            `(async () => {
+              const b = document.querySelector('.toolbar-btn.split-main')
+              for (let i = 0; i < ${n}; i++) { b.click(); await new Promise(r => setTimeout(r, 120)) }
+            })()`
+          )
+          await new Promise((r) => setTimeout(r, 3000))
+          console.log(`[webgl-stress] 打爆前：${sum(await win.webContents.executeJavaScript(probe))}`)
+          // 先挂监听再打爆：canvas 元素在 context 丢失后照样留在 DOM 里，
+          // 数元素个数根本看不出死活，只有这个事件是硬证据
+          await win.webContents.executeJavaScript(`(() => {
+            window.__lost = 0
+            document.querySelectorAll('.xterm canvas').forEach((c) =>
+              c.addEventListener('webglcontextlost', () => window.__lost++))
+          })()`)
+          await win.webContents.executeJavaScript(`(() => {
             const keep = []
             for (let i = 0; i < 32; i++) {
               const c = document.createElement('canvas')
@@ -1381,8 +1408,10 @@ app.whenReady().then(async () => {
             window.__stressHold = keep   // 别让 GC 把它们收走，否则 context 又还回来了
             return keep.length
           })()`)
-          console.log(`[webgl-stress] 额外占用 ${lost} 个 context`)
-          await new Promise((r) => setTimeout(r, 1500)) // 等 contextlost 事件跑完 + 重绘
+          await new Promise((r) => setTimeout(r, 6000)) // 见下：addon 要等满 3s 才 fire onContextLoss
+          const lost = await win.webContents.executeJavaScript('window.__lost')
+          console.log(`[webgl-stress] 打爆后：${sum(await win.webContents.executeJavaScript(probe))}`)
+          console.log(`[webgl-stress] contextlost 触发 ${lost} 次`)
         }
         const img = await win.webContents.capturePage()
         await writeFile(shotPath, img.toPNG())

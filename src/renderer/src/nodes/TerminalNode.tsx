@@ -123,8 +123,15 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
     termRef.current = term
     fitRef.current = fit
     try {
-      // Chromium 每页 ~16 个 WebGL context 上限，超限最老的被强制丢弃；
-      // context 丢失时 dispose addon → xterm 落回 DOM renderer 保持可用
+      /* Chromium 每页 ~16 个 WebGL context 上限，超限最老的被强制丢弃。
+         这条降级路径已实测（`TERMBOARD_WEBGL_STRESS=20 npm run dev`）：
+         开 20 个终端 → 17 个拿到 context、3 个一开始就走 DOM renderer；
+         再打爆 → contextlost 触发 16 次，那 16 个全部变成 `rowDivs:18` 的 DOM 渲染，
+         **字还在，不需要额外 refresh**（addon 的 dispose 内部会 setRenderer + handleResize）。
+
+         ⚠️ 验证时注意：addon 收到 webglcontextlost 后会**先等满 3 秒**看 context 会不会
+         自己恢复，之后才 fire onContextLoss。测量窗口短于 3s 会得出"降级失效"的错误结论
+         （我第一次就这么误判过）。 */
       const webgl = new WebglAddon()
       webgl.onContextLoss(() => webgl.dispose())
       term.loadAddon(webgl)
