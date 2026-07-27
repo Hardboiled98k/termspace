@@ -98,6 +98,35 @@ export function reclaimBoardId(
 }
 
 /**
+ * 找出**没有 cwd 可认领、却还装着东西**的孤儿 board。
+ *
+ * 一次性迁移：修复之前 `addProject` 每次铸新 pid，关掉的标签页无从认领，
+ * board 里的终端会一直活着而界面上够不着。这些老 board 没有 cwd，
+ * `reclaimBoardId` 救不了它们 —— 只能在启动时直接给它们造一个标签页。
+ *
+ * 判据是「有没有 terminal / browser 节点」而不是「有没有节点」：
+ * `ctx-hub` 是每块画布自动播种的，只剩它的 board 是空画布，
+ * 给它造标签页只会在标签栏里堆垃圾。终端才是那个**会留下活进程**的。
+ *
+ * 有 cwd 的孤儿不在此列：那些重新添加同一个目录就能拿回来，
+ * 自动恢复反而会让「关掉标签页」这个动作失效（下次启动它又回来了）。
+ */
+export function orphanBoardsToRecover(
+  boards: Readonly<Record<string, { cwd?: string; nodes: readonly { type?: string }[] }>>,
+  openPids: Iterable<string>
+): string[] {
+  const open = new Set(openPids)
+  return Object.entries(boards)
+    .filter(
+      ([pid, b]) =>
+        !open.has(pid) &&
+        !b.cwd &&
+        b.nodes.some((n) => n.type === 'terminal' || n.type === 'browser')
+    )
+    .map(([pid]) => pid)
+}
+
+/**
  * 丢掉既没有项目在用、又一个节点都没有的 board。
  *
  * 保守到近乎无用是**故意的**：只要还有节点就留着，因为节点 id 一旦从

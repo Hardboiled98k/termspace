@@ -32,6 +32,7 @@ import {
   DEFAULT_SIZE,
   reclaimBoardId,
   pruneEmptyBoards,
+  orphanBoardsToRecover,
   type BoardNode,
   type SavedNode
 } from './board-serde'
@@ -962,6 +963,22 @@ function Board(): React.JSX.Element {
       }
       hadSaved.current = true
       boardsRef.current = boards ?? {}
+      // 一次性恢复老版本留下的孤儿画布。它们没有 cwd 可认领，而里面的终端
+      // 会被 reap 当成"在册"继续活着 —— 不给标签页就是界面上永远够不着的活进程。
+      const stranded = orphanBoardsToRecover(
+        boardsRef.current,
+        projs.map((p) => p.id)
+      )
+      if (stranded.length) {
+        projs = [
+          ...projs,
+          ...stranded.map((pid, i) => ({
+            id: pid,
+            name: stranded.length > 1 ? `已恢复 ${i + 1}` : '已恢复',
+            cwd: ''
+          }))
+        ]
+      }
       setProjects(projs)
       const act = active && projs.some((p) => p.id === active) ? active : projs[0].id
       setActiveProject(act)

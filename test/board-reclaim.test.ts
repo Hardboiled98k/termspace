@@ -13,7 +13,11 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { reclaimBoardId, pruneEmptyBoards } from '../src/renderer/src/board-serde.ts'
+import {
+  reclaimBoardId,
+  pruneEmptyBoards,
+  orphanBoardsToRecover
+} from '../src/renderer/src/board-serde.ts'
 
 const board = (cwd: string | undefined, n = 0) => ({
   cwd,
@@ -80,4 +84,36 @@ test('认领后原 board 的节点原样还在（不是搬家）', () => {
   const pid = reclaimBoardId(boards, [], '/Users/me/proj')
   assert.equal(pid, 'p-abc')
   assert.equal(boards[pid!].nodes.length, 2)
+})
+
+/* ── 一次性恢复：修复之前留下的孤儿（没有 cwd，认领不了）── */
+
+const nodesOf = (...types: string[]) => ({ nodes: types.map((type, i) => ({ id: `n${i}`, type })) })
+
+test('装着终端的无 cwd 孤儿要被恢复成标签页', () => {
+  // 这是用户机器上的真实情况：pmrz9gesg 里两个终端从 7-25 活到现在
+  const boards = { 'p-old': nodesOf('context', 'terminal', 'terminal') }
+  assert.deepEqual(orphanBoardsToRecover(boards, []), ['p-old'])
+})
+
+test('只剩 ctx-hub 的孤儿不恢复', () => {
+  /* ctx-hub 是每块画布自动播种的。只剩它 = 空画布，
+     给它造标签页只是在标签栏堆垃圾，而且它没有活进程要救 */
+  assert.deepEqual(orphanBoardsToRecover({ 'p-old': nodesOf('context') }, []), [])
+})
+
+test('有 cwd 的孤儿不自动恢复', () => {
+  /* 那些重新添加同一个目录就能拿回来。自动恢复会让「关标签页」失效 ——
+     用户关掉一个标签页，下次启动它又回来了 */
+  const boards = { 'p-new': { cwd: '/Users/me/proj', ...nodesOf('terminal') } }
+  assert.deepEqual(orphanBoardsToRecover(boards, []), [])
+})
+
+test('还开着的 board 不重复恢复', () => {
+  const boards = { 'p-open': nodesOf('terminal') }
+  assert.deepEqual(orphanBoardsToRecover(boards, ['p-open']), [])
+})
+
+test('browser 节点也算值得恢复', () => {
+  assert.deepEqual(orphanBoardsToRecover({ 'p-old': nodesOf('context', 'browser') }, []), ['p-old'])
 })
