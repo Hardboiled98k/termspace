@@ -13,9 +13,13 @@ export APPLE_API_ISSUER=APPLE_ISSUER_ID
 export APPLE_TEAM_ID=85V88J2F3F
 npm run dist:signed
 
-# 3. 验收
+# 3. 验收（两个架构都要 —— x64 那份在这台机上跑不起来，签名却照样得对）
 codesign --verify --deep --strict dist/mac-arm64/Termscape.app
+codesign --verify --deep --strict dist/mac/Termscape.app
 spctl --assess --type execute dist/mac-arm64/Termscape.app   # 要看到 source=Notarized Developer ID
+
+# 4. **打完包必须重编译 node-pty**，否则本机 npm run dev 起不来（见下）
+npm run rebuild
 
 # 只有要把 dmg 发给人手动下载时才需要下面两步。
 # electron-builder 只公证 .app，**dmg 默认没有 ticket** —— 不做这两步就直接
@@ -26,9 +30,27 @@ xcrun notarytool submit dist/Termscape-<版本>-arm64.dmg \
 xcrun stapler staple dist/Termscape-<版本>-arm64.dmg
 xcrun stapler validate dist/Termscape-<版本>-arm64.dmg
 
-# 4. 发布（第一次要先填 ~/.termscape-publish.env，见脚本头部）
+# 5. 发布（第一次要先填 ~/.termscape-publish.env，见脚本头部）
 ./scripts/publish.sh
 ```
+
+## 双架构打包会把 node_modules 留在 x64 状态
+
+`electron-builder --mac` 出 arm64 + x64 时，**两轮各重编译一次 node-pty，
+共用同一个 `node_modules`**。x64 是后跑的，所以打完包
+`node_modules/node-pty/build/Release/pty.node` 是 **x86_64** ——
+在 Apple Silicon 上 `npm run dev` 会起不来终端，而报错指向的是原生模块加载失败，
+跟"我刚才只是打了个包"完全联系不起来。
+
+打完包顺手 `npm run rebuild` 就行。
+
+顺带两个不用管的：
+
+- 包里有 `node-pty/bin/darwin-arm64-148/node-pty.node`（**arm64**，出现在 x64 包里）。
+  node-pty 的搜索路径是 `build/Release` → `build/Debug` → `prebuilds/<platform>-<arch>`
+  （见 `node_modules/node-pty/lib/utils.js`），**`bin/` 不在里面** —— 死文件，86 KB，不会被加载。
+- 日志里的 `duplicate dependency references` 是 electron-builder 对 npm 依赖树的提示，
+  不是错误。
 
 `publish.sh` 会替你把这几件事做掉：产物齐不齐、yml 里的版本和包一致不一致、
 签名和公证过没过、**先传 zip 再传 yml**（反过来的话客户端可能在两次传输之间
@@ -39,6 +61,19 @@ xcrun stapler validate dist/Termscape-<版本>-arm64.dmg
 
 `latest-mac.yml` 里有 zip 的 sha512 和文件名，两者必须同时更新 ——
 只传 zip 不传 yml，客户端不知道有新版本；只传 yml 不传 zip，客户端会 404。
+
+### 两个架构的 zip 都要传
+
+`latest-mac.yml` 会把四个产物（两个 zip + 两个 dmg）全列进 `files`，
+而 electron-updater 的 `MacUpdater` 是**按 `process.arch` 挑**的：
+arm64 机器只认 url 里带 `arm64` 的，Intel 机器只认不带的（Rosetta 下算 arm64）。
+
+所以少传一个架构的 zip，那个架构的用户会**读到"有新版本"、然后去下一个 404** ——
+而你这边什么都看不到，因为你自己那台机的更新是好的。`publish.sh` 两个都传、
+两个都验，并且会拿 yml 里列的 zip 逐个对照本地有没有。
+
+顶层的 `path:` 字段指向最后打的那个架构（现在是 x64），这是 electron-builder
+的行为，不用管 —— `MacUpdater` 走的是 `files` 数组。
 
 ## 更新源
 
