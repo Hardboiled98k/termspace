@@ -30,17 +30,17 @@ mac:
   target:
     # dmg 给人手动装；**zip 是自动更新用的** —— Squirrel.Mac 只认 zip，
     # 少了它 electron-updater 能查到新版本但下载不下来
-    # **两个架构都要出**：Intel Mac 上装 arm64 包会直接报"无法打开"。
-    # 代价是打包时间和产物体积翻倍，以及 latest-mac.yml 里会有两条 zip ——
-    # electron-updater 按运行时架构自己挑，不用管。
+    #
+    # **这里故意不写 arch**：在 target 上写死 `arch: [arm64, x64]` 会**压过命令行的
+    # `--arm64`/`--x64`**（配置优先），于是 `dist:local` 明明只想要本机架构，
+    # 还是闷头跑完两轮签名 —— 25 分钟变 50 分钟，而且日志里没有任何提示。
+    # 架构由 package.json 里各个 dist 脚本用 CLI 标志决定：
+    #   dist:signed / dist → --arm64 --x64（发版必须两个都出：Intel Mac 上
+    #                        装 arm64 包会直接报"无法打开"）
+    #   dist:local        → --arm64（自用，本机架构就够）
+    # 漏了 x64 不会静默通过：publish.sh 要求两个 zip 都在才肯发。
     - target: dmg
-      arch:
-        - arm64
-        - x64
     - target: zip
-      arch:
-        - arm64
-        - x64
   darkModeSupport: true
   # 公证的前置条件：必须开 hardened runtime，且用 entitlements 放行 V8 的 JIT
   # 和 node-pty 这类原生模块，否则签完能过公证但一启动就崩

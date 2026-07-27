@@ -10,9 +10,9 @@
     "start": "electron-vite preview",
     "typecheck": "tsc --noEmit",
     "rebuild": "electron-rebuild -f -w node-pty",
-    "dist": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-vite build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --config electron-builder.yml",
+    "dist": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-vite build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --arm64 --x64 --config electron-builder.yml",
     "test": "node --test --experimental-strip-types test/*.test.ts",
-    "dist:signed": "electron-vite build && electron-builder --mac --config electron-builder.yml",
+    "dist:signed": "electron-vite build && electron-builder --mac --arm64 --x64 --config electron-builder.yml",
     "dist:local": "electron-vite build && electron-builder --mac --arm64 --config electron-builder.yml -c.mac.notarize=false && npm run rebuild",
     "lint": "oxlint src test mobile",
     "check": "npm run lint && npm run typecheck && npm test"
