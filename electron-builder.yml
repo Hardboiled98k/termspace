@@ -23,16 +23,24 @@ publish:
   # 真正决定上不上传的是构建命令有没有传 --publish，而 generic provider 根本没有上传端。
   publishAutoUpdate: true
 mac:
+  # 不配这个的话打包日志会说 "default Electron icon is used"，
+  # 用户 Dock 里看到的就是 Electron 的默认图标
+  icon: build/icon.icns
   category: public.app-category.developer-tools
   target:
     # dmg 给人手动装；**zip 是自动更新用的** —— Squirrel.Mac 只认 zip，
     # 少了它 electron-updater 能查到新版本但下载不下来
+    # **两个架构都要出**：Intel Mac 上装 arm64 包会直接报"无法打开"。
+    # 代价是打包时间和产物体积翻倍，以及 latest-mac.yml 里会有两条 zip ——
+    # electron-updater 按运行时架构自己挑，不用管。
     - target: dmg
       arch:
         - arm64
+        - x64
     - target: zip
       arch:
         - arm64
+        - x64
   darkModeSupport: true
   # 公证的前置条件：必须开 hardened runtime，且用 entitlements 放行 V8 的 JIT
   # 和 node-pty 这类原生模块，否则签完能过公证但一启动就崩

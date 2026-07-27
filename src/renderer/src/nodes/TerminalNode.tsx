@@ -85,7 +85,7 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
     s.edges
       .filter((e) => e.target === id && e.data?.kind === 'context')
       .map((e) => e.source)
-      .sort()
+      .toSorted()
       .join(',')
   )
   const { updateNodeData } = useReactFlow()

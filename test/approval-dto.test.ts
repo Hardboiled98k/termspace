@@ -25,7 +25,7 @@ const full: PendingApprovalFull = {
 }
 
 test('脱敏后的字段是固定白名单，多一个都不行', () => {
-  assert.deepEqual(Object.keys(toPublicApproval(full)).sort(), [
+  assert.deepEqual(Object.keys(toPublicApproval(full)).toSorted(), [
     'createdAt',
     'cwd',
     'id',

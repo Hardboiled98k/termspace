@@ -119,7 +119,7 @@ export async function searchSkills(
   return all
     .map((s) => ({ s, score: scoreSkill(s, tokens) }))
     .filter((x) => x.score > 0)
-    .sort((a, b) => b.score - a.score)
+    .toSorted((a, b) => b.score - a.score)
     .slice(0, limit)
     .map((x) => x.s)
 }

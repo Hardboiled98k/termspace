@@ -48,7 +48,7 @@ const SAMPLES: Record<string, BoardNode> = {
 }
 
 test('每个可存盘的节点类型都有样本（加了新类型就来补）', () => {
-  assert.deepEqual(Object.keys(SAMPLES).sort(), [...SAVED_TYPES].sort())
+  assert.deepEqual(Object.keys(SAMPLES).toSorted(), [...SAVED_TYPES].toSorted())
 })
 
 for (const kind of SAVED_TYPES) {

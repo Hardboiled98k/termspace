@@ -586,7 +586,9 @@ ipcMain.handle(
     // 客户端是同步断开的；抓屏落盘不阻塞 spawn（否则每次重挂载都要等一次 capture-pane）
     void releasePty(id) // 只释放客户端；有 tmux 会话则下面 -A 接回
     const settings = await getSettings()
-    const shell =
+    /* 不叫 shell：模块顶部从 electron import 了同名的 `shell`（openExternal 那个）。
+       在这个作用域里写 shell.openExternal 会拿到一个字符串路径。 */
+    const loginShell =
       (settings.defaultShell && existsSync(settings.defaultShell) ? settings.defaultShell : '') ||
       process.env['SHELL'] ||
       '/bin/zsh'
@@ -652,8 +654,8 @@ ipcMain.handle(
        体检里有一条探针专门验这个，别在这里假设成功。 */
     if (opts?.provider === 'codex' && hookSystem && settings.claudeHooks === 'on') {
       const codexHome = env['CODEX_HOME'] || path.join(os.homedir(), '.codex')
-      await hookSystem.enableCodexHooks(codexHome).catch((e) => {
-        console.warn('codex hook 安装失败:', e)
+      await hookSystem.enableCodexHooks(codexHome).catch((err) => {
+        console.warn('codex hook 安装失败:', err)
       })
     }
 
@@ -703,7 +705,7 @@ ipcMain.handle(
   const { file, args } = buildSpawnArgs(
     tmux,
     id,
-    shell,
+    loginShell,
     cwd,
     env,
     { keys: Object.keys(idEnv?.set ?? {}), unset: idEnv?.unset ?? [] },
@@ -1246,7 +1248,7 @@ async function archiveWorkspace(json: string): Promise<void> {
   await mkdir(dir, { recursive: true })
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
   await writeFile(path.join(dir, `workspace-${stamp}.json`), json)
-  const files = (await readdir(dir)).filter((f) => f.startsWith('workspace-')).sort()
+  const files = (await readdir(dir)).filter((f) => f.startsWith('workspace-')).toSorted()
   for (const old of files.slice(0, Math.max(0, files.length - ARCHIVE_KEEP))) {
     await unlink(path.join(dir, old)).catch(() => undefined)
   }

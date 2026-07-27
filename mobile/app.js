@@ -195,7 +195,7 @@ function renderBoard(data) {
   nodesEl.textContent = ''
   placed = []
   // 组先建，压在针底下
-  const ordered = [...visible].sort((a, c) => (a.type === 'group' ? -1 : c.type === 'group' ? 1 : 0))
+  const ordered = [...visible].toSorted((a, c) => (a.type === 'group' ? -1 : c.type === 'group' ? 1 : 0))
   for (const n of ordered) {
     const p = abs.get(n.id)
     const { w, h } = size(n)
@@ -641,10 +641,10 @@ function renderApprovals(data) {
       no.addEventListener('click', () => decide(a.id, false, card))
       acts.append(ok, no)
     } else {
-      const note = document.createElement('span')
-      note.className = 'muted'
-      note.textContent = '远程批准未开启 —— 在电脑上「设置 → 远程访问」里打开'
-      acts.append(note)
+      const hint = document.createElement('span')
+      hint.className = 'muted'
+      hint.textContent = '远程批准未开启 —— 在电脑上「设置 → 远程访问」里打开'
+      acts.append(hint)
     }
     card.append(acts)
     host.append(card)

@@ -1,0 +1,64 @@
+name: CI
+
+# 仓库还没有 remote（见 CLAUDE.md）。这个文件先躺在这儿，
+# push 到 GitHub 的那一刻就生效，不用再想一遍要跑什么。
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    # **必须是 macOS**：node-pty 要按 Electron 的 ABI 编译，
+    # 而这个项目的测试里有真起 HTTP server、真跑 curl、真调 tmux 参数拼装的用例。
+    # ubuntu 上跑等于测了一个和用户机器不一样的东西。
+    runs-on: macos-14 # arm64 runner，和用户的机器同架构
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # 测试用 `node --test --experimental-strip-types` 直接跑 .ts，
+          # 需要 22.6+ 的原生类型剥离。锁大版本，别让 runner 悄悄换到不支持的版本。
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      # 三件一起跑。任一失败都要红 —— 这正是 CI 存在的理由：
+      # 在此之前全靠人记得手动跑，而人会忘。
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+  # 打包只在手动触发或打 tag 时跑：它要下载 Electron、重编译 node-pty，
+  # 每次 push 都跑纯属浪费 runner 时间。**这里不签名也不公证** ——
+  # 证书和 App Store Connect 密钥不进 CI（见 CLAUDE.md 的红线：
+  # 凭证不出本机）。正式包仍然在本机 `npm run dist:signed`。
+  build:
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Build (未签名，只验证能打出来)
+        run: npm run dist
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-unsigned
+          path: |
+            dist/*.dmg
+            dist/*.zip
+          retention-days: 7

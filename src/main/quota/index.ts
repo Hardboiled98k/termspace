@@ -45,12 +45,12 @@ export function fingerprint(list: QuotaAccount[]): string {
   return list
     .map((a) => {
       const env = Object.entries(a.env)
-        .sort(([x], [y]) => (x < y ? -1 : 1))
+        .toSorted(([x], [y]) => (x < y ? -1 : 1))
         .map(([k, v]) => `${k}=${v}`)
         .join(',')
       return `${a.accountId}|${a.provider}|${a.name}|${a.kind ?? ''}|${env}`
     })
-    .sort()
+    .toSorted()
     .join('\n')
 }
 

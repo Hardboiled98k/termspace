@@ -363,7 +363,7 @@ function BoardHUD({
   // "agent 节点" = 有 provider / 有 context 数据 / 非空闲，最多列 6 行
   const agentRows = terms
     .filter((n) => n.data.provider || ctxMap[n.id] || n.data.status !== 'idle')
-    .sort((a, b) => {
+    .toSorted((a, b) => {
       const rank = (s: string): number => (s === 'attention' ? 0 : s === 'running' ? 1 : 2)
       return rank(a.data.status) - rank(b.data.status)
     })
@@ -1415,7 +1415,7 @@ function Board(): React.JSX.Element {
       const minX = Math.min(...sel.map((n) => n.position.x))
       const minY = Math.min(...sel.map((n) => n.position.y))
       // 按视觉位置排序后填网格 = 整整齐齐
-      const sorted = [...sel].sort(
+      const sorted = [...sel].toSorted(
         (a, b) => a.position.y - b.position.y || a.position.x - b.position.x
       )
       const group: GroupNodeT = {
@@ -1663,16 +1663,21 @@ function Board(): React.JSX.Element {
           .flatMap(([, b]) => b.nodes)
       ]
       let terminals = 0
-      let nodes = 0
+      // 不叫 nodes：外层的 `nodes` 是 ReactFlow 的节点数组，在这段里写 nodes 会拿到计数器
+      let credNodes = 0
       for (const n of allNodes) {
         const t = (n as { type?: string }).type
         const bound = (n as { data?: { identityId?: string }; identityId?: string })
         const owned = bound.data?.identityId ?? bound.identityId
         if (owned !== idn) continue
-        if (t === 'credential') nodes++
+        if (t === 'credential') credNodes++
         else if (t === 'terminal') terminals++
       }
-      return { terminals, nodes, presets: presets.filter((p) => p.identityId === idn).length }
+      return {
+        terminals,
+        nodes: credNodes,
+        presets: presets.filter((p) => p.identityId === idn).length
+      }
     },
     [activeProject, presets]
   )
