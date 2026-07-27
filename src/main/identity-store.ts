@@ -8,7 +8,7 @@ import { existsSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import path from 'node:path'
-import { materializeEnv, type ResolvedEnv } from './identity-env'
+import { isReservedEnvKey, materializeEnv, type ResolvedEnv } from './identity-env'
 import { parseClaudeAuth, parseCodexLogin, type LoginStatus } from './login-status.ts'
 
 // 展开规则搬到 identity-env.ts（不依赖 electron，才能被 node --test 覆盖）
@@ -82,6 +82,8 @@ export async function upsertIdentity(input: {
   const env: Record<string, string> = {}
   for (const [k, v] of Object.entries(input.env)) {
     const key = k.trim()
+    // 保留键（TERMBOARD_* / PATH / TMUX…）连存都不让存：见 identity-env.ts 的 RESERVED
+    if (isReservedEnvKey(key)) continue
     if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) && typeof v === 'string') env[key] = v
   }
   /* 没起名就按 provider 自动编号：codex1 / codex2…

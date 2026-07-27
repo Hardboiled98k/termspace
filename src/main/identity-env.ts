@@ -23,10 +23,32 @@ export interface ResolvedEnv {
  * 2. **`~/` 和 `$HOME/` 要展开**。env 值不过 shell，写 `CODEX_HOME=~/.codex-b`
  *    的话 codex 会老老实实在当前目录建一个名叫 `~` 的文件夹。
  */
+/**
+ * 凭证里**不许出现**的键。
+ *
+ * 原来的保护只写在 spawn 那侧、而且只挡 `set`：
+ *
+ *   for (const k of idEnv.unset) delete env[k]          // ← 没挡
+ *   for (const [k, v] of Object.entries(idEnv.set)) {
+ *     if (k.startsWith('TERMBOARD_')) continue          // ← 只挡了这边
+ *
+ * 而 `KEY=`（空值）走的正是 unset 那条路。于是一个写着 `TERMBOARD_HOOK_TOKEN=`
+ * 的凭证能**把那个节点的状态上报、审批、`tb` 路由全部弄哑**，界面上完全看不出来；
+ * `PATH=` 则直接废掉 shell。
+ *
+ * 所以堵在这个唯一收口：set 和 unset 一起挡，凭证存进来和取出去都过这里。
+ */
+const RESERVED = /^(TERMBOARD_|PATH$|TMUX$|TMUX_PANE$|TERM$|SHELL$|HOME$)/
+
+/** 这个键能不能出现在凭证里 */
+export const isReservedEnvKey = (k: string): boolean => RESERVED.test(k)
+
 export function materializeEnv(raw: Record<string, string>, home: string): ResolvedEnv {
   const set: Record<string, string> = {}
   const unset: string[] = []
   for (const [k, v] of Object.entries(raw)) {
+    // 保留键一律丢弃：删掉它们等于让这个节点静默失能
+    if (isReservedEnvKey(k)) continue
     if (v === '') {
       unset.push(k)
       continue

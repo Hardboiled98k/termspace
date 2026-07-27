@@ -39,6 +39,7 @@ import {
   capturePane,
   paneCommand
 } from './tmux'
+import { tmuxClientEnv } from './tmux-args'
 
 // dev 下 app 名默认是 "Electron"，userData 会指向共享目录 → 显式隔离
 app.setPath('userData', path.join(app.getPath('appData'), 'termboard'))
@@ -501,8 +502,13 @@ ipcMain.handle(
       return { ok: false, error: 'identity-missing' }
     }
     if (idEnv) {
-      // 先删：继承下来的 OPENAI_API_KEY / ANTHROPIC_API_KEY 会让 CLI 绕过订阅走 key 计费
-      for (const k of idEnv.unset) delete env[k]
+      /* 先删：继承下来的 OPENAI_API_KEY / ANTHROPIC_API_KEY 会让 CLI 绕过订阅走 key 计费。
+         保留键在 materializeEnv 里已经滤掉了，这里再挡一道 —— 老凭证可能是在加保护
+         之前存进去的，光靠入口那道会漏。 */
+      for (const k of idEnv.unset) {
+        if (k.startsWith('TERMBOARD_')) continue
+        delete env[k]
+      }
       for (const [k, v] of Object.entries(idEnv.set)) {
         // 不许覆盖自家门控：改了 TERMBOARD_HOOK_TOKEN 之类，这个节点的状态/派活就哑了
         if (k.startsWith('TERMBOARD_')) continue
@@ -545,12 +551,18 @@ ipcMain.handle(
     keys: Object.keys(idEnv?.set ?? {}),
     unset: idEnv?.unset ?? []
   })
+  /* 走 tmux 时，客户端进程的环境**必须是干净的** —— 身份只走 `-e`。
+     第一个客户端的环境会变成长寿 server 的全局环境，凭证 A 的私钥会就此
+     被后来所有会话继承（实测：B 的 pane 打印出了 A 的 key）。见 tmuxClientEnv。
+     不走 tmux 时没有别的载体，env 原样传。 */
   const p = pty.spawn(file, args, {
     name: 'xterm-256color',
     cols: cols > 0 ? cols : 80,
     rows: rows > 0 ? rows : 24,
     cwd,
-    env
+    env: tmux
+      ? tmuxClientEnv(env, { keys: Object.keys(idEnv?.set ?? {}), unset: idEnv?.unset ?? [] })
+      : env
   })
   ptys.set(id, p)
 

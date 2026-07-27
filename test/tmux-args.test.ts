@@ -6,7 +6,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { assembleSpawnArgs } from '../src/main/tmux-args.ts'
+import { assembleSpawnArgs, tmuxClientEnv } from '../src/main/tmux-args.ts'
 
 const TMUX = '/opt/homebrew/bin/tmux'
 const base = { session: 'tb-t1', conf: '/u/tmux.conf', shell: '/bin/zsh', cwd: '/proj' }
@@ -63,4 +63,27 @@ test('TERMBOARD_* 照常注入，TERM 交给 tmux 管', () => {
   assert.ok(pairs(r.args).includes('TERMBOARD_NODE_ID=t1'))
   assert.ok(!pairs(r.args).some((p) => p.startsWith('TERM=')))
   assert.ok(!pairs(r.args).some((p) => p.startsWith('COLORTERM=')))
+})
+
+// ── tmux server 环境泄漏（多钥匙隔离的命根子）─────────────────────────────────
+
+test('tmux 客户端环境里不能带 identity 的密钥', () => {
+  /* 实测过的失败路径：第一个客户端的环境会变成**长寿 server 的全局环境**，
+     凭证 A 的终端先起 → server 带着 A 的私钥 → 凭证 B 的 pane 从 server 继承到它。
+     tmux -L leaktest 里 B 的 new-window 真的打印出了 sk-AAAA。 */
+  const env = { PATH: '/usr/bin', A_SECRET: 'sk-AAAA', HOME: '/Users/x' }
+  const out = tmuxClientEnv(env, { keys: ['A_SECRET'], unset: [] })
+  assert.equal(out['A_SECRET'], undefined, 'identity 的键绝不能进客户端环境')
+  assert.equal(out['PATH'], '/usr/bin', '别的环境照常传')
+})
+
+test('unset 的键也不能进客户端环境（否则它会被带进 server 变成全局继承）', () => {
+  const out = tmuxClientEnv({ ANTHROPIC_API_KEY: 'sk-x', PATH: '/b' }, { keys: [], unset: ['ANTHROPIC_API_KEY'] })
+  assert.equal(out['ANTHROPIC_API_KEY'], undefined)
+})
+
+test('TERMBOARD_* 走 -e 下发，不留在客户端环境里', () => {
+  // 留着的话 server 会记住**第一个节点**的 NODE_ID，用户手开 window 就顶着别人身份上报
+  const out = tmuxClientEnv({ TERMBOARD_NODE_ID: 't1', TERMBOARD_HOOK_TOKEN: 'k', PATH: '/b' })
+  assert.deepEqual(Object.keys(out), ['PATH'])
 })
