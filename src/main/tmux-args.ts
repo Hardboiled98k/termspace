@@ -46,6 +46,22 @@ export function tmuxClientEnv(
   return out
 }
 
+/**
+ * 这个键的值是不是密钥。
+ *
+ * 密钥**不能走 `tmux -e`** —— 那会把值原样写进 tmux 客户端的 argv，
+ * 而客户端进程和终端同寿。实测 `ps -Ao args` 全程看得到，同机其他用户也读得到
+ * （macOS 不像 Linux 有 hidepid）。
+ *
+ * 路径类（CODEX_HOME / CLAUDE_CONFIG_DIR）不是秘密，照常走 `-e` ——
+ * 这样用户在会话里手开 window 也还是同一个账号。
+ */
+/** POSIX shell 单引号转义 —— 值里有引号/空格/换行时不能拼裸字符串 */
+export const shellQuote = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`
+const shq = shellQuote
+
+export const isSecretEnvKey = (k: string): boolean => /(KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)/i.test(k)
+
 export function assembleSpawnArgs(
   tmux: string | null,
   session: string,
@@ -53,7 +69,9 @@ export function assembleSpawnArgs(
   shell: string,
   cwd: string,
   env: Record<string, string>,
-  identity?: IdentityEnvSpec
+  identity?: IdentityEnvSpec,
+  /** 密钥落盘文件的路径（0600）。会话的 shell 先 source 它再 exec，值不进 argv */
+  secretFile?: string
 ): { file: string; args: string[] } {
   const unset = identity?.unset ?? []
   /* 真 unset 只能靠 `env -u`：tmux 的 `-e KEY=` 只把值设成空串（实测），
@@ -79,11 +97,22 @@ export function assembleSpawnArgs(
   const providerPrefix = /^(ANTHROPIC_|CLAUDE_|CODEX_|GEMINI_|OPENAI_)/
   for (const [k, v] of Object.entries(env)) {
     if (k.startsWith('TERMBOARD_') || k === 'TERM' || k === 'COLORTERM') continue // TERM 由 tmux 管
+    // 密钥不进 argv（见 isSecretEnvKey）；有落盘文件时它们走那条路
+    if (secretFile && isSecretEnvKey(k)) continue
     if (explicit.has(k) || providerPrefix.test(k)) args.push('-e', `${k}=${v}`)
   }
   for (const [k, v] of Object.entries(env)) {
     if (k.startsWith('TERMBOARD_')) args.push('-e', `${k}=${v}`)
   }
-  args.push('-c', cwd, '-s', session, ...stripped, shell, '-l')
+  args.push('-c', cwd, '-s', session)
+  if (secretFile) {
+    /* shell 先 source 密钥文件、当场删掉它，再 exec 真正的登录 shell。
+       argv 里只有路径，值一个字都不出现。文件是 0600 且用完即删，
+       落盘窗口只有几毫秒。 */
+    const inner = `. ${shq(secretFile)} 2>/dev/null; rm -f ${shq(secretFile)}; exec ${shq(shell)} -l`
+    args.push(...stripped, '/bin/sh', '-c', inner)
+  } else {
+    args.push(...stripped, shell, '-l')
+  }
   return { file: tmux, args }
 }

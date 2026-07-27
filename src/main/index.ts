@@ -3,6 +3,7 @@ import { readFile, writeFile, rename, mkdir, unlink, readdir } from 'node:fs/pro
 import { existsSync, appendFileSync, statSync } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
+import { randomUUID } from 'node:crypto'
 import * as pty from 'node-pty'
 import {
   startHookSystem,
@@ -39,7 +40,7 @@ import {
   capturePane,
   paneCommand
 } from './tmux'
-import { tmuxClientEnv } from './tmux-args'
+import { isSecretEnvKey, shellQuote, tmuxClientEnv } from './tmux-args'
 import { applyIdentityEnv, type ResolvedEnv } from './identity-env'
 
 // dev 下 app 名默认是 "Electron"，userData 会指向共享目录 → 显式隔离
@@ -582,10 +583,27 @@ ipcMain.handle(
   spawnedRoots.add(cwd)
   /* identity 的键要显式告诉 tmux 层转发 —— 按前缀猜会漏（见 buildSpawnArgs 注释），
      unset 也只有它知道该删哪些（env 对象里已经没有那些键了，猜不出来）。 */
-  const { file, args } = buildSpawnArgs(tmux, id, shell, cwd, env, {
-    keys: Object.keys(idEnv?.set ?? {}),
-    unset: idEnv?.unset ?? []
-  })
+  /* 密钥不能走 `tmux -e` —— 那会把值原样写进客户端 argv，而客户端进程和终端同寿。
+     实测 `ps -Ao args` 全程看得到，同机其他用户也读得到（macOS 没有 hidepid）。
+     所以密钥落一份 0600 文件，会话的 shell 先 source 再当场删掉它，argv 里只有路径。
+     路径类变量（CODEX_HOME / CLAUDE_CONFIG_DIR）不是秘密，照常走 `-e` ——
+     这样用户在会话里手开 window 也还是同一个账号。 */
+  let secretFile: string | undefined
+  const secrets = Object.entries(idEnv?.set ?? {}).filter(([k]) => isSecretEnvKey(k))
+  if (tmux && secrets.length) {
+    secretFile = path.join(app.getPath('userData'), `env-${randomUUID()}.sh`)
+    const body = secrets.map(([k, v]) => `export ${k}=${shellQuote(v)}`).join('\n')
+    await writeFile(secretFile, `${body}\n`, { mode: 0o600 })
+  }
+  const { file, args } = buildSpawnArgs(
+    tmux,
+    id,
+    shell,
+    cwd,
+    env,
+    { keys: Object.keys(idEnv?.set ?? {}), unset: idEnv?.unset ?? [] },
+    secretFile
+  )
   /* 走 tmux 时，客户端进程的环境**必须是干净的** —— 身份只走 `-e`。
      第一个客户端的环境会变成长寿 server 的全局环境，凭证 A 的私钥会就此
      被后来所有会话继承（实测：B 的 pane 打印出了 A 的 key）。见 tmuxClientEnv。

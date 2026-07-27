@@ -15,6 +15,7 @@ import {
   type Edge,
   type EdgeChange,
   type NodeChange,
+  MarkerType,
   type Viewport
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
@@ -132,6 +133,17 @@ function shortPath(p: string): string {
  * 但"按 kind 找上下文源"的地方（`ctxLinks` → `tb context`）就会把凭证节点也算进去。
  * 连线是这个产品的协议本身，标错 kind = 协议本身说了假话。
  */
+/**
+ * 连线的三种语义。**凭证边一度被标成 `context`** —— 类型上没人管，
+ * 但"按 kind 找上下文源"的地方（`ctxLinks` → `tb context`）就会把凭证节点也算进去。
+ * 连线是这个产品的协议本身，标错 kind = 协议本身说了假话。
+ *
+ * 视觉语言分两类：
+ * - **派活线有箭头**：终端→终端是有主从的，箭头指向"听命的那一方"。
+ *   缩到全景时，一眼就能看出谁在指挥谁 —— 这正是画布相对 tab 的价值。
+ * - **附着线没箭头**：上下文/凭证是"挂在这个终端上"的属性，不是一次动作，
+ *   画箭头会让人误以为它也是某种调用方向。
+ */
 function edgeStyle(kind: 'context' | 'delegate' | 'credential'): Partial<Edge> {
   if (kind === 'context') {
     return {
@@ -151,6 +163,7 @@ function edgeStyle(kind: 'context' | 'delegate' | 'credential'): Partial<Edge> {
   return {
     animated: true,
     style: { stroke: '#0A84FF', strokeWidth: 1.8 },
+    markerEnd: { type: MarkerType.ArrowClosed, color: '#0A84FF', width: 16, height: 16 },
     data: { kind }
   }
 }

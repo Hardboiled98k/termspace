@@ -178,7 +178,17 @@ export function buildSpawnArgs(
   shell: string,
   cwd: string,
   env: Record<string, string>,
-  identity?: IdentityEnvSpec
+  identity?: IdentityEnvSpec,
+  secretFile?: string
 ): { file: string; args: string[] } {
-  return assembleSpawnArgs(tmux, sessionName(nodeId), confPath(), shell, cwd, env, identity)
+  return assembleSpawnArgs(
+    tmux,
+    sessionName(nodeId),
+    confPath(),
+    shell,
+    cwd,
+    env,
+    identity,
+    secretFile
+  )
 }

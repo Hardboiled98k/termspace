@@ -6,7 +6,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { assembleSpawnArgs, tmuxClientEnv } from '../src/main/tmux-args.ts'
+import { assembleSpawnArgs, shellQuote, tmuxClientEnv } from '../src/main/tmux-args.ts'
 
 const TMUX = '/opt/homebrew/bin/tmux'
 const base = { session: 'tb-t1', conf: '/u/tmux.conf', shell: '/bin/zsh', cwd: '/proj' }
@@ -86,4 +86,44 @@ test('TERMBOARD_* 走 -e 下发，不留在客户端环境里', () => {
   // 留着的话 server 会记住**第一个节点**的 NODE_ID，用户手开 window 就顶着别人身份上报
   const out = tmuxClientEnv({ TERMBOARD_NODE_ID: 't1', TERMBOARD_HOOK_TOKEN: 'k', PATH: '/b' })
   assert.deepEqual(Object.keys(out), ['PATH'])
+})
+
+// ── 密钥不进 argv ────────────────────────────────────────────────────────────
+
+test('有密钥文件时，密钥不出现在 tmux 参数里', () => {
+  /* tmux 客户端进程和终端同寿，argv 全程可见（实测 ps -Ao args 能读到，
+     macOS 没有 hidepid，同机其他用户也看得到） */
+  const { args } = assembleSpawnArgs(
+    '/usr/bin/tmux',
+    'tb-t1',
+    '/c.conf',
+    '/bin/zsh',
+    '/tmp',
+    { OPENAI_API_KEY: 'sk-SECRET', CODEX_HOME: '/home/a', PATH: '/usr/bin' },
+    { keys: ['OPENAI_API_KEY', 'CODEX_HOME'], unset: [] },
+    '/tmp/env-x.sh'
+  )
+  const flat = args.join(' ')
+  assert.ok(!flat.includes('sk-SECRET'), `密钥泄漏进 argv：${flat}`)
+  // 路径类不是秘密，照常走 -e（这样手开 window 也还是同一个账号）
+  assert.ok(flat.includes('CODEX_HOME=/home/a'))
+  assert.ok(flat.includes('/tmp/env-x.sh'), '密钥文件路径要传给 shell 去 source')
+})
+
+test('没有密钥文件时退回原行为（不能因为这条改动让老路径失效）', () => {
+  const { args } = assembleSpawnArgs(
+    '/usr/bin/tmux',
+    'tb-t1',
+    '/c.conf',
+    '/bin/zsh',
+    '/tmp',
+    { OPENAI_API_KEY: 'sk-X' },
+    { keys: ['OPENAI_API_KEY'], unset: [] }
+  )
+  assert.ok(args.join(' ').includes('OPENAI_API_KEY=sk-X'))
+})
+
+test('shellQuote 挡得住带引号的值', () => {
+  assert.equal(shellQuote("a'b"), `'a'\\''b'`)
+  assert.equal(shellQuote('has space'), `'has space'`)
 })
