@@ -34,3 +34,26 @@ test('https 收下，并补上结尾斜杠', () => {
   assert.equal(sanitizeFeedUrl('https://x.dev/termscape/'), 'https://x.dev/termscape/')
   assert.equal(sanitizeFeedUrl('  https://x.dev/a/b  '), 'https://x.dev/a/b/')
 })
+
+test('带凭证 / query / fragment 的地址一律拒 —— 要的是一个目录', () => {
+  /* 原来只判协议，于是 https://x/feed?token=a 会被补成 ...?token=a/ ——
+     斜杠加进了 query 而不是路径，拼出来的地址一定 404。
+     而 user:pass@ 会被原样存进 settings.json 并显示在设置面板里。 */
+  for (const bad of [
+    'https://user:password@example.com/feed/',
+    'https://user@example.com/feed/',
+    'https://example.com/feed?token=secret',
+    'https://example.com/feed#frag',
+    'https://example.com/feed/?a=1'
+  ]) {
+    assert.equal(sanitizeFeedUrl(bad), '', `${bad} 必须拒`)
+  }
+})
+
+test('补斜杠补在路径上，不是拼在 href 尾巴上', () => {
+  const out = sanitizeFeedUrl('https://x.dev/a/b')
+  assert.equal(out, 'https://x.dev/a/b/')
+  assert.ok(!out.includes('?') && !out.includes('#'))
+  // 根路径本来就有斜杠，不该变成 //
+  assert.equal(sanitizeFeedUrl('https://x.dev'), 'https://x.dev/')
+})

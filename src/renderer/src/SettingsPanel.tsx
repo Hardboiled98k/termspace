@@ -240,9 +240,27 @@ export function SettingsPanel({
               </label>
               <p className="settings-note">
                 指向一个存着 <code>latest-mac.yml</code> 和 <code>*.zip</code> 的 HTTPS 目录
-                （打包产物在 <code>dist/</code>，把这两样传上去即可）。
-                <b>只收 https</b> —— 更新包会替换掉整个 app，明文 http 意味着路上任何人
-                都能换掉它。留空则更新功能不工作。
+                （打包产物在 <code>dist/</code>，把这两样传上去即可）。留空则更新功能不工作。
+              </p>
+              <p className="settings-note settings-err">
+                <b>只填你自己的地址。</b>这一栏决定这台机器从哪里取更新包 ——
+                填成别人的地址，等于让那个人决定给你装什么。
+                <br />
+                https 只保证「连上了你填的那台服务器」，不保证那台服务器是可信的。
+                最后拦住恶意包的是 macOS 的代码签名校验（候选包必须满足当前 app
+                签名导出的要求），但那是最后一道，不该拿它当第一道。
+                {s.updateFeedUrl && (
+                  <>
+                    <br />
+                    当前会从 <code>{(() => {
+                      try {
+                        return new URL(s.updateFeedUrl).host
+                      } catch {
+                        return s.updateFeedUrl
+                      }
+                    })()}</code> 取更新。
+                  </>
+                )}
               </p>
               <p className="settings-note">
                 {upd?.phase === 'checking' && '正在检查…'}

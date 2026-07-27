@@ -859,8 +859,13 @@ ipcMain.handle('update:install', (e) => {
 })
 
 // ── 设置 IPC ──
-ipcMain.handle('settings:get', () => getSettings())
-ipcMain.handle('settings:set', async (_e, patch: Partial<Settings>) => {
+/* **设置入口的权限至少要和更新入口一致**。三个 update IPC 都查了 fromMainWin，
+   紧邻的 settings 反而没查 —— 而 `updateFeedUrl` 就在这里，改它等于改更新源。
+   当前 webview 是 nodeIntegration:false 且无 preload，利用不了；但这是"以后给
+   webview 加个 preload 就破"的那种洞，不该留着。 */
+ipcMain.handle('settings:get', (e) => (fromMainWin(e) ? getSettings() : null))
+ipcMain.handle('settings:set', async (e, patch: Partial<Settings>) => {
+  if (!fromMainWin(e)) return null
   /* 收紧方向**先于落盘**生效：用户点掉「允许远程写入」的那一刻门就该关上。
      等 setSettings 成功再更新的话，写盘一失败（磁盘满 / 权限）界面显示"只读"、
      实际 gate 仍是 true —— 安全开关只允许往安全的方向失败。 */

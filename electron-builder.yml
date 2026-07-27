@@ -19,7 +19,8 @@ asarUnpack:
 publish:
   provider: generic
   url: https://updates.invalid/termscape/
-  # 本地打包**从不**上传（默认就是 never，写出来防止哪天误加 --publish always）
+  # publishAutoUpdate 的意思是"生成更新元数据（latest-mac.yml）"，**不是**"自动上传"。
+  # 真正决定上不上传的是构建命令有没有传 --publish，而 generic provider 根本没有上传端。
   publishAutoUpdate: true
 mac:
   category: public.app-category.developer-tools
