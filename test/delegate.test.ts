@@ -371,3 +371,32 @@ test('认不出的进程名放行（agent 的进程名列不全，别误拦新 C
     assert.equal(isShellForeground(agent), false, `${agent} 不该被当成 shell`)
   }
 })
+
+test('绕过 4：授权之后、落笔之前 agent 退出（前台探测那一拍），不得注入', async () => {
+  /* 授权复查是在 foreground 探测和 stat **之前**做的。这两步各有一个 await，
+     加起来足够 agent 退出：SessionEnd 一到 pane 里就是光秃秃的 shell，
+     此时注入 = 直接执行任意命令。这一拍以前是没人看的。 */
+  dropNode('b4')
+  noteStatus('b4', 'session', 'SessionStart', 's4')
+  noteStatus('b4', 'done', 'Stop', 's4')
+
+  const writes: string[] = []
+  const r = await delegate(
+    {
+      hasNode: () => true,
+      writeToPty: (_id: string, data: string): void => void writes.push(data),
+      // 探测前台进程要跨进程问 tmux —— 就在这一拍里 agent 退了
+      foreground: async () => {
+        noteStatus('b4', 'session', 'SessionEnd', 's4')
+        return 'node' // 探测拿到的是**退出前**的快照，看着还像 agent
+      },
+      authorize: async () => true
+    },
+    'src',
+    'b4',
+    'rm -rf /tmp/DEMO',
+    500
+  )
+  assert.equal(writes.length, 0, `agent 已退出却仍注入了：${JSON.stringify(writes)}`)
+  assert.match(r, /最后一刻/)
+})

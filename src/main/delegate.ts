@@ -345,7 +345,7 @@ tb ask 只能派给正在跑 agent 的终端 —— 往普通 shell 注入文本
   busy.add(targetId)
   onFlight?.({ source: sourceId, target: targetId, active: true })
   try {
-    return await runDelegation(deps, now, targetId, task, timeoutMs)
+    return await runDelegation(deps, now, targetId, task, timeoutMs, epoch)
   } finally {
     busy.delete(targetId)
     onFlight?.({ source: sourceId, target: targetId, active: false })
@@ -357,7 +357,9 @@ async function runDelegation(
   r: NodeRuntime,
   targetId: string,
   task: string,
-  timeoutMs: number
+  timeoutMs: number,
+  /** 授权通过那一刻的会话代号。落笔前要再比一次，见下面「最后一次复查」 */
+  epoch: number
 ): Promise<string> {
   /* 注入前最后一道闸：pane 里此刻跑的要是个光秃秃的 shell，说明 agent 早退了、
      只是 SessionEnd 丢了。**这时注入 = 直接执行任意命令**，必须拒。
@@ -379,6 +381,18 @@ async function runDelegation(
      却把几分钟前的旧答案一本正经交回去，从外面看不出任何异常。 */
   const startPath = r.transcriptPath
   const startBytes = startPath ? await fileSize(startPath) : 0
+
+  /* **落笔前的最后一次复查。**
+     上面两句各有一个 await（查前台进程 ~几十 ms、stat 文件），加起来足够 agent
+     在这中间退出：SessionEnd 一到，`live` 翻 false、`epoch` 前进，而 pane 里
+     此刻已经是光秃秃的 shell —— 下一行的 writeToPty 就成了**直接执行任意命令**。
+     授权那一步已经复查过一次，但那是在这两个 await **之前**；
+     检查和落笔之间只要还有 await，就得在落笔的那一刻再查一遍。 */
+  if (!r.live || !ACCEPTING.has(r.status) || r.epoch !== epoch) {
+    return `派活被拒：${targetId} 在最后一刻${
+      r.epoch !== epoch ? '换了会话' : r.live ? `状态变成了 ${r.status}` : '会话已结束'
+    }，未注入。`
+  }
 
   // 注入任务（等同用户在目标终端敲一行回车）
   deps.writeToPty(targetId, `${task}\r`)

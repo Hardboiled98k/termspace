@@ -57,6 +57,31 @@ import { applyIdentityEnv, type ResolvedEnv } from './identity-env'
 // dev 下 app 名默认是 "Electron"，userData 会指向共享目录 → 显式隔离
 app.setPath('userData', path.join(app.getPath('appData'), 'termboard'))
 
+/* ── 单实例锁 ────────────────────────────────────────────────────────────────
+   **必须在 setPath 之后、任何状态被读之前。** 上一行让 dev 和打包版指向同一个
+   userData（这是有意的：换目录会让所有活着的 tmux 会话变孤儿）。代价是两个实例
+   同时开的时候，它们共用的东西全是有状态的：
+
+   - `workspace.json` —— 两边各自 500ms 防抖**整份覆盖**保存，后写的把先写的抹掉。
+     这正是 CLAUDE.md 里那条最严重的后果（画布归零 + 随后 reap 把 tmux 会话全杀）。
+   - tmux socket `termboard` —— 各自 reap 时会把对方的会话当成孤儿 kill 掉。
+   - hook 端口 / 远程 API 端口 —— 第二个实例抢不到，功能静默残废。
+
+   `npm run dev` 时打包版正开着就会走到这条路上。宁可让第二个实例退出并把
+   已有窗口顶到前面，也不能让两份状态互相踩。 */
+if (!app.requestSingleInstanceLock()) {
+  /* **exit 不是 quit**：quit 要等 will-quit 走完，这中间 whenReady 会抢先触发并
+     真的建出第二个窗口 —— 那个窗口一挂载就开始读 workspace、起防抖保存，
+     踩踏已经发生了。这里没有任何自己的状态要清理，直接退。 */
+  app.exit(0)
+} else {
+  app.on('second-instance', () => {
+    if (!mainWin || mainWin.isDestroyed()) return
+    if (mainWin.isMinimized()) mainWin.restore()
+    mainWin.focus()
+  })
+}
+
 /* ── 崩溃日志 ────────────────────────────────────────────────────────────────
    打包后 stdout 没有去处：主进程一崩，用户看到的是"图标弹一下就没了"，手上零线索。
    所以尽早挂上，写到 userData/crash.log，设置里给按钮打开。
