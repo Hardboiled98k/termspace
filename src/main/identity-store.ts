@@ -9,6 +9,7 @@ import { randomUUID } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import path from 'node:path'
 import { materializeEnv, type ResolvedEnv } from './identity-env'
+import { parseCodexLogin, type LoginStatus } from './login-status.ts'
 
 // 展开规则搬到 identity-env.ts（不依赖 electron，才能被 node --test 覆盖）
 export { materializeEnv } from './identity-env'
@@ -127,12 +128,7 @@ export async function deleteIdentity(id: string): Promise<IdentityMeta[]> {
   return list.map(toMeta)
 }
 
-export interface LoginStatus {
-  state: 'in' | 'out' | 'unknown'
-  detail: string
-  /** 这个号的隔离目录，给界面显示"它存在哪" */
-  home?: string
-}
+export type { LoginStatus } from './login-status.ts'
 
 const findBin = (name: string): string | null =>
   ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', `${process.env['HOME']}/.npm-global/bin`, `${process.env['HOME']}/.local/bin`]
@@ -168,11 +164,10 @@ export async function identityLoginStatus(id: string): Promise<LoginStatus> {
         (err, stdout, stderr) => resolve(err ? `${stdout}${stderr}` : stdout)
       )
     })
-    if (/Logged in/i.test(out)) return { state: 'in', detail: out.trim().slice(0, 80), home }
-    if (/Not logged in/i.test(out)) {
-      return { state: 'out', detail: '未登录 —— 在连着的终端里跑一次 codex login', home }
-    }
-    return { state: 'unknown', detail: out.trim().slice(0, 80) || '查不出来', home }
+    /* **否定要先判**：`/Logged in/i` 会命中 "Not logged in"（子串就在里面），
+       顺序反了的话未登录的号一律显示成"已登录" —— 而这个功能存在的唯一意义
+       就是防止用户以为"连上线了就是登录了"。 */
+    return parseCodexLogin(out, home)
   }
 
   if (found.provider === 'claude') {

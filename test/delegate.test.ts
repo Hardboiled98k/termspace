@@ -6,7 +6,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, writeFile } from 'node:fs/promises'
+import { mkdtemp, writeFile, appendFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { delegate, noteStatus, noteTranscript, isAgentSession, dropNode, assistantText } from '../src/main/delegate.ts'
@@ -152,16 +152,17 @@ test('空任务拒绝', async () => {
   assert.equal(writes.length, 0)
 })
 
-test('放行路径：注入任务，等到新的 Stop 后取回 transcript 末条回答', async () => {
+test('放行路径：回答必须是**本轮新写入**的，不能是 transcript 里原有的旧答案', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'termscape-test-'))
   const tp = path.join(dir, 'transcript.jsonl')
-  await writeFile(
-    tp,
-    [
-      JSON.stringify({ type: 'user', message: { content: 'hi' } }),
-      JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: '干完了' }] } })
-    ].join('\n')
-  )
+  /* 关键：派活**之前**文件里就已经有一条 assistant 回答。
+     老实现直接取"最后一条 assistant"，于是这条陈年旧答案会被当成本轮结果交回去 ——
+     而原来的测试正是在派活前把"干完了"写好，等于把这个 bug 钉成了正确行为。 */
+  const stale = JSON.stringify({
+    type: 'assistant',
+    message: { content: [{ type: 'text', text: '这是上一轮的旧答案' }] }
+  })
+  await writeFile(tp, `${JSON.stringify({ type: 'user', message: { content: 'hi' } })}\n${stale}\n`)
 
   dropNode('n6')
   noteStatus('n6', 'session', 'SessionStart', 's-n6')
@@ -173,9 +174,17 @@ test('放行路径：注入任务，等到新的 Stop 后取回 transcript 末�
     hasNode: (): boolean => true,
     writeToPty: (_id: string, data: string): void => {
       writes.push(data)
-      // 模拟目标 agent：收到输入 → 开始干活 → 干完
+      // 模拟目标 agent：收到输入 → 开始干活 → 写下本轮回答 → 干完
       noteStatus('n6', 'working', 'UserPromptSubmit', 's-n6')
-      setTimeout(() => noteStatus('n6', 'done', 'Stop', 's-n6'), 1600)
+      setTimeout(() => {
+        void appendFile(
+          tp,
+          `${JSON.stringify({
+            type: 'assistant',
+            message: { content: [{ type: 'text', text: '本轮的新答案' }] }
+          })}\n`
+        ).then(() => noteStatus('n6', 'done', 'Stop', 's-n6'))
+      }, 1600)
     },
     authorize: async (): Promise<boolean> => true
   }
@@ -183,7 +192,74 @@ test('放行路径：注入任务，等到新的 Stop 后取回 transcript 末�
   const r = await delegate(d, 'src', 'n6', '干活', 20_000)
   assert.equal(writes.length, 1)
   assert.equal(writes[0], '干活\r', '注入内容必须原样带一个回车')
-  assert.equal(r, '干完了')
+  assert.equal(r, '本轮的新答案')
+})
+
+test('目标完成了但本轮没写正文 → 明说"没有新回答"，绝不返回旧答案', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'termscape-test-'))
+  const tp = path.join(dir, 'transcript.jsonl')
+  await writeFile(
+    tp,
+    `${JSON.stringify({
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: '几分钟前的旧答案' }] }
+    })}\n`
+  )
+  dropNode('n7')
+  noteStatus('n7', 'session', 'SessionStart', 's-n7')
+  noteStatus('n7', 'done', 'Stop', 's-n7')
+  noteTranscript('n7', tp)
+
+  const d = {
+    hasNode: (): boolean => true,
+    writeToPty: (): void => {
+      noteStatus('n7', 'working', 'UserPromptSubmit', 's-n7')
+      // 本轮只调了工具、没有文本正文
+      setTimeout(() => {
+        void appendFile(
+          tp,
+          `${JSON.stringify({
+            type: 'assistant',
+            message: { content: [{ type: 'tool_use', name: 'Bash', input: {} }] }
+          })}\n`
+        ).then(() => noteStatus('n7', 'done', 'Stop', 's-n7'))
+      }, 1600)
+    },
+    authorize: async (): Promise<boolean> => true
+  }
+  const r = await delegate(d, 'src', 'n7', '干活', 20_000)
+  assert.doesNotMatch(r, /旧答案/, '绝不能把上一轮的回答当成本轮结果')
+  assert.match(r, /本轮没有新的文本回答/)
+})
+
+test('秒完成的任务不能被判成"不像活跃 agent"', async () => {
+  /* 轮询每 1.5s 采样一次 status，一个 1 秒内跑完的任务整段错过 working，
+     老实现 12s 后返回"不像活跃 agent 会话"，而它早就做完了。 */
+  const dir = await mkdtemp(path.join(tmpdir(), 'termscape-test-'))
+  const tp = path.join(dir, 'transcript.jsonl')
+  await writeFile(tp, '')
+  dropNode('n8')
+  noteStatus('n8', 'session', 'SessionStart', 's-n8')
+  noteStatus('n8', 'done', 'Stop', 's-n8')
+  noteTranscript('n8', tp)
+
+  const d = {
+    hasNode: (): boolean => true,
+    writeToPty: (): void => {
+      // working 和 done 在同一拍内发生，轮询永远看不到 working
+      noteStatus('n8', 'working', 'UserPromptSubmit', 's-n8')
+      void appendFile(
+        tp,
+        `${JSON.stringify({
+          type: 'assistant',
+          message: { content: [{ type: 'text', text: '秒完成' }] }
+        })}\n`
+      ).then(() => noteStatus('n8', 'done', 'Stop', 's-n8'))
+    },
+    authorize: async (): Promise<boolean> => true
+  }
+  const r = await delegate(d, 'src', 'n8', '干活', 20_000)
+  assert.equal(r, '秒完成')
 })
 
 // ── transcript 解析：两家格式都要认 ─────────────────────────────────────────

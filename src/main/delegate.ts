@@ -3,7 +3,7 @@
  * 复用现有基建：pty.write 注入任务、hooks 状态判完成、transcript 尾取回答。
  * 无新协议、无新连接。
  */
-import { readFile } from 'node:fs/promises'
+import { readFile, stat } from 'node:fs/promises'
 
 interface NodeRuntime {
   transcriptPath?: string
@@ -25,6 +25,12 @@ interface NodeRuntime {
   epoch: number
   /** 已判死，只有 SessionStart 能复活 —— 别的事件（含迟到的）一律不复活 */
   deadUntilStart: boolean
+  /**
+   * 进入过多少次 working。**不能靠轮询采样 `status === 'working'` 来判"它动过"** ——
+   * 循环每 1.5s 看一眼，一个 1 秒内跑完的任务会整段错过，于是 12s 后被判成
+   * "不像活跃 agent"，而它其实早就做完了。计数器是持久的，采样漏了也还在。
+   */
+  workingSeq: number
 }
 
 /** 可以接单的状态白名单 —— fail-closed：不在名单里一律拒，别用黑名单 */
@@ -50,7 +56,15 @@ const runtime = new Map<string, NodeRuntime>()
 function rt(id: string): NodeRuntime {
   let r = runtime.get(id)
   if (!r) {
-    r = { status: 'idle', lastStopAt: 0, live: false, lastEventAt: 0, epoch: 0, deadUntilStart: false }
+    r = {
+      status: 'idle',
+      lastStopAt: 0,
+      live: false,
+      lastEventAt: 0,
+      epoch: 0,
+      deadUntilStart: false,
+      workingSeq: 0
+    }
     runtime.set(id, r)
   }
   return r
@@ -111,6 +125,7 @@ export function noteStatus(id: string, state: string, event?: string, sessionId?
   }
 
   r.live = true
+  if (state === 'working' && r.status !== 'working') r.workingSeq++
   r.status = state
   if (state === 'done' || state === 'session') r.lastStopAt = Date.now()
 }
@@ -177,15 +192,33 @@ export function assistantText(line: string): string {
     .trim()
 }
 
-/** 读 transcript 最后一条 assistant 文本消息 */
-async function lastAssistant(path: string): Promise<string> {
+/** transcript 当前字节数。取不到返回 0（当作"从头都是新的"） */
+async function fileSize(path: string): Promise<number> {
+  return stat(path)
+    .then((st) => st.size)
+    .catch(() => 0)
+}
+
+/**
+ * 取**本轮**的最后一条 assistant 正文。
+ *
+ * `sinceBytes` 是发起派活那一刻的文件长度，只认这之后写进去的内容。
+ * **不钉这个偏移的话，最危险的失败是"拿上一轮的回答当本轮结果返回"** ——
+ * 目标其实没回答（或回答里全是工具调用没有正文），却把几分钟前的旧答案
+ * 一本正经地交回给发起方，看不出任何异常。
+ *
+ * 文件比 sinceBytes 短 = 被轮转或换了会话 → 整份都算新的。
+ */
+async function lastAssistantSince(path: string, sinceBytes: number): Promise<string> {
   let text = ''
   try {
     text = await readFile(path, 'utf8')
   } catch {
     return ''
   }
-  const lines = text.split('\n')
+  const buf = Buffer.from(text, 'utf8')
+  const fresh = buf.length >= sinceBytes ? buf.subarray(sinceBytes).toString('utf8') : text
+  const lines = fresh.split('\n')
   for (let i = lines.length - 1; i >= 0; i--) {
     const t = assistantText(lines[i] ?? '')
     if (t) return t
@@ -277,24 +310,34 @@ async function runDelegation(
   timeoutMs: number
 ): Promise<string> {
   const startStop = r.lastStopAt
+  const startSeq = r.workingSeq
   const startAt = Date.now()
+  /* 钉住发起那一刻的 transcript 位置和路径。**不钉的话最危险的失败是
+     "把上一轮的回答当成本轮结果返回"** —— 目标其实没答（或只有工具调用没有正文），
+     却把几分钟前的旧答案一本正经交回去，从外面看不出任何异常。 */
+  const startPath = r.transcriptPath
+  const startBytes = startPath ? await fileSize(startPath) : 0
 
   // 注入任务（等同用户在目标终端敲一行回车）
   deps.writeToPty(targetId, `${task}\r`)
 
-  // 等这一轮结束：出现比发起时刻更新的 Stop，且已进入过 working（避免注入还没被处理就误判）
-  let sawWorking = false
+  /** 这一轮到底动过没有。计数器 + 采样双保险，见 workingSeq 的注释 */
+  const moved = (): boolean => r.status === 'working' || r.workingSeq > startSeq
+
   while (Date.now() - startAt < timeoutMs) {
     await new Promise((res) => setTimeout(res, 1500))
-    if (r.status === 'working') sawWorking = true
-    // 注入后 12s 仍没进入 working、也没新 Stop → 目标不是活跃 agent（普通 shell 命令已瞬间跑完）
-    if (!sawWorking && r.lastStopAt <= startStop && Date.now() - startAt > 12_000) {
+    // 注入后 12s 仍没动过、也没新 Stop → 目标不是活跃 agent（普通 shell 命令已瞬间跑完）
+    if (!moved() && r.lastStopAt <= startStop && Date.now() - startAt > 12_000) {
       return `[${targetId} 不像活跃 agent 会话（可能是普通终端）。命令已注入，请直接查看该终端输出。]`
     }
-    if (r.lastStopAt > startStop && sawWorking) {
+    if (r.lastStopAt > startStop && moved()) {
       await new Promise((res) => setTimeout(res, 1200)) // 等 transcript 落盘完整
-      const ans = r.transcriptPath ? await lastAssistant(r.transcriptPath) : ''
-      return ans || `[${targetId} 已完成，但未取到文本回答，直接看该终端输出]`
+      // 路径中途变了 = 换了会话文件，那整份都是新的，偏移归零
+      const same = r.transcriptPath === startPath
+      const ans = r.transcriptPath
+        ? await lastAssistantSince(r.transcriptPath, same ? startBytes : 0)
+        : ''
+      return ans || `[${targetId} 已完成，但本轮没有新的文本回答，直接看该终端输出]`
     }
   }
   return `[派活超时：${targetId} 在 ${Math.round(timeoutMs / 1000)}s 内未完成，任务可能仍在跑，去该终端查看]`

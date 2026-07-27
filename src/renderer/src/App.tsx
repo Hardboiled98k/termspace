@@ -21,9 +21,12 @@ import '@xyflow/react/dist/style.css'
 import TerminalNode, { type TermNode } from './nodes/TerminalNode'
 import GroupNode, { type GroupNodeT } from './nodes/GroupNode'
 import WorkerNode, { type WorkerNodeT } from './nodes/WorkerNode'
-import ContextNode, { type ContextNodeT } from './nodes/ContextNode'
-import BrowserNode, { type BrowserNodeT, browserViews } from './nodes/BrowserNode'
-import { CredentialNode, type CredentialNodeType } from './nodes/CredentialNode'
+import ContextNode from './nodes/ContextNode'
+import BrowserNode, { browserViews } from './nodes/BrowserNode'
+import { CredentialNode } from './nodes/CredentialNode'
+import { fromSaved, toSaved, DEFAULT_SIZE, type BoardNode, type SavedNode } from './board-serde'
+
+export type { BoardNode }
 import { IdentityContext, TmuxContext, RequestDeleteContext } from './identity-context'
 import { SettingsPanel, type SettingsSection } from './SettingsPanel'
 import { MessageCenter } from './MessageCenter'
@@ -41,13 +44,6 @@ import {
   IconCursor
 } from './Icons'
 
-export type BoardNode =
-  | TermNode
-  | GroupNodeT
-  | WorkerNodeT
-  | ContextNodeT
-  | BrowserNodeT
-  | CredentialNodeType
 
 /** 挂起中的工具审批（Claude PermissionRequest hook，主进程把那次 HTTP 请求挂着等决定） */
 export interface PendingApproval {
@@ -93,23 +89,6 @@ const statusColor: Record<string, string> = {
 }
 
 /* 磁盘上的工作区格式（只存布局，不存运行时状态） */
-interface SavedNode {
-  id: string
-  x: number
-  y: number
-  width: number
-  height: number
-  title: string
-  type?: 'terminal' | 'group' | 'context' | 'browser' | 'credential'
-  parentId?: string
-  identityId?: string
-  command?: string
-  provider?: string
-  fontSize?: number
-  cwd?: string
-  url?: string
-  collapsed?: boolean
-}
 interface SavedEdge {
   id: string
   source: string
@@ -156,7 +135,6 @@ function edgeStyle(kind: 'context' | 'delegate'): Partial<Edge> {
       }
 }
 
-const DEFAULT_SIZE = { width: 580, height: 380 }
 /* 成组自动排列参数 */
 const GROUP_GAP = 16
 const GROUP_PAD = 20
@@ -691,89 +669,6 @@ function seedNodes(): BoardNode[] {
       data: { title: 'zsh · main', status: 'idle' }
     }
   ]
-}
-
-function fromSaved(s: SavedNode): BoardNode {
-  if (s.type === 'browser') {
-    return {
-      id: s.id,
-      type: 'browser',
-      position: { x: s.x, y: s.y },
-      width: s.width,
-      height: s.height,
-      data: { url: s.url || 'about:blank', title: s.title }
-    }
-  }
-  if (s.type === 'context') {
-    return {
-      id: s.id,
-      type: 'context',
-      position: { x: s.x, y: s.y },
-      width: s.width,
-      height: s.height,
-      data: { title: s.title }
-    }
-  }
-  if (s.type === 'group') {
-    return {
-      id: s.id,
-      type: 'group',
-      position: { x: s.x, y: s.y },
-      width: s.width,
-      height: s.height,
-      data: { title: s.title, collapsed: s.collapsed }
-    }
-  }
-  return {
-    id: s.id,
-    type: 'terminal',
-    position: { x: s.x, y: s.y },
-    width: s.width || DEFAULT_SIZE.width,
-    height: s.height || DEFAULT_SIZE.height,
-    parentId: s.parentId,
-    extent: s.parentId ? ('parent' as const) : undefined,
-    data: {
-      title: s.title || s.id,
-      status: 'idle',
-      identityId: s.identityId,
-      command: s.command,
-      provider: s.provider,
-      fontSize: s.fontSize,
-      cwd: s.cwd
-    }
-  }
-}
-
-function toSaved(n: Exclude<BoardNode, WorkerNodeT>): SavedNode {
-  const base = {
-    id: n.id,
-    x: n.position.x,
-    y: n.position.y,
-    width: n.width ?? n.measured?.width ?? DEFAULT_SIZE.width,
-    height: n.height ?? n.measured?.height ?? DEFAULT_SIZE.height,
-    title:
-      n.type === 'browser'
-        ? (n.data.title ?? '浏览器')
-        : n.type === 'credential'
-          ? (n.data.title ?? '凭证')
-          : n.data.title,
-    type: n.type
-  }
-  if (n.type === 'browser') return { ...base, url: n.data.url }
-  // 折叠态要持久化：不然重开后组身还是缩着、子终端却全冒出来
-  if (n.type === 'group') return { ...base, collapsed: n.data.collapsed }
-  if (n.type === 'context') return base
-  // 凭证节点只存"指向哪个凭证"；env 值一直在主进程加密着，画布文件里绝不出现
-  if (n.type === 'credential') return { ...base, identityId: n.data.identityId }
-  return {
-    ...base,
-    parentId: n.parentId,
-    identityId: n.data.identityId,
-    command: n.data.command,
-    provider: n.data.provider,
-    fontSize: n.data.fontSize,
-    cwd: n.data.cwd
-  }
 }
 
 function nextIdFrom(ids: string[], prefix: string): string {
