@@ -31,6 +31,13 @@ interface NodeRuntime {
    * "不像活跃 agent"，而它其实早就做完了。计数器是持久的，采样漏了也还在。
    */
   workingSeq: number
+  /**
+   * 结束过多少轮。**不能用 `lastStopAt` 时间戳判"有没有新的一轮"** ——
+   * Date.now() 只有毫秒精度，一轮若在同一毫秒内跑完（秒回的任务、本地 mock），
+   * `lastStopAt > startStop` 永远不成立，派活就一路挂到超时。
+   * 计数器是精确的，和时钟精度无关。
+   */
+  stopSeq: number
 }
 
 /** 可以接单的状态白名单 —— fail-closed：不在名单里一律拒，别用黑名单 */
@@ -63,7 +70,8 @@ function rt(id: string): NodeRuntime {
       lastEventAt: 0,
       epoch: 0,
       deadUntilStart: false,
-      workingSeq: 0
+      workingSeq: 0,
+      stopSeq: 0
     }
     runtime.set(id, r)
   }
@@ -98,6 +106,7 @@ export function noteStatus(id: string, state: string, event?: string, sessionId?
     r.epoch++
     r.status = state
     r.lastStopAt = Date.now()
+    r.stopSeq++
     return
   }
 
@@ -127,7 +136,10 @@ export function noteStatus(id: string, state: string, event?: string, sessionId?
   r.live = true
   if (state === 'working' && r.status !== 'working') r.workingSeq++
   r.status = state
-  if (state === 'done' || state === 'session') r.lastStopAt = Date.now()
+  if (state === 'done' || state === 'session') {
+    r.lastStopAt = Date.now()
+    r.stopSeq++
+  }
 }
 
 /** 该节点当前是否是活着的 agent 会话 */
@@ -346,7 +358,7 @@ async function runDelegation(
     }
   }
 
-  const startStop = r.lastStopAt
+  const startStop = r.stopSeq
   const startSeq = r.workingSeq
   const startAt = Date.now()
   /* 钉住发起那一刻的 transcript 位置和路径。**不钉的话最危险的失败是
@@ -364,10 +376,10 @@ async function runDelegation(
   while (Date.now() - startAt < timeoutMs) {
     await new Promise((res) => setTimeout(res, 1500))
     // 注入后 12s 仍没动过、也没新 Stop → 目标不是活跃 agent（普通 shell 命令已瞬间跑完）
-    if (!moved() && r.lastStopAt <= startStop && Date.now() - startAt > 12_000) {
+    if (!moved() && r.stopSeq <= startStop && Date.now() - startAt > 12_000) {
       return `[${targetId} 不像活跃 agent 会话（可能是普通终端）。命令已注入，请直接查看该终端输出。]`
     }
-    if (r.lastStopAt > startStop && moved()) {
+    if (r.stopSeq > startStop && moved()) {
       await new Promise((res) => setTimeout(res, 1200)) // 等 transcript 落盘完整
       // 路径中途变了 = 换了会话文件，那整份都是新的，偏移归零
       const same = r.transcriptPath === startPath

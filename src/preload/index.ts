@@ -72,6 +72,12 @@ const api = {
     ipcRenderer.on(`pty:exit:${id}`, listener)
     return () => ipcRenderer.removeListener(`pty:exit:${id}`, listener)
   },
+  /** 起不来的原因（凭证没了之类）。没有这条的话终端就是一块什么都不显示的黑板 */
+  onSpawnError: (cb: (e: { nodeId: string; message: string }) => void): (() => void) => {
+    const listener = (_e: IpcRendererEvent, ev: Parameters<typeof cb>[0]): void => cb(ev)
+    ipcRenderer.on('pty:spawn-error', listener)
+    return () => ipcRenderer.removeListener('pty:spawn-error', listener)
+  },
   loadContext: (nodeId: string): Promise<string> => ipcRenderer.invoke('context:load', nodeId),
   saveContext: (nodeId: string, text: string): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('context:save', nodeId, text),

@@ -1067,25 +1067,30 @@ function Board(): React.JSX.Element {
     for (const termId of revoked) {
       const term = nodesRef.current.find((n) => n.id === termId)
       if (!term || term.type !== 'terminal' || !term.data.identityId) continue
-      const ok = window.confirm(
-        `撤掉「${term.data.title}」的凭证？\n\n` +
-          '这个终端会关掉当前会话、用系统默认身份重开，正在跑的进程会结束。\n' +
-          '点取消则把连线加回去（保持现在的身份）。'
+      /* 凭证**节点**还在不在，决定这是"删了一条线"还是"删了整个凭证节点"：
+         - 节点还在 → 用户只删了线，问一句，取消就把线还回去
+         - 节点没了 → 用户在删节点那步已经确认过一次了，**不能再问第二遍**，
+           更不能在他点"取消"时去还原一条指向已删节点的线（原来正是这样：
+           credNode 查不到 → 既没还原也没清 identityId → 终端挂在一个不存在的凭证上） */
+      const credNode = nodesRef.current.find(
+        (n) => n.type === 'credential' && n.data.identityId === term.data.identityId
       )
-      if (!ok) {
-        // 还原连线：画布不能停在"线没了但身份还在"的中间态
-        const credNode = nodesRef.current.find(
-          (n) => n.type === 'credential' && n.data.identityId === term.data.identityId
+      const ok =
+        !credNode ||
+        window.confirm(
+          `撤掉「${term.data.title}」的凭证？\n\n` +
+            '这个终端会关掉当前会话、用系统默认身份重开，正在跑的进程会结束。\n' +
+            '点取消则把连线加回去（保持现在的身份）。'
         )
-        if (credNode) {
-          prevBoundRef.current.add(termId) // 加回去后别再当成一次新的撤销
-          setEdges((es) =>
-            addEdge(
-              { id: `${credNode.id}-${termId}`, source: credNode.id, target: termId, ...edgeStyle('credential') },
-              es
-            )
+      if (!ok && credNode) {
+        // 还原连线：画布不能停在"线没了但身份还在"的中间态
+        prevBoundRef.current.add(termId) // 加回去后别再当成一次新的撤销
+        setEdges((es) =>
+          addEdge(
+            { id: `${credNode.id}-${termId}`, source: credNode.id, target: termId, ...edgeStyle('credential') },
+            es
           )
-        }
+        )
         continue
       }
       void window.termscape.destroy(termId)

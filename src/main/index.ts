@@ -488,6 +488,18 @@ ipcMain.handle(
        典型用法不是 API key，而是 CODEX_HOME / CLAUDE_CONFIG_DIR ——
        两个订阅账号各指一个目录，同一条 `codex` 命令在两个节点里登的就是两个号。 */
     const idEnv = await resolveIdentityEnv(opts?.identityId)
+    /* **指名了凭证却取不到 = fail-closed，绝不静默退回默认环境。**
+       凭证在设置里被删掉后，这个节点原来会：跳过整个 idEnv 块 → 连 unset 都不执行 →
+       用户 shell 里 export 的 ANTHROPIC_API_KEY / OPENAI_API_KEY 原样继承进去 →
+       CLI 绕过订阅走按量计费，界面上还显示着那个凭证的名字。账单不会吭声。
+       所以这里宁可让终端起不来，也不能让它用一个**不是用户选的身份**跑起来。 */
+    if (opts?.identityId && !idEnv) {
+      sendToWin('pty:spawn-error', {
+        nodeId: id,
+        message: '这个终端绑定的凭证已经不存在了（可能在设置里被删了）。换一个凭证或摘掉连线再试。'
+      })
+      return { ok: false, error: 'identity-missing' }
+    }
     if (idEnv) {
       // 先删：继承下来的 OPENAI_API_KEY / ANTHROPIC_API_KEY 会让 CLI 绕过订阅走 key 计费
       for (const k of idEnv.unset) delete env[k]

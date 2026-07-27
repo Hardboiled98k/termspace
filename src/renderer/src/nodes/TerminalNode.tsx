@@ -145,6 +145,13 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
     }
     fit.fit()
 
+    /* 起不来的原因要写进屏幕。**不写的话这个终端就是一块纯黑板** ——
+       用户看不出是"还没输出"还是"根本没起来"，这正是这个项目反复栽的静默失败。 */
+    const offSpawnErr = window.termscape.onSpawnError((e) => {
+      if (e.nodeId !== id) return
+      term.write(`\r\n\x1b[38;5;203m[起不来] ${e.message}\x1b[0m\r\n`)
+      updateNodeData(id, { status: 'error' })
+    })
     const offData = window.termscape.onData(id, (d) => term.write(d))
     const offExit = window.termscape.onExit(id, (code) => {
       term.write(`\r\n\x1b[38;5;244m[进程已退出 code=${code}]\x1b[0m\r\n`)
@@ -194,6 +201,7 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
       cancelAnimationFrame(raf)
       ro.disconnect()
       inputSub.dispose()
+      offSpawnErr()
       offData()
       offExit()
       window.termscape.kill(id)
