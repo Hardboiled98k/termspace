@@ -8,7 +8,14 @@
  */
 import { app } from 'electron'
 import http from 'node:http'
-import { buildPeerHelper, decodePeerAsk, PEER_TIMEOUTS, TASK_MAX_BYTES } from './peer'
+import {
+  buildPeerHelper,
+  createRequestLog,
+  decodePeerAsk,
+  peerRequestId,
+  PEER_TIMEOUTS,
+  TASK_MAX_BYTES
+} from './peer'
 import { toPublicApproval, type PendingApproval, type PendingApprovalFull } from './approval-dto'
 import { createHash, randomUUID } from 'node:crypto'
 import { chmod, copyFile, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
@@ -568,9 +575,38 @@ export async function startHookSystem(
         if (tooBig) return reply(413, `任务太长（上限 ${TASK_MAX_BYTES} 字节）`)
         const p = decodePeerAsk(Buffer.concat(bodyChunks).toString('utf8'))
         if (!p) return reply(400, `请求格式不对（任务为空、节点 id 非法，或任务超过 ${TASK_MAX_BYTES} 字节）`)
+
+        /* ── 幂等 ──
+           派活超时或 ssh 断掉之后，任务**其实已经注入进那个 agent 了**（断线是
+           detach 不是 cancel）。人或 agent 这时再发一次同样的任务，就是往同一个
+           会话里注入两遍。所以按内容登记：同一个人把同一个任务派给同一个终端，
+           十分钟内就是同一次派活，第二次直接把上次的状态/结果告诉他。 */
+        const rid = peerRequestId(p.source, p.target, p.task)
+        const prior = peerLog.begin(rid, Date.now())
+        if (prior) {
+          return reply(
+            200,
+            prior.state === 'running'
+              ? `[这个任务已经派过了，正在 ${p.target} 上跑（${Math.round(
+                  (Date.now() - prior.at) / 1000
+                )}s 前发起）。没有重复注入 —— 去那个终端看进度，或等它跑完再问。]`
+              : `[这个任务几分钟前派过并已完成，没有重复注入。上次的回答：]\n${
+                  prior.result ?? '(空)'
+                }`
+          )
+        }
         void peerAsk(p.source, p.target, p.task)
-          .then((t) => reply(200, t))
-          .catch(() => reply(500, '内部错误'))
+          .then((t) => {
+            /* 只有**真派出去了**才记结果。被拒（开关关着、目标不是 agent…）要撤销登记，
+               否则用户按提示把开关打开之后，同一个任务十分钟内都派不出去。 */
+            if (t.startsWith('派活被拒') || t.startsWith('派活失败')) peerLog.abandon(rid)
+            else peerLog.finish(rid, t, Date.now())
+            reply(200, t)
+          })
+          .catch(() => {
+            peerLog.abandon(rid)
+            reply(500, '内部错误')
+          })
       })
       return
     }
@@ -736,6 +772,10 @@ export async function startHookSystem(
      别的机器通过 ssh 跑 `tb-peer`，它在**本机**读端口和 token 再打回环。
      为什么不让对面直接 curl：hook 端口每次启动都变、token 也在本机文件里，
      对面既拿不到也不该拿。helper 留在被派活这一侧，跨机链路上只传任务本身。 */
+  /* 跨机派活的幂等表。**进程内即可**：它防的是"超时后重试"这种分钟级的重复，
+     而 app 一重启，所有 tmux 会话里的 agent 也早不在原来那一轮了。 */
+  const peerLog = createRequestLog()
+
   /* **每次启动换一把**。原来想着"保持不变，否则要重新分发 helper" —— 那是想错了：
      helper 是**被派活这一侧自己生成**的（对面 ssh 过来直接执行它），
      从来不需要分发。既然如此就没有任何理由让 token 长寿，轮换只缩短泄漏窗口。

@@ -19,6 +19,8 @@
  * 挡住误用和 agent 自作主张，挡不住一个已经能登录那台机的人。
  */
 
+import { createHash } from 'node:crypto'
+
 /** ssh alias 只允许这些字符。**开头不能是 `-`** —— 见 sshArgs 的注释 */
 const ALIAS_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
 
@@ -140,6 +142,84 @@ exec curl -sS -m ${Math.round(PEER_TIMEOUTS.helperMs / 1000)} \\
   -H 'Content-Type: application/json' \\
   --data-binary @- "http://127.0.0.1:${port}/tb/peer"
 `
+}
+
+/**
+ * 幂等键。**必须从内容派生，不能用随机数。**
+ *
+ * 随机 id 在重试时是另一个值，等于没有幂等。而这里要防的恰恰是重试：
+ * 派活超时（或 ssh 断了）之后，任务**其实已经注入进对面那个 agent 了**——
+ * 断线只能理解成 detach，不是 cancel。此时人或 agent 再发一次同样的任务，
+ * 就是往同一个会话里注入两遍。
+ *
+ * 用 `source + target + task` 的哈希：同一个人把同一个任务派给同一个终端，
+ * 就是同一次派活。
+ */
+export function peerRequestId(source: string, target: string, task: string): string {
+  /* 用 JSON 数组而不是分隔符拼串。两个理由：
+     ① 拼串有歧义 —— `"a"+sep+"b c"` 和 `"a b"+sep+"c"` 会撞成同一个 id（用空格
+        当分隔符时实测真撞），两次不同的派活会互相拿到对方的结果；
+     ② 原来用的是**裸 NUL 字节**，它无歧义但在源码里完全不可见，
+        任何一次复制粘贴或编辑器规范化都会把它变成空格，然后 ① 就发生了。 */
+  return createHash('sha256')
+    .update(JSON.stringify([source, target, task]))
+    .digest('hex')
+    .slice(0, 32)
+}
+
+export interface PeerEntry {
+  state: 'running' | 'done'
+  result?: string
+  at: number
+}
+
+/**
+ * 短期结果表。**只有"记住 id"是不够的** —— 重试时要能说出上次到底怎么了：
+ * 还在跑，还是已经跑完了、结果是什么。只挡不给结果的话，用户只会再试一次。
+ *
+ * `begin` 必须是**原子登记**：先查后写之间不能有 await，否则两个并发请求
+ * 都会看到"没记录"然后都注入 —— 那正是这张表要防的事。
+ */
+export function createRequestLog(
+  ttlMs = 10 * 60_000,
+  max = 200
+): {
+  begin: (id: string, now: number) => PeerEntry | null
+  finish: (id: string, result: string, now: number) => void
+  /** 派活没跑起来（被拒/出错）时把登记撤掉，否则同一个任务十分钟内都派不出去 */
+  abandon: (id: string) => void
+  size: () => number
+} {
+  const log = new Map<string, PeerEntry>()
+  /** Map 保序，超量时删最早的 */
+  const trim = (): void => {
+    while (log.size > max) {
+      const first = log.keys().next()
+      if (first.done) break
+      log.delete(first.value)
+    }
+  }
+  const sweep = (now: number): void => {
+    for (const [k, v] of log) if (now - v.at > ttlMs) log.delete(k)
+    trim()
+  }
+  return {
+    /** 返回 null = 这是新请求，可以继续；否则返回已有条目，调用方据此回话 */
+    begin: (id, now) => {
+      sweep(now)
+      const hit = log.get(id)
+      if (hit) return hit
+      log.set(id, { state: 'running', at: now })
+      trim() // **插入之后**再修剪：sweep 跑在插入前，只按它算会超出 max 一条
+      return null
+    },
+    finish: (id, result, now) => {
+      // 结果时间戳用完成时刻：TTL 从"拿到结果"起算才是用户感知的那十分钟
+      log.set(id, { state: 'done', result, at: now })
+    },
+    abandon: (id) => void log.delete(id),
+    size: () => log.size
+  }
 }
 
 /**
