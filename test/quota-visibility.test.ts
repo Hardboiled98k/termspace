@@ -30,6 +30,11 @@ test('用户自建的凭证永远显示，哪怕没人用', () => {
   assert.equal(shouldShowAccount({ accountId: 'i-abc123', usingCount: 0 }), true)
 })
 
+test('查不到额度的账号仍然出现在列表里', () => {
+  const unavailable = { accountId: 'i-antigravity', usingCount: 0, state: 'unavailable' }
+  assert.equal(shouldShowAccount(unavailable), true)
+})
+
 test('不看登录状态 —— 同一个号在任何状态下结论都一样', () => {
   /* 旧规则栽在这：codex 在系统层登录着，state 是 'ok'，于是永远不满足
      "unconfigured 才隐藏"。新判据只问一件事：画布上有没有人在用。

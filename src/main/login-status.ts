@@ -17,6 +17,9 @@ export interface LoginStatus {
   detail: string
   /** 这个号的隔离目录，给界面显示"它存在哪" */
   home?: string
+  email?: string
+  plan?: string
+  authMethod?: string
 }
 
 /** 未登录的说法（codex 0.145 实测是 `Not logged in`；另外几种是防它改文案） */
@@ -65,7 +68,14 @@ export function parseClaudeAuth(stdout: string, home?: string): LoginStatus {
     j.email,
     j.authMethod === 'api_key' ? '按量计费（非订阅）' : undefined
   ].filter(Boolean)
-  return { state: 'in', detail: bits.join(' · ').slice(0, 80), home }
+  return {
+    state: 'in',
+    detail: bits.join(' · ').slice(0, 80),
+    home,
+    email: j.email,
+    plan: j.subscriptionType,
+    authMethod: j.authMethod
+  }
 }
 
 export function parseCodexLogin(out: string, home?: string): LoginStatus {

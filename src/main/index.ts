@@ -75,10 +75,12 @@ import {
   buildSpawnArgs,
   reapOrphanSessions,
   capturePane,
-  paneCommand
+  paneCommand,
+  paneProcessProviders
 } from './tmux'
 import { identityValueIsSecret, shellQuote, tmuxClientEnv } from './tmux-args'
 import { applyIdentityEnv, billingKind, type ResolvedEnv } from './identity-env'
+import { discoverLowConfidenceAccounts, probeClaudeAccount } from './account-discovery'
 
 // dev 下 app 名默认是 "Electron"，userData 会指向共享目录 → 显式隔离
 app.setPath('userData', path.join(app.getPath('appData'), 'termboard'))
@@ -148,6 +150,7 @@ const PTY_WRITE_LIMIT = 256 * 1024
 let askedConsent = false
 /** whenReady 里才建得起来的额度账号同步器；identity handler 在模块级注册，只能靠这个引用 */
 let syncQuotaAccountsRef: (() => Promise<void>) | null = null
+let detectedPaneProviders = new Set<string>()
 /** 远程端能否写入终端 / 批准工具调用。设置里改了要立刻生效，所以单独缓存 */
 let remoteAllowInput = false
 let remoteAllowApprove = false
@@ -1384,6 +1387,23 @@ ipcMain.handle('identity:loginStatus', (e, id: string) =>
   fromMainWin(e) ? identityLoginStatus(String(id)) : { state: 'unknown', detail: '' }
 )
 
+ipcMain.handle('quota:scanUsage', async (e, ids: unknown) => {
+  if (!fromMainWin(e) || !Array.isArray(ids)) return {}
+  const safe = ids.filter(okId).slice(0, 200)
+  const providers = await paneProcessProviders(safe)
+  const next = new Set(Object.values(providers))
+  const changed =
+    next.size !== detectedPaneProviders.size || [...next].some((p) => !detectedPaneProviders.has(p))
+  detectedPaneProviders = next
+  // 已知 CLI 起停是四个允许的账号扫描触发点之一。
+  if (changed) void syncQuotaAccountsRef?.()
+  return providers
+})
+
+ipcMain.handle('quota:rescan', (e) => {
+  if (fromMainWin(e)) void syncQuotaAccountsRef?.()
+})
+
 // ── F2 上下文：每个简报节点一个文件，按画布连线决定注入给谁 ──
 const ctxDir = (): string => path.join(app.getPath('userData'), 'contexts')
 const ctxFile = (nodeId: string): string =>
@@ -2053,10 +2073,31 @@ app.whenReady().then(async () => {
   quotaHub = startQuotaHub(os.homedir(), (list) => sendToWin('quota:update', list))
   const syncQuotaAccounts = async (): Promise<void> => {
     const ids = await listIdentities()
+    const claudeSystem = await probeClaudeAccount(os.homedir())
+    const presenceOf = (s: Awaited<ReturnType<typeof probeClaudeAccount>>) => ({
+      state: s.state === 'in' ? 'verified' as const : s.state === 'out' ? 'not_logged_in' as const : 'unknown' as const,
+      detail: s.detail,
+      discovered: true
+    })
     const accounts: QuotaAccount[] = [
       // 系统默认 = 没绑凭证的节点用的那个登录态，它也是一个账号
-      { accountId: 'system:claude', provider: 'claude', name: '系统默认', env: {} },
-      { accountId: 'system:codex', provider: 'codex', name: '系统默认', env: {} },
+      {
+        accountId: 'system:claude',
+        provider: 'claude',
+        name: '系统默认',
+        env: {},
+        kind: billingKind(process.env, 'claude') === 'api-key' ? 'api-key' : 'subscription',
+        presence: presenceOf(claudeSystem),
+        email: claudeSystem.email,
+        plan: claudeSystem.plan
+      },
+      {
+        accountId: 'system:codex',
+        provider: 'codex',
+        name: '系统默认',
+        env: {},
+        kind: billingKind(process.env, 'codex') === 'api-key' ? 'api-key' : 'subscription'
+      },
       // Copilot 只有一个账号（跟着 gh 的登录态走），没有多号概念
       { accountId: 'system:copilot', provider: 'copilot', name: 'GitHub', env: {} }
     ]
@@ -2075,7 +2116,23 @@ app.whenReady().then(async () => {
       const isolated = i.provider === 'codex' ? env['CODEX_HOME'] : env['CLAUDE_CONFIG_DIR']
       const kind =
         billingKind(probeEnv, i.provider) === 'api-key' || !isolated ? 'api-key' : 'subscription'
-      accounts.push({ accountId: i.id, provider: i.provider, name: i.name, env, kind })
+      const claude =
+        i.provider === 'claude' && kind === 'subscription'
+          ? await probeClaudeAccount(os.homedir(), { ...probeEnv, CLAUDE_CONFIG_DIR: isolated })
+          : null
+      accounts.push({
+        accountId: i.id,
+        provider: i.provider,
+        name: i.name,
+        env,
+        kind,
+        presence: claude ? { ...presenceOf(claude), discovered: false } : undefined,
+        email: claude?.email,
+        plan: claude?.plan
+      })
+    }
+    for (const d of await discoverLowConfidenceAccounts(os.homedir(), detectedPaneProviders)) {
+      accounts.push({ ...d, env: {} })
     }
     quotaHub?.setAccounts(accounts)
   }
@@ -2143,9 +2200,13 @@ app.whenReady().then(async () => {
     if (pend.length) sendToWin('approvals:update', pend)
   })
 
-  // 自检模式：TERMBOARD_SHOT=/path/x.png 启动 → 6 秒后截图退出
+  /* 自检模式：TERMBOARD_SHOT=/path/x.png 启动 → 默认 6 秒后截图退出。
+     `TERMBOARD_SHOT_DELAY=<毫秒>` 可以调长 —— 有些链路 6 秒根本跑不完
+     （账号发现要等进程树扫描先报上来，再触发重扫、采集、推送四步），
+     窗口太短会拍到一个"功能没生效"的假象，而那正是我们要验的东西。 */
   const shotPath = process.env['TERMBOARD_SHOT']
   if (shotPath) {
+    const shotDelay = Math.min(120_000, Math.max(1000, Number(process.env['TERMBOARD_SHOT_DELAY']) || 6000))
     setTimeout(async () => {
       try {
         /* TERMBOARD_WEBGL_STRESS=N：开 N 个终端，把 WebGL context 打爆，测降级。
@@ -2329,7 +2390,7 @@ app.whenReady().then(async () => {
       } finally {
         app.quit()
       }
-    }, 6000)
+    }, shotDelay)
   }
 
   app.on('activate', () => {

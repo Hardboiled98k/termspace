@@ -42,6 +42,7 @@ import { IdentityContext, TmuxContext, RequestDeleteContext } from './identity-c
 import { SettingsPanel, type SettingsSection } from './SettingsPanel'
 import { shouldShowAccount } from './quota-visibility'
 import { countUsing } from './quota-usage'
+import { hasQuotaProgress, maskEmail, quotaUnavailableText } from './quota-display'
 import { placeNewNode, viewportCenter } from './place-node'
 import { CommandPalette } from './CommandPalette'
 import type { PaletteNode } from './palette'
@@ -262,13 +263,6 @@ function QuotaRow({ w }: { w: QuotaWindow }): React.JSX.Element {
 /* 三种「没数」必须用不同的话说清，别共用一句含混的"暂无数据"：
    未登录能自己修（去跑一次 login），查不到只能等，字段不认识是上游变了。
    混成一句的话，用户会对着一个能修的问题干等。 */
-const STATE_NOTE: Record<string, string> = {
-  unconfigured: '未登录 —— 在用这个号的终端里跑一次登录命令',
-  unavailable: '⚠ 这次没取到',
-  'unknown-shape': '⚠ 返回的字段不认识（对方升级了？）',
-  stale: '旧快照'
-}
-
 const money = (minor: number, cur: string): string => `${(minor / 100).toFixed(2)} ${cur}`
 
 /**
@@ -300,9 +294,10 @@ function AccountBlock({
 }): React.JSX.Element | null {
   // 判据只有一份，见 quota-visibility.ts（这里和外层 filter 曾经各写一份）
   if (!shouldShowAccount({ accountId: a.accountId, usingCount })) return null
-  const stale = a.state === 'stale' || Date.now() / 1000 - a.capturedAt > STALE_SEC
+  const stale =
+    a.state === 'stale' || (a.state === 'ok' && Date.now() / 1000 - a.capturedAt > STALE_SEC)
   // 只有真拿到数了才画进度条。查不到/未登录画一根空槽 = 看着就像"用了 0%"
-  const hasData = (a.state === 'ok' || a.state === 'stale') && a.windows.length > 0
+  const hasData = hasQuotaProgress(a)
   return (
     <div className={`quota-account${stale ? ' stale' : ''}`} title={`${a.source}｜${a.hint ?? ''}`}>
       <div className="quota-account-head">
@@ -323,7 +318,8 @@ function AccountBlock({
         </span>
       </div>
       {/* 邮箱是区分两个同 provider 订阅号的唯一可靠标识 —— planType 都叫 'pro' */}
-      {a.email && <div className="quota-email">{a.email}</div>}
+      {a.email && <div className="quota-email">{maskEmail(a.email)}</div>}
+      <div className="quota-account-note">{a.presence.detail}</div>
       {hasData ? (
         <div className="quota-provider-rows">
           {a.windows.map((w) => (
@@ -331,7 +327,7 @@ function AccountBlock({
           ))}
         </div>
       ) : (
-        <div className="quota-account-note">{STATE_NOTE[a.state] ?? '暂无数据'}</div>
+        <div className="quota-account-note">{quotaUnavailableText(a)}</div>
       )}
       {/* 花钱侧不画进度条，只给金额 —— 和上面的百分比混在一起必然被读成一回事。
           enabled:false 要显式说「未开启」，藏起来等于告诉用户"没这回事" */}
@@ -375,15 +371,45 @@ function BoardHUD({
   onFocus: (id: string) => void
 }): React.JSX.Element | null {
   const [quota, setQuota] = useState<AccountQuota[]>([])
+  const [processAgents, setProcessAgents] = useState<Record<string, string>>({})
   const [collapsed, setCollapsed] = useState(false)
   useEffect(() => window.termspace.onQuota(setQuota), [])
 
   const terms = nodes.filter((n): n is TermNode => n.type === 'terminal')
+  const termIds = terms.map((n) => n.id).toSorted().join('\n')
+  /* 进程树扫描：每轮两次 `ps`（先只取 PID 图、再只对本 pane 的子孙取 argv）。
+     **窗口不可见时必须跳过** —— 这个 app 是开一整天的，后台每 4 秒唤醒两个进程
+     纯属白烧电，而"用户手敲了 codex"这件事在他看不见界面时也没人要看。
+     间隔也从 4s 放到 10s：这是"补上 hook 报不到的那部分"的兜底信号，
+     不是需要秒级响应的东西（真 agent 会话有 hook，那条路是事件驱动的）。 */
+  useEffect(() => {
+    let alive = true
+    const scan = (): void => {
+      if (document.hidden) return
+      void window.termspace.scanQuotaUsage(termIds ? termIds.split('\n') : []).then((r) => {
+        if (alive) setProcessAgents(r)
+      })
+    }
+    scan()
+    const timer = window.setInterval(scan, 10_000)
+    // 切回前台立刻补一轮，否则最长要等 10 秒界面才追上
+    document.addEventListener('visibilitychange', scan)
+    return () => {
+      alive = false
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', scan)
+    }
+  }, [termIds])
+  const observedAgents = { ...processAgents, ...liveAgents }
   const running = terms.filter((n) => n.data.status === 'running').length
   const attention = terms.filter((n) => n.data.status === 'attention').length
-  // "agent 节点" = 有 provider / 有 context 数据 / 非空闲，最多列 6 行
+  /* "agent 节点" = **观测到在跑 agent** / 有 provider / 有 context 数据 / 非空闲，最多列 6 行。
+     `observedAgents` 必须参与判定，否则会和上面那排账号卡自相矛盾 ——
+     实测拍到过：账号卡写着「4 个终端」在用 codex（那个数用了进程探测），
+     下面「画布」却只列出 1 个 Codex，因为手敲 `codex` 的三个节点
+     `provider` 是空、状态又是 idle，被这一行滤掉了。同一份观测，一处用一处不用。 */
   const agentRows = terms
-    .filter((n) => n.data.provider || ctxMap[n.id] || n.data.status !== 'idle')
+    .filter((n) => observedAgents[n.id] || n.data.provider || ctxMap[n.id] || n.data.status !== 'idle')
     .toSorted((a, b) => {
       const rank = (s: string): number => (s === 'attention' ? 0 : s === 'running' ? 1 : 2)
       return rank(a.data.status) - rank(b.data.status)
@@ -402,7 +428,7 @@ function BoardHUD({
     countUsing(
       terms.map((n) => ({ id: n.id, identityId: n.data.identityId, provider: n.data.provider })),
       a.accountId,
-      liveAgents
+      observedAgents
     )
 
   // 和 AccountBlock 共用同一个判据（quota-visibility.ts），不再各写一份
@@ -428,7 +454,15 @@ function BoardHUD({
 
   return (
     <div className={`quota-hud${collapsed ? ' collapsed' : ''}`}>
-      <button className="hud-toggle" onClick={() => setCollapsed((c) => !c)}>
+      <button
+        className="hud-toggle"
+        onClick={() =>
+          setCollapsed((c) => {
+            if (c) void window.termspace.rescanAccounts()
+            return !c
+          })
+        }
+      >
         <span className="hud-toggle-label">
           {collapsed
             ? `${summary}${
@@ -444,8 +478,15 @@ function BoardHUD({
             <>
               {/* 写清楚这是**账号级**的量：一个号可能同时被画布外的终端/IDE 用着，
                   所以「0 节点」不代表它不会涨 —— 这正是最容易让人困惑的地方 */}
-              <span className="quota-title" title="按账号统计，含画布之外在用同一个号的进程">
-                账号额度
+              <span className="quota-title" title="按账号统计；查不到、未登录和 0% 是三种不同状态">
+                账号与用量
+                <button
+                  className="quota-rescan"
+                  title="重新扫描本机账号与终端进程"
+                  onClick={() => void window.termspace.rescanAccounts()}
+                >
+                  ↻
+                </button>
               </span>
               {accounts.map((a) => (
                 <AccountBlock key={a.accountId} a={a} usingCount={usingCount(a)} />
@@ -471,6 +512,12 @@ function BoardHUD({
               >
                 <span className={`status-dot ${n.data.status}`} />
                 <span className="hud-node-title">{n.data.title}</span>
+                {/* 观测到在跑、但节点本身没定 provider（用户在普通 zsh 里手敲的）——
+                    不标一下的话这行就是光秃秃一个 "zsh · t-11fpce"，
+                    用户看不出它为什么被列进来 */}
+                {!n.data.provider && observedAgents[n.id] && (
+                  <span className="hud-node-model">{observedAgents[n.id]}</span>
+                )}
                 {ctx && (
                   <>
                     <span className="hud-node-model">{shortModel(ctx.model)}</span>

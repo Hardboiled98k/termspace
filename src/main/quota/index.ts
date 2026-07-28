@@ -7,9 +7,16 @@
 import { collectClaude } from './claude.ts'
 import { collectCodex } from './codex.ts'
 import { collectCopilot } from './copilot.ts'
-import { now, type AccountQuota } from './types.ts'
+import { now, type AccountPresence, type AccountQuota, type QuotaCapability } from './types.ts'
 
-export type { AccountQuota, QuotaWindow, QuotaSpend, QuotaState } from './types.ts'
+export type {
+  AccountPresence,
+  AccountQuota,
+  QuotaCapability,
+  QuotaWindow,
+  QuotaSpend,
+  QuotaState
+} from './types.ts'
 
 /** 5 分钟。Claude Code 自己的写节流就是 5min，比这更密没有信息增量，只是白打后端 */
 const INTERVAL_MS = 5 * 60_000
@@ -29,6 +36,10 @@ export interface QuotaAccount {
    * 而这个终端实际是按量计费。显示反了比不显示糟得多。
    */
   kind?: 'subscription' | 'api-key'
+  quotaCapability?: QuotaCapability
+  presence?: AccountPresence
+  email?: string
+  plan?: string
 }
 
 export interface QuotaHub {
@@ -48,10 +59,82 @@ export function fingerprint(list: QuotaAccount[]): string {
         .toSorted(([x], [y]) => (x < y ? -1 : 1))
         .map(([k, v]) => `${k}=${v}`)
         .join(',')
-      return `${a.accountId}|${a.provider}|${a.name}|${a.kind ?? ''}|${env}`
+      return `${a.accountId}|${a.provider}|${a.name}|${a.kind ?? ''}|${a.quotaCapability ?? ''}|${a.presence?.state ?? ''}|${a.email ?? ''}|${a.plan ?? ''}|${env}`
     })
     .toSorted()
     .join('\n')
+}
+
+/** 账号存在态的兜底值。系统自动发现的标 `discovered`，用户自建的不标 */
+export function defaultPresence(a: QuotaAccount): AccountPresence {
+  return (
+    a.presence ?? {
+      state: 'unknown',
+      detail: '等待确认',
+      discovered: a.accountId.startsWith('system:')
+    }
+  )
+}
+
+/** 采集器真的拿到了这个账号的额度窗口 —— 只有这种才允许画进度条 */
+export function hasRealWindows(r: AccountQuota | null): boolean {
+  return !!r && (r.state === 'ok' || r.state === 'stale') && r.windows.length > 0
+}
+
+/**
+ * 采集结果 + 账号元信息 → 最终展示对象。
+ *
+ * **抽出来是为了能测**：这里两个判据都是"静默做错事"的形状 ——
+ * 错了不报错、typecheck 全绿、只是界面上安静地显示错误的东西。
+ */
+export function decorateQuota(
+  a: QuotaAccount,
+  presence: AccountPresence,
+  r: AccountQuota
+): AccountQuota {
+  return {
+    ...r,
+    quotaCapability: a.quotaCapability ?? r.quotaCapability,
+    /* **拿到真实额度窗口本身就是登录态的证明** —— 那个接口要带着这个账号的
+       凭据才答得出话。此时还挂着默认的「等待确认」，卡片上就会出现
+       "邮箱 + pro + 周 1% 进度条 + 等待确认" 这种自相矛盾的组合（实测拍到过）。
+       观测压过推断：能查到 = 已登录，不必再等别的探测器确认。 */
+    presence:
+      hasRealWindows(r) && presence.state !== 'verified'
+        ? { ...presence, state: 'verified', detail: '已验证登录' }
+        : presence,
+    ...(presence.state === 'verified' && r.state === 'unconfigured'
+      ? {
+          state: 'unavailable' as const,
+          quotaCapability: 'blocked_by_policy' as const,
+          hint: '已验证登录，但无法在安全边界内取得额度凭据'
+        }
+      : {}),
+    email: a.email ?? r.email,
+    plan: a.plan ?? r.plan
+  }
+}
+
+/**
+ * 按量计费的账号如实说"查不到订阅额度"，而不是从 HUD 里消失 ——
+ * 凭证明明在画布上，额度面板里却没有它，用户只会以为坏了。
+ * 各家的按量用量 API 见 docs/QUOTA.md「明确不做」那节（多数要 org admin key）。
+ *
+ * ⚠️ **这个兜底只能在采集器什么都没拿到之后用**，见 collectOne 里那段注释。
+ */
+export function apiKeyUnavailable(a: QuotaAccount, presence: AccountPresence): AccountQuota {
+  return {
+    accountId: a.accountId,
+    provider: a.provider,
+    name: a.name,
+    state: 'unavailable',
+    quotaCapability: a.quotaCapability ?? 'admin_only',
+    presence,
+    capturedAt: now(),
+    source: '-',
+    windows: [],
+    hint: 'API key 按量计费，没有订阅额度可查'
+  }
 }
 
 export function startQuotaHub(
@@ -66,41 +149,41 @@ export function startQuotaHub(
   let running = false
 
   const collectOne = async (a: QuotaAccount): Promise<AccountQuota> => {
-    /* 按量计费的账号如实说"查不到订阅额度"，而不是从 HUD 里消失 ——
-       凭证明明在画布上，额度面板里却没有它，用户只会以为坏了。
-       各家的按量用量 API 见 docs/QUOTA.md「明确不做」那节（多数要 org admin key）。 */
-    if (a.kind === 'api-key') {
-      return {
-        accountId: a.accountId,
-        provider: a.provider,
-        name: a.name,
-        state: 'unavailable',
-        capturedAt: now(),
-        source: '-',
-        windows: [],
-        hint: 'API key 按量计费，没有订阅额度可查'
-      }
-    }
+    const presence = defaultPresence(a)
+    const decorate = (r: AccountQuota): AccountQuota => decorateQuota(a, presence, r)
+    const apiKeyFallback = (): AccountQuota => apiKeyUnavailable(a, presence)
     try {
-      if (a.provider === 'codex') {
-        return await collectCodex({
-          accountId: a.accountId,
-          name: a.name,
-          codexHome: a.env['CODEX_HOME'] || `${homeDir}/.codex`,
-          homeDir
-        })
+      const probe = async (): Promise<AccountQuota | null> => {
+        if (a.provider === 'codex') {
+          return collectCodex({
+            accountId: a.accountId,
+            name: a.name,
+            codexHome: a.env['CODEX_HOME'] || `${homeDir}/.codex`,
+            homeDir
+          })
+        }
+        if (a.provider === 'copilot') return collectCopilot({ accountId: a.accountId, name: a.name })
+        if (a.provider === 'claude') {
+          return collectClaude({
+            accountId: a.accountId,
+            name: a.name,
+            configDir: a.env['CLAUDE_CONFIG_DIR'],
+            homeDir
+          })
+        }
+        return null
       }
-      if (a.provider === 'copilot') {
-        return await collectCopilot({ accountId: a.accountId, name: a.name })
-      }
-      if (a.provider === 'claude') {
-        return await collectClaude({
-          accountId: a.accountId,
-          name: a.name,
-          configDir: a.env['CLAUDE_CONFIG_DIR'],
-          homeDir
-        })
-      }
+      const r = await probe()
+      /* **`kind` 绝不能在采集之前短路**（实测回归：本机 `OPENAI_API_KEY` 在登录 shell 里
+         export 着，于是 `billingKind` 把 `system:codex` 判成 api-key，
+         而 codex CLI 实际走的是 OAuth 订阅 —— 真实的 `pro` + 周窗 1% 被三行
+         "查不到"顶掉，面板从有数据变成没数据）。
+         **订阅和 API key 可以同时存在**，而"采集器真拿到了窗口"是观测，
+         "env 里有 key"只是推断 —— 观测赢。
+         只有采集器确实什么都没拿到时，才退回按量计费那句话。 */
+      if (r && (r.state === 'ok' || r.state === 'stale') && r.windows.length) return decorate(r)
+      if (a.kind === 'api-key') return apiKeyFallback()
+      if (r) return decorate(r)
     } catch (e) {
       // 采集器不该抛，但真抛了也不能让整轮挂掉
       return {
@@ -108,6 +191,8 @@ export function startQuotaHub(
         provider: a.provider,
         name: a.name,
         state: 'unavailable',
+        quotaCapability: 'collector_error',
+        presence,
         capturedAt: now(),
         source: '-',
         windows: [],
@@ -118,11 +203,16 @@ export function startQuotaHub(
       accountId: a.accountId,
       provider: a.provider,
       name: a.name,
-      state: 'unconfigured',
+      state: 'unavailable',
+      quotaCapability: a.quotaCapability ?? 'officially_unavailable',
+      presence,
       capturedAt: now(),
       source: '-',
-      windows: [],
-      hint: `暂不支持 ${a.provider} 的额度查询`
+      windows: []
+      /* 这里**不给 hint**。渲染层已经按 `quotaCapability` 出了一句
+         「无官方程序化查询接口」，再补一句「暂不支持 X 的额度查询」就是
+         同一件事说两遍 —— 卡片上三行里两行同义，正是用户抱怨的
+         「看不懂、太复杂」。hint 只该带**额外**信息（比如具体是哪次查询失败）。 */
     }
   }
 

@@ -25,6 +25,8 @@ const fake = (a: QuotaAccount): AccountQuota => ({
   provider: a.provider,
   name: a.name,
   state: 'ok',
+  quotaCapability: 'supported',
+  presence: { state: 'verified', detail: '测试账号', discovered: false },
   capturedAt: now(),
   source: 'test',
   windows: []

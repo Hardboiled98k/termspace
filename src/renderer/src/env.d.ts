@@ -87,6 +87,18 @@ interface AccountQuota {
   provider: string
   name: string
   state: 'ok' | 'stale' | 'unconfigured' | 'unavailable' | 'unknown-shape'
+  quotaCapability:
+    | 'supported'
+    | 'officially_unavailable'
+    | 'web_only'
+    | 'admin_only'
+    | 'blocked_by_policy'
+    | 'collector_error'
+  presence: {
+    state: 'verified' | 'detected' | 'not_logged_in' | 'unknown'
+    detail: string
+    discovered: boolean
+  }
   capturedAt: number
   source: string
   plan?: string
@@ -272,6 +284,8 @@ interface TermspaceApi {
     }) => void
   ) => () => void
   onQuota: (cb: (list: AccountQuota[]) => void) => () => void
+  scanQuotaUsage: (nodeIds: string[]) => Promise<Record<string, string>>
+  rescanAccounts: () => Promise<void>
   ready: () => void
   workerAction: (
     action: 'result' | 'kill' | 'send' | 'clean',

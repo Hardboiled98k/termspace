@@ -11,7 +11,14 @@ import { existsSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
-import { assembleSpawnArgs, TMUX_SOCKET as SOCKET, type IdentityEnvSpec } from './tmux-args'
+import { assembleSpawnArgs, TMUX_SOCKET as SOCKET, type IdentityEnvSpec } from './tmux-args.ts'
+import {
+  descendantPids,
+  descendantProvider,
+  parseProcessLinks,
+  parseProcessTable,
+  type ProcessRow
+} from './pane-process.ts'
 
 export type { IdentityEnvSpec } from './tmux-args'
 
@@ -169,6 +176,51 @@ export function paneCommand(nodeId: string): Promise<string> {
       (err, stdout) => resolve(err ? '' : stdout.trim())
     )
   })
+}
+
+/**
+ * pane_current_command 对 Node/Python 包装器会返回 node/Python/版本号，不能用于计数。
+ * 这里以 pane PID 为根只看它的子孙，并且只把 provider 名返回渲染层，不返回 argv。
+ */
+export async function paneProcessProviders(nodeIds: string[]): Promise<Record<string, string>> {
+  if (!tmuxPath || !nodeIds.length) return {}
+  const panePids = await Promise.all(
+    nodeIds.map(
+      (id) =>
+        new Promise<[string, number]>((resolve) => {
+          execFile(
+            tmuxPath!,
+            ['-L', SOCKET, 'display-message', '-p', '-t', paneTarget(id), '#{pane_pid}'],
+            { timeout: 3000 },
+            (err, stdout) => resolve([id, err ? 0 : Number(stdout.trim())])
+          )
+        })
+    )
+  )
+  // 全局只取 PID 关系；命令行只查询这些 pane 的子孙，避免读取无关进程 argv。
+  const links = await new Promise<ReturnType<typeof parseProcessLinks>>((resolve) => {
+    execFile('/bin/ps', ['-axo', 'pid=,ppid='], { timeout: 3000 }, (err, stdout) =>
+      resolve(err ? [] : parseProcessLinks(stdout))
+    )
+  })
+  const descendantIds = [...new Set(panePids.flatMap(([, pid]) => (pid ? descendantPids(pid, links) : [])))]
+  const table =
+    descendantIds.length === 0
+      ? []
+      : await new Promise<ProcessRow[]>((resolve) => {
+          execFile(
+            '/bin/ps',
+            ['-p', descendantIds.join(','), '-o', 'pid=,ppid=,command='],
+            { timeout: 3000, maxBuffer: 1024 * 1024 },
+            (err, stdout) => resolve(err ? [] : parseProcessTable(stdout))
+          )
+        })
+  const out: Record<string, string> = {}
+  for (const [id, pid] of panePids) {
+    const provider = pid ? descendantProvider(pid, table) : null
+    if (provider) out[id] = provider
+  }
+  return out
 }
 
 /** 组装 PTY 程序与参数：tmux 可用 → tmux 客户端；否则纯 shell */

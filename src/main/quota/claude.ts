@@ -81,6 +81,8 @@ export async function collectClaude(args: {
     provider: 'claude',
     name: args.name,
     capturedAt: now(),
+    quotaCapability: 'supported' as const,
+    presence: { state: 'unknown' as const, detail: '等待官方状态确认', discovered: true },
     windows: [] as QuotaWindow[]
   }
 

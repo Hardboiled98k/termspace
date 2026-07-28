@@ -334,6 +334,20 @@ body {
   letter-spacing: 0.05em;
   color: var(--tb-muted);
 }
+
+.quota-rescan {
+  margin-left: 6px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  opacity: 0.65;
+}
+
+.quota-rescan:hover {
+  opacity: 1;
+}
 .quota-row {
   display: flex;
   align-items: center;

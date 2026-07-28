@@ -17,6 +17,21 @@ export type QuotaState =
   | 'unavailable' // 装了也登录了，这次拿不到（超时 / 网络 / 401）
   | 'unknown-shape' // 拿到了但字段不认识（上游改 schema）→ 绝不显示 0%
 
+export type QuotaCapability =
+  | 'supported'
+  | 'officially_unavailable'
+  | 'web_only'
+  | 'admin_only'
+  | 'blocked_by_policy'
+  | 'collector_error'
+
+export interface AccountPresence {
+  state: 'verified' | 'detected' | 'not_logged_in' | 'unknown'
+  detail: string
+  /** 自动发现结果不会进入工作区导出，也不会同步到手机端。 */
+  discovered: boolean
+}
+
 /** 一个限额窗口 */
 export interface QuotaWindow {
   /** 稳定 key，如 `codex:codex:primary` */
@@ -83,6 +98,8 @@ export interface AccountQuota {
   /** 用户起的名字，或「系统默认」 */
   name: string
   state: QuotaState
+  quotaCapability: QuotaCapability
+  presence: AccountPresence
   /** 采集时刻（unix 秒）。UI 统一用它算陈旧度 */
   capturedAt: number
   /** 数据来源，悬浮提示里如实写（'官方 API' / 'rollout 快照（可能低报）'） */

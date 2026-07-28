@@ -226,7 +226,10 @@ const api = {
     const listener = (_e: IpcRendererEvent, q: Parameters<typeof cb>[0]): void => cb(q)
     ipcRenderer.on('quota:update', listener)
     return () => ipcRenderer.removeListener('quota:update', listener)
-  }
+  },
+  scanQuotaUsage: (nodeIds: string[]): Promise<Record<string, string>> =>
+    ipcRenderer.invoke('quota:scanUsage', nodeIds),
+  rescanAccounts: (): Promise<void> => ipcRenderer.invoke('quota:rescan')
 }
 
 contextBridge.exposeInMainWorld('termspace', api)
