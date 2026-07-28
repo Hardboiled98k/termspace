@@ -92,8 +92,13 @@ export function CredentialNode({ data, selected }: NodeProps<CredentialNodeType>
         </div>
       )}
       {me && me.envKeys.length > 0 && (
-        /* 只列键名。值在主进程里加密存着，渲染层根本拿不到 —— 别改成显示值 */
-        <div className="cred-keys">{me.envKeys.join(' · ')}</div>
+        /* 只列键名。值在主进程里加密存着，渲染层根本拿不到 —— 别改成显示值。
+           title 里那句话不能省：画布上「拉一根线」的视觉语言很容易被读成
+           "agent 用得到但看不到 key"，而这些值是以环境变量注入的，
+           那个终端里的 agent 读得到。说不清楚 = 用户按一个不存在的边界做决定。 */
+        <div className="cred-keys" title="这些变量会注入连过来的终端，里面的 agent 读得到它们的值">
+          {me.envKeys.join(' · ')}
+        </div>
       )}
       {state === 'out' && (
         /* 按 provider 说该跑哪条命令。写死 codex 的话，claude 凭证上会显示

@@ -607,6 +607,13 @@ function IdentityPanel({
             export 过的话，CLI 会优先走按量计费，订阅号等于白开且账单不吭声。
             值支持 <code>~/</code> 与 <code>$HOME/</code> 开头（env 不过 shell，不展开会
             真的建一个叫 <code>~</code> 的目录）。
+            <br />
+            {/* **别把这条省掉**。画布上「拉一根线到终端」的视觉语言很容易被理解成
+                "agent 用得到但看不到 key" —— 而任意 CLI 的凭证是以环境变量注入的，
+                做不到知情/使用分离。说不清楚的话，用户会按一个不存在的边界做决定。 */}
+            <b>凭证是注入到那个终端的环境变量，里面的 agent 读得到它</b>
+            （连线只决定「用哪个账号」，不是「用得到但看不见」）。
+            所以别把不该给某个 agent 的密钥连到它身上。
           </p>
           <div className="identity-form-row">
             <input
