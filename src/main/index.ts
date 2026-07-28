@@ -23,7 +23,7 @@ import {
   resolveIdentityEnv
 } from './identity-store'
 import { listPresets, upsertPreset, deletePreset } from './preset-store'
-import { startWorkerWatch, workerAction, type WorkerWatch } from './worker-watch'
+import { startWorkerWatch, workerAction, resolveCdx, type WorkerWatch } from './worker-watch'
 import { execFile } from 'node:child_process'
 import {
   probeRepo,
@@ -1213,8 +1213,11 @@ ipcMain.handle('app:doctor', async (e): Promise<DoctorItem[]> => {
     {
       key: 'cdx',
       label: 'worker 引擎 cdx',
-      ok: !!which('cdx'),
-      detail: which('cdx') || '未找到 cdx',
+      /* **和轮询用同一个解析器**。以前这里查 `which cdx`、轮询却写死
+         `python3 ~/.claude/skills/.../cdx.py` —— 两条判据各自都对，
+         合起来就出现"体检绿但没有卡片"和"卡片能用但体检红"。 */
+      ok: !!resolveCdx(),
+      detail: resolveCdx()?.detail || '未找到 cdx（装 cxcc-subagent skill 或把 cdx 放进 PATH）',
       hint: '仅影响 F7 worker 卡片，其余功能不受影响'
     }
   ]

@@ -192,6 +192,45 @@ function GroupNodeImpl({ id, data }: NodeProps<GroupNodeT>): React.JSX.Element {
     setNodes((ns) => ns.map((n) => (n.id === id ? { ...n, data: { ...n.data, worktree: undefined } } : n)))
   }
 
+  /**
+   * 真删这棵树。**和解绑是两个动作** —— 解绑只去引用，这个动作动磁盘。
+   *
+   * 两道闸都在这儿：
+   * - 组里还有活着的终端时不给删（git 不管有没有进程把它当 cwd，
+   *   删完那个 shell 就悬在一个不存在的目录里）
+   * - 脏树由 git 自己拒，**绝不替用户 --force** —— 那个拒绝挡的正是
+   *   "agent 干了一半的活被一键抹掉"。把 git 的原话原样显示给用户
+   */
+  const deleteWorktree = async (): Promise<void> => {
+    if (!wt) return
+    const live = terms()
+    if (live.length) {
+      window.alert(
+        `组里还有 ${live.length} 个终端在用这棵树。\n先关掉它们（或解组）再删 ——\n` +
+          '删完那些 shell 会悬在一个不存在的目录里。'
+      )
+      return
+    }
+    const dirty = wtStat?.dirty ?? 0
+    if (
+      !window.confirm(
+        `删除 worktree？\n${wt.path}\n\n` +
+          (dirty
+            ? `⚠️ 这棵树里有 ${dirty} 个未提交的改动 —— git 会拒绝删除，不会替你 --force。\n\n`
+            : '') +
+          '分支本身不会被删，只删这份工作副本。'
+      )
+    ) {
+      return
+    }
+    const r = await window.termspace.gitRemoveWorktree(wt.path)
+    if (!r.ok) {
+      window.alert(`删不掉：${r.error ?? '未知错误'}`)
+      return
+    }
+    setNodes((ns) => ns.map((n) => (n.id === id ? { ...n, data: { ...n.data, worktree: undefined } } : n)))
+  }
+
   const ungroup = (): void => {
     setNodes((ns) => {
       const g = ns.find((n) => n.id === id)
@@ -397,6 +436,18 @@ function GroupNodeImpl({ id, data }: NodeProps<GroupNodeT>): React.JSX.Element {
                 }}
               >
                 解绑
+              </button>
+            )}
+            {wt && (
+              <button
+                className="group-act nodrag danger"
+                title="删除磁盘上的这棵 worktree（组里还有终端时不给删；脏树 git 会拒绝，不会 --force）"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  void deleteWorktree()
+                }}
+              >
+                删树
               </button>
             )}
             <button

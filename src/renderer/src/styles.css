@@ -1325,6 +1325,15 @@ body {
   border-color: transparent;
   white-space: nowrap;
 }
+/* 动磁盘的动作要看得出来不一样。**不做成实心红** —— 那会让它比「发送」还抢眼，
+   而它是个低频动作；描边红足够把"这条不可撤销"说清楚 */
+.group-act.danger {
+  color: var(--tb-red);
+  border-color: color-mix(in srgb, var(--tb-red) 45%, transparent);
+}
+.group-act.danger:hover {
+  background: color-mix(in srgb, var(--tb-red) 18%, transparent);
+}
 /* 群发输入条：绝对定位到组框上方。子终端节点在 DOM 里渲染于父组之上，
    放在组内部一定被盖住（用户实测到的问题）。 */
 .group-bcast {
