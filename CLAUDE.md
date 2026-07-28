@@ -59,8 +59,13 @@ npm run rebuild    # node-pty 重编译（换 Electron 版本后必跑）
 npm run dist       # 未签名双架构（CI 用，只验证能打出来）
 npm run dist:local # 签名、跳过公证、**只出 arm64**、收尾自动 rebuild（本机自用走这个）
 npm run dist:signed  # 签名 + 公证正式包（需下面四个环境变量）
-TERMBOARD_SHOT=/tmp/shot.png npm run dev  # 自检：6 秒后截图退出
-TERMBOARD_PANEL=terminal npm run dev      # 自检：直接展开设置面板某分区
+TERMBOARD_SHOT=/tmp/shot.png npm run dev  # 自检：默认 6 秒后截图退出
+TERMBOARD_SHOT_DELAY=30000                # ↑ 调长（账号发现那条链 6 秒跑不完）
+TERMBOARD_PANEL=identities                # 自检：直接展开设置面板某分区
+                                          # 合法值：general terminal presets identities
+                                          #        hooks remote peers update
+TERMBOARD_CLICK='text=添加账号或密钥|text=登录另一个订阅账号'  # 截图前依次点击
+TERMBOARD_FITPROBE=1                      # 量终端 canvas 溢出内容区多少像素
 ```
 
 ## 关键决策 / 坑
@@ -203,6 +208,30 @@ TERMBOARD_PANEL=terminal npm run dev      # 自检：直接展开设置面板某
   方向相反的数，缺哪个留 undefined，**绝不拿 0 顶上**
 - 每个采集器都要 `windows.length ? 'ok' : 'unknown-shape'`；Hub 的 `setAccounts` 要比
   **指纹**（含 name / env）而不是 accountId —— 换了 `CODEX_HOME` 而 id 不变时会继续显示旧号
+
+## 凭证的三态 envOps（2026-07-29 取代空字符串重载）
+
+存的不再是 `Record<string,string>`，而是
+
+```ts
+envOps: [{ key, action: 'set', value } | { key, action: 'unset' }]
+```
+
+老格式里 `KEY: ''` 的语义是**删掉这个变量**（防订阅号被继承来的 API key 顶走），
+靠空串重载 —— UI 只能让用户自己猜，而**迁错一次用户不会看到报错，
+只会在月底账单上看到**。所以 `identity-model.ts` 的 `migrateIdentity` 是
+`value === '' ? unset : set`，且解密后立即原子重写；重写前留一份
+`identities.bin.pre-envops.bak`（单向转换，凭证比画布更值钱）。
+
+- 渲染层只拿 `{key, action}`，**已保存的明文永不回传**；编辑只有「保留原值/替换/删除」
+- 危险键黑名单在 `identity-env.ts`：`TERMBOARD_*`/`PATH`/`TMUX`/`HOME` 之外还要挡
+  `DYLD_* LD_* NODE_OPTIONS BASH_ENV ENV ZDOTDIR PROMPT_COMMAND SSH_ASKPASS
+  GIT_SSH_COMMAND PERL5OPT PYTHONSTARTUP` —— 否则「添加任意 env key」**同时就是一个
+  代码执行入口**
+- provider 清单是**随应用发布的版本化 manifest**（`src/shared/provider-manifest.ts`），
+  绝不从网络下发可执行探测命令。`loginHint` 必须写**具体命令**，
+  因为各家形状不一样、用户猜不到：claude 是**进 TUI 之后的 `/login`**、不是 shell 命令；
+  gemini / antigravity **没有 login 子命令**，首次运行自己弹 OAuth。本机逐个 `--help` 核过
 
 ## 凭证节点（2026-07-26）
 
@@ -368,6 +397,22 @@ feed URL 做成用户可改的是有代价的（能被诱导改源），现在�
 
 ## 授权模型（同 UID 前提，务必如实描述）
 
+**每一条能碰到外部资源的链路都要过同一套闸**：`authorizeLink` + `withLedger`。
+`tb ask` / `tb browser` / `tb ask <peer>` / **`tb db` / `tb ssh`** 全在内。
+（2026-07-29 补上最后两条 —— 此前 `tb browser` 读个网页要弹窗授权，
+而 `tb db` 拿生产库连接串跑 SQL 反而不用，自相矛盾。）
+
+三条判据，缺一条就是白做：
+
+- **授权 key 必须带类型**：`broker:${kind}:${name}`。同名不同类型（`db:prod` / `ssh:prod`）
+  是合法配置，key 只用 name 的话，给**只读** db:prod 勾的「本次不再询问」
+  会把**可写**的 ssh:prod 一起放行
+- **`withLedger` 要包住 authorize**，不能只包执行 —— 「agent 想动生产库、我拦了」
+  恰恰是这本账最该记的一条
+- **非 delegate 的链路必须自带 `classify`**：`classifyDelegateResult` 认的是
+  `派活被拒`/`派活失败` 这几个**前缀**，那是 delegate 的话术。broker 说「执行失败：」
+  一个字都对不上 → 全部落到 `done`，账本"失败优先排序"对这条链路**静默失效**
+
 跨节点动作（`tb ask` / `tb browser`）走「连线即授权」+ 弹窗兜底。但所有终端与 app 同 UID，
 任何进程都能 `tmux -L termboard send-keys` 直接驱动会话绕过全部检查 —— 所以这是**产品护栏
 不是安全边界**。写文档、写注释、答用户都要这么说，别把它说成安全机制。
@@ -420,6 +465,47 @@ feed URL 做成用户可改的是有代价的（能被诱导改源），现在�
   区分"扛住外部抖动"和"把失败重试到通过"
 - ⚠️ 这个包装器写完当天没接进 npm scripts，于是又白死了一次构建。
   **写完立刻接上并当场验 `command -v codesign` 指向它**
+
+## 观测压过推断（2026-07-29，一天之内踩了三次）
+
+**能直接测到的事实，永远优先于从环境推出来的结论。** 三个实例都在额度面板，
+共同点是**不报错、typecheck 全绿、测试全绿，只是安静地显示错误的东西**：
+
+| 推断 | 观测 | 推断赢了会怎样 |
+|------|------|---------------|
+| `billingKind(env)` 说这是 api-key 账号 | 采集器真的返回了订阅额度窗口 | 真实的 `pro` + 周窗 1% 被三行"查不到"顶掉，**面板从有数据变成没数据** |
+| presence 还是默认的「等待确认」 | 额度接口带着这个账号的凭据答出话了 | 卡片上同时出现「已查到 1%」和「等待确认」 |
+| 节点建出来时没定 `provider` | 进程树里真的有 `codex` 在跑 | 账号卡说「4 个终端」，下面画布列表只列 1 个 |
+
+第一条尤其阴：本机登录 shell 里 export 着 `OPENAI_API_KEY`（Electron **会继承**），
+于是 `system:codex` 被判成按量计费，那条分支**在调用采集器之前就 return 了**。
+而 codex CLI 实际走 OAuth 订阅 —— 订阅和 API key 完全可以同时存在。
+判定顺序必须是：**先跑采集器，只有它确实空手而归才退回按量计费那句话。**
+
+⚠️ 这类 bug **单元测试结构上抓不到** —— 它依赖本机真实环境（某个环境变量存不存在、
+某个 CLI 登没登录），而 fixture 永远是干净的。**只有真跑 + 看截图**。
+配套的第二条纪律：**截图窗口不够长时先怀疑窗口再怀疑实现** ——
+第一次 dogfood 拍到"Antigravity 不出现"，其实只是 6 秒没跑完
+「进程扫描 → 重扫 → 采集 → 推送」四步，差点据此去改正确的代码。
+
+## `.xterm` 的 padding 合同（2026-07-29 实测定案）
+
+**内边距必须长在 `.xterm` 上，不能长在它父元素上。** FitAddon 的合同是
+`可用高度 = getComputedStyle(.xterm.parentElement).height − .xterm 自己的 padding`，
+而 Tailwind preflight 给全局上了 `box-sizing: border-box`，
+**Chromium 在 border-box 下的 `getComputedStyle().height` 返回 border box**
+（我照 CSSOM 判成 content box，实测打脸 —— 是 codex 的诊断对）。
+padding 放父元素上时父高度里含着它、addon 又只扣 `.xterm` 的（那是 0）→ 虚高 20px。
+
+实测（`TERMBOARD_FITPROBE=1`）：`bodyComputedH 340.5 / 真实内容区 320.5 /
+canvas 画到 333.1` → 溢出 12.6px ≈ 0.76 行被 `overflow:hidden` 切掉。
+改完 `+11.5px → −6.1px`（余量不足一个 cell，`floor` 的正常余数）。
+
+顺带记下**当前复现不出来、先不动**的一件：`@xterm/addon-webgl` 0.19 的
+`GlyphRenderer._bindAtlasPageTexture` 调 `gl.generateMipmap`，而整个 addon
+**从没设过 `TEXTURE_MIN_FILTER`** —— WebGL2 默认 `NEAREST_MIPMAP_LINEAR` 会真去
+采样 mip 层，对字形图集就是相邻字形渗色。上游已修（取消 mipmap + 显式 LINEAR）
+排在 7.0。A/B 判据表见 `.claude/codex-runs/render-review.md`。
 
 ## 静默失效的四种形状（2026-07-28 codex 对手方审 diff 逮到的，都出自我自己的改动）
 
