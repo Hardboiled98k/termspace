@@ -52,6 +52,14 @@ function GroupNodeImpl({ id, data }: NodeProps<GroupNodeT>): React.JSX.Element {
      对非仓库显示一个禁用按钮只是噪音。 */
   const [repo, setRepo] = useState<{ repoRoot: string } | null>(null)
   const [wtStat, setWtStat] = useState<{ branch: string | null; dirty: number } | null>(null)
+  /* 改动摘要**按需拉**，不跟着 5s 轮询走：`git diff --numstat` 在大仓库上
+     比 `status --porcelain` 贵得多，而"看改动"是个低频动作。 */
+  const [diff, setDiff] = useState<{
+    files: { path: string; added: number; removed: number; untracked?: boolean }[]
+    added: number
+    removed: number
+    truncated: number
+  } | null>(null)
   const wt = data.worktree
 
   /* 组内终端的 cwd 列表（稳定序列化，当 effect 依赖）。
@@ -175,6 +183,23 @@ function GroupNodeImpl({ id, data }: NodeProps<GroupNodeT>): React.JSX.Element {
       })
     )
     if (migrate) for (const n of existing) void window.termspace.destroy(n.id)
+  }
+
+  const showDiff = async (): Promise<void> => {
+    if (!wt) return
+    if (diff) return setDiff(null) // 再点一次收起
+    const d = await window.termspace.gitDiffSummary(wt.path)
+    setDiff(d ?? { files: [], added: 0, removed: 0, truncated: 0 })
+  }
+
+  const openTree = async (): Promise<void> => {
+    if (!wt) return
+    /* 编辑器名从设置里取；主进程按白名单解析，认不出就在 Finder 里定位。
+       **回退要说出来** —— 用户配了 cursor 却弹出 Finder 时得知道是没找到它。 */
+    const ed = (await window.termspace.getSettings()).editorCommand ?? ''
+    const r = await window.termspace.openInEditor(wt.path, ed)
+    if (!r.ok) window.alert(`打不开：${r.error ?? '未知错误'}`)
+    else if (r.via === 'finder' && ed) window.alert(`没找到「${ed}」，已在 Finder 里定位。`)
   }
 
   const unbindWorktree = (): void => {
@@ -440,6 +465,30 @@ function GroupNodeImpl({ id, data }: NodeProps<GroupNodeT>): React.JSX.Element {
             )}
             {wt && (
               <button
+                className="group-act nodrag"
+                title="看这棵树相对 HEAD 改了什么（含新建的文件）"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  void showDiff()
+                }}
+              >
+                {diff ? '收起' : '看改动'}
+              </button>
+            )}
+            {wt && (
+              <button
+                className="group-act nodrag"
+                title="在编辑器里打开这棵 worktree"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  void openTree()
+                }}
+              >
+                在编辑器打开
+              </button>
+            )}
+            {wt && (
+              <button
                 className="group-act nodrag danger"
                 title="删除磁盘上的这棵 worktree（组里还有终端时不给删；脏树 git 会拒绝，不会 --force）"
                 onClick={(e) => {
@@ -481,7 +530,30 @@ function GroupNodeImpl({ id, data }: NodeProps<GroupNodeT>): React.JSX.Element {
           ✕
         </button>
       </div>
-      {/* 浮在组头**上方**：子终端节点渲染在父组之上，放组内会被整个盖住 */}
+      {/* 改动摘要。**和群发条一样浮在组头上方** —— 子终端渲染在父组之上，
+          放组内会被整个盖住（这条踩过一次）。 */}
+      {diff && (
+        <div className="group-diff nodrag nowheel">
+          <div className="group-diff-head">
+            {diff.files.length
+              ? `${diff.files.length} 个文件 · +${diff.added} −${diff.removed}`
+              : '这棵树是干净的'}
+            {diff.truncated > 0 && ` · 还有 ${diff.truncated} 个没列出`}
+          </div>
+          {diff.files.map((f) => (
+            <div className="group-diff-row" key={f.path}>
+              <span className="group-diff-path">{f.path}</span>
+              {f.untracked ? (
+                <span className="group-diff-new">新建</span>
+              ) : (
+                <span className="group-diff-num">
+                  +{f.added} −{f.removed}
+                </span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
       {bcast !== null && !data.collapsed && (
         <div className="group-bcast nodrag">
           <input

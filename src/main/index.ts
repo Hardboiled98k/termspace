@@ -29,8 +29,10 @@ import {
   probeRepo,
   worktreeStatus,
   createWorktree,
-  removeWorktree
+  removeWorktree,
+  diffSummary
 } from './worktree.ts'
+import { openInEditor, editorNames } from './open-in-editor'
 import { sanitizeImportedWorkspace } from './workspace-import'
 import { createLedger, sortForReview, type Ledger } from './task-ledger'
 import { startRemoteApi, type RemoteApi } from './remote'
@@ -1097,6 +1099,22 @@ ipcMain.handle('git:createWorktree', async (e, repoRoot: unknown, branch: unknow
   }
   return createWorktree(repoRoot, branch)
 })
+/** 一棵树（或任意仓库路径）相对 HEAD 改了什么。只读 */
+ipcMain.handle('git:diffSummary', async (e, p: unknown) => {
+  if (!fromMainWin(e)) return null
+  if (typeof p !== 'string') return null
+  return diffSummary(p)
+})
+
+/* 在编辑器打开。**编辑器名走白名单**（见 open-in-editor.ts）——
+   不然这个"编辑器命令"设置项就是一个任意命令执行入口。 */
+ipcMain.handle('editor:open', async (e, target: unknown, editor: unknown) => {
+  if (!fromMainWin(e)) return { ok: false, error: 'denied' }
+  if (typeof target !== 'string') return { ok: false, error: '参数不合法' }
+  return openInEditor(target, typeof editor === 'string' ? editor : '')
+})
+ipcMain.handle('editor:list', (e) => (fromMainWin(e) ? editorNames() : []))
+
 ipcMain.handle('git:removeWorktree', async (e, p: unknown) => {
   if (!fromMainWin(e)) return { ok: false, error: 'denied' }
   if (typeof p !== 'string') return { ok: false, error: '参数不合法' }

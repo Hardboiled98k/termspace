@@ -198,6 +198,11 @@ const api = {
     ipcRenderer.invoke('git:worktreeStatus', path),
   gitCreateWorktree: (repoRoot: string, branch: string): Promise<unknown> =>
     ipcRenderer.invoke('git:createWorktree', repoRoot, branch),
+  gitDiffSummary: (path: string): Promise<unknown> => ipcRenderer.invoke('git:diffSummary', path),
+  /** 在编辑器打开。编辑器名在主进程走白名单，这里传什么都不会变成命令 */
+  openInEditor: (target: string, editor: string): Promise<{ ok: boolean; via?: string; error?: string }> =>
+    ipcRenderer.invoke('editor:open', target, editor),
+  listEditors: (): Promise<string[]> => ipcRenderer.invoke('editor:list'),
   gitRemoveWorktree: (path: string): Promise<unknown> =>
     ipcRenderer.invoke('git:removeWorktree', path),
   /* 类型直接从主进程的模型引进来。以前这里还写着早已换掉的单账号 Claude payload

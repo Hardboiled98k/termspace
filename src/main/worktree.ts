@@ -283,3 +283,83 @@ export async function removeWorktree(wtPath: string): Promise<{ ok: boolean; err
   const r = await runGit(['worktree', 'remove', wtPath], mainRepo, 30_000)
   return r.ok ? { ok: true } : { ok: false, error: explainGitError(r.stderr) }
 }
+
+/* ─────────────────── diff 摘要 / 在编辑器打开 ─────────────────── */
+
+export interface DiffFile {
+  /** 相对仓库根的路径 */
+  path: string
+  added: number
+  removed: number
+  /** 未跟踪的新文件：numstat 里没有它们，要单独取 */
+  untracked?: boolean
+}
+
+/**
+ * 解析 `git diff --numstat`。
+ *
+ * 格式是 `<新增>\t<删除>\t<路径>`，而**二进制文件那两列是 `-`** ——
+ * 直接 Number() 会得到 NaN，界面上就成了 "NaN 行"。二进制记 0。
+ *
+ * 重命名会写成 `old => new` 或带大括号的紧凑形式，这里只取显示用的那一段：
+ * 摘要要的是"改了哪些文件"，不是精确的重命名追踪。
+ */
+export function parseNumstat(out: string): DiffFile[] {
+  const files: DiffFile[] = []
+  for (const line of out.split('\n')) {
+    const m = /^(\S+)\t(\S+)\t(.+)$/.exec(line.trimEnd())
+    if (!m) continue
+    const num = (v: string): number => (v === '-' ? 0 : Number(v) || 0)
+    /* 重命名有两种写法，**要分开处理**：
+         紧凑式 `src/{old => new}/a.ts` —— 只替换大括号那一段，前后缀要留着
+                （贪婪地砍到最后一个 `=>` 会把 `src/` 也吃掉，得到 `new/a.ts`）
+         整路径式 `x.ts => y.ts` —— 取右边 */
+    let p = m[3].replace(/\{[^{}]*=>\s*([^{}]*)\}/g, '$1')
+    if (p.includes('=>')) p = p.slice(p.lastIndexOf('=>') + 2).trim()
+    files.push({ path: p, added: num(m[1]), removed: num(m[2]) })
+  }
+  return files
+}
+
+/** `git status --porcelain` 里的未跟踪文件（numstat 看不见它们，而新建文件恰恰最需要看见） */
+export function parseUntracked(porcelain: string): string[] {
+  return porcelain
+    .split('\n')
+    .filter((l) => l.startsWith('??'))
+    .map((l) => l.slice(3).trim())
+    .filter(Boolean)
+}
+
+export interface DiffSummary {
+  files: DiffFile[]
+  added: number
+  removed: number
+  /** 文件太多时只返回前 N 个，这里说清楚被截掉了多少 —— 静默截断会读成"就这些" */
+  truncated: number
+}
+
+const DIFF_FILE_CAP = 60
+
+/**
+ * 一棵树（或任意仓库路径）相对 HEAD 的改动摘要。
+ *
+ * **要包含未跟踪文件**：agent 干的活里"新建了什么"往往比"改了什么"更关键，
+ * 而 `git diff` 默认根本看不见它们。
+ */
+export async function diffSummary(wtPath: string): Promise<DiffSummary | null> {
+  if (!wtPath || !existsSync(wtPath)) return null
+  const [num, st] = await Promise.all([
+    runGit(['diff', '--numstat', 'HEAD'], wtPath),
+    runGit(['status', '--porcelain'], wtPath)
+  ])
+  if (!num.ok && !st.ok) return null
+  const files = num.ok ? parseNumstat(num.stdout) : []
+  const untracked = st.ok ? parseUntracked(st.stdout) : []
+  for (const u of untracked) {
+    if (!files.some((f) => f.path === u)) files.push({ path: u, added: 0, removed: 0, untracked: true })
+  }
+  const added = files.reduce((a, f) => a + f.added, 0)
+  const removed = files.reduce((a, f) => a + f.removed, 0)
+  const truncated = Math.max(0, files.length - DIFF_FILE_CAP)
+  return { files: files.slice(0, DIFF_FILE_CAP), added, removed, truncated }
+}

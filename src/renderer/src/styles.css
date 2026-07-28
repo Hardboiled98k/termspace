@@ -2399,3 +2399,47 @@ body {
 .task-meta {
   -webkit-line-clamp: 2;
 }
+
+/* worktree 改动摘要：浮在组头上方（组内会被子终端盖住） */
+.group-diff {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 6px);
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 8px 10px;
+  background: var(--tb-panel-glass);
+  backdrop-filter: blur(20px);
+  border: 0.5px solid var(--tb-hairline-strong);
+  border-radius: var(--tb-radius);
+  box-shadow: var(--tb-shadow-card);
+}
+.group-diff-head {
+  padding-bottom: 6px;
+  font: 500 11px/1 var(--tb-font-ui);
+  color: var(--tb-text);
+}
+.group-diff-row {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 2px 0;
+  font: 400 11px/1.4 var(--tb-font-mono);
+  color: var(--tb-muted);
+}
+.group-diff-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.group-diff-num,
+.group-diff-new {
+  flex: none;
+  font: 400 10px/1.4 var(--tb-font-ui);
+}
+.group-diff-new {
+  color: var(--tb-green);
+}

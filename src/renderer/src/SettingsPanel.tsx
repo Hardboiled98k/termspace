@@ -94,6 +94,8 @@ export function SettingsPanel({
   const [feedDraft, setFeedDraft] = useState<string | null>(null)
   /** 备份区的即时反馈。导出成功却一声不吭，用户不知道文件去哪了 */
   const [backupMsg, setBackupMsg] = useState('')
+  /** 白名单里的编辑器（主进程给，渲染层不自己维护一份 —— 两份必然漂） */
+  const [editors, setEditors] = useState<string[]>([])
 
   useEffect(() => {
     void window.termspace.getSettings().then(setS)
@@ -103,6 +105,7 @@ export function SettingsPanel({
     void window.termspace.remoteStatus().then(setRemote)
     void window.termspace.remoteTokens().then(setTokens)
     void window.termspace.appInfo().then(setInfo)
+    void window.termspace.listEditors().then(setEditors)
     void window.termspace.updateState().then((u) => u && setUpd(u))
     // 光靠开面板时拉一次是不够的：下载进度得能动
     return window.termspace.onUpdateState(setUpd)
@@ -326,6 +329,27 @@ export function SettingsPanel({
                   </span>
                 </div>
               ))}
+
+              <h3 className="settings-h">在编辑器打开</h3>
+              <div className="settings-row">
+                <span>编辑器命令</span>
+                <select
+                  value={s?.editorCommand ?? ''}
+                  onChange={(e) => patch({ editorCommand: e.currentTarget.value })}
+                >
+                  <option value="">不设置（在 Finder 里定位）</option>
+                  {editors.map((n) => (
+                    <option key={n} value={n}>
+                      {n}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <p className="settings-note">
+                组头的「在编辑器打开」用它。**只接受这张表里的名字** ——
+                名字会被主进程解析成绝对路径再执行，不经过 shell，所以这里不是一个
+                能填任意命令的地方。没装那个编辑器时会退回 Finder 并告诉你。
+              </p>
 
               <h3 className="settings-h">数据位置</h3>
               <p className="settings-note">

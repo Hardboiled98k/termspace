@@ -37,6 +37,7 @@ interface AppSettings {
   autoUpdate: boolean
   /** 更新源（存 latest-mac.yml + zip 的 HTTPS 目录）。空 = 没配，更新不工作 */
   updateFeedUrl: string
+  editorCommand: string
 }
 
 /** 更新状态。五档必须能区分 —— 界面据此决定显示什么 */
@@ -313,6 +314,17 @@ interface TermspaceApi {
     branch: string
   ) => Promise<{ ok: boolean; path?: string; error?: string }>
   /** 绝不 --force：脏树删不掉是特性，error 里带 git 的原话 */
+  gitDiffSummary: (path: string) => Promise<{
+    files: { path: string; added: number; removed: number; untracked?: boolean }[]
+    added: number
+    removed: number
+    truncated: number
+  } | null>
+  openInEditor: (
+    target: string,
+    editor: string
+  ) => Promise<{ ok: boolean; via?: string; error?: string }>
+  listEditors: () => Promise<string[]>
   gitRemoveWorktree: (path: string) => Promise<{ ok: boolean; error?: string }>
 }
 

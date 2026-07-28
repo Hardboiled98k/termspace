@@ -56,6 +56,14 @@ export interface Settings {
    * 而第一版里最需要更新的恰恰是新用户。
    */
   updateFeedUrl: string
+  /**
+   * 「在编辑器打开」用哪个命令（`code` / `cursor` / `zed` …）。
+   *
+   * **它进不了 shell**：主进程按白名单把名字解析成绝对路径再 execFile
+   * （见 open-in-editor.ts）。认不出就退回 Finder 定位，并如实告诉用户。
+   * 空 = 一律 Finder。
+   */
+  editorCommand: string
 }
 
 /**
@@ -82,7 +90,8 @@ export const DEFAULTS: Settings = {
   peers: [],
   peerDelegate: false,
   autoUpdate: true,
-  updateFeedUrl: OFFICIAL_FEED
+  updateFeedUrl: OFFICIAL_FEED,
+  editorCommand: ''
 }
 
 const file = (): string => path.join(app.getPath('userData'), 'settings.json')
@@ -137,7 +146,11 @@ function sanitize(s: Settings): Settings {
     remoteBind: s.remoteBind === 'tailscale' ? 'tailscale' : 'loopback',
     claudeHooks: s.claudeHooks === 'on' ? 'on' : s.claudeHooks === 'off' ? 'off' : 'ask',
     skillDirs: Array.isArray(s.skillDirs) ? s.skillDirs.filter((d) => typeof d === 'string') : [],
-    defaultShell: typeof s.defaultShell === 'string' ? s.defaultShell : ''
+    defaultShell: typeof s.defaultShell === 'string' ? s.defaultShell : '',
+    /* 只留字母数字：它是白名单的**键**，脏值反正查不到表，
+       但把长度和字符集卡住可以让日志和界面不至于出现一整条命令行 */
+    editorCommand:
+      typeof s.editorCommand === 'string' ? s.editorCommand.trim().slice(0, 20).replace(/[^A-Za-z0-9_-]/g, '') : ''
   }
 }
 
