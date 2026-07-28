@@ -7,7 +7,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { materializeEnv } from '../src/main/identity-env.ts'
+import { isReservedEnvKey, materializeEnv, materializeEnvOps } from '../src/main/identity-env.ts'
 
 const HOME = '/Users/me'
 
@@ -63,4 +63,55 @@ test('正常的凭证键不受影响', () => {
   const r = materializeEnv({ CODEX_HOME: '~/.codex-b', OPENAI_API_KEY: '' }, '/Users/x')
   assert.equal(r.set['CODEX_HOME'], '/Users/x/.codex-b')
   assert.deepEqual(r.unset, ['OPENAI_API_KEY'])
+})
+
+test('每一个可导致启动时执行代码的危险键都被拒绝', () => {
+  const dangerous = [
+    'DYLD_INSERT_LIBRARIES',
+    'DYLD_LIBRARY_PATH',
+    'LD_PRELOAD',
+    'LD_LIBRARY_PATH',
+    'NODE_OPTIONS',
+    'BASH_ENV',
+    'ENV',
+    'ZDOTDIR',
+    'PROMPT_COMMAND',
+    'SSH_ASKPASS',
+    'GIT_SSH_COMMAND',
+    'PERL5OPT',
+    'PYTHONSTARTUP'
+  ]
+  for (const key of dangerous) {
+    assert.equal(isReservedEnvKey(key), true, `${key} 若放行，凭证绑定即可变成代码执行入口`)
+    const r = materializeEnvOps([{ key, action: 'set', value: '/tmp/payload' }], HOME)
+    assert.deepEqual(r, { set: {}, unset: [] }, `${key} 不得进入最终环境操作`)
+  }
+})
+
+test('TERMBOARD_* 仍然逐项拒绝 set 与 unset', () => {
+  for (const key of ['TERMBOARD_NODE_ID', 'TERMBOARD_HOOK_TOKEN', 'TERMBOARD_HOOK_ENDPOINT']) {
+    assert.equal(isReservedEnvKey(key), true)
+    assert.deepEqual(
+      materializeEnvOps(
+        [
+          { key, action: 'set', value: 'x' },
+          { key, action: 'unset' }
+        ],
+        HOME
+      ),
+      { set: {}, unset: [] }
+    )
+  }
+})
+
+test('结构化 envOps 会分别展开 ~/x 与 $HOME/x 为绝对路径', () => {
+  const r = materializeEnvOps(
+    [
+      { key: 'CODEX_HOME', action: 'set', value: '~/x' },
+      { key: 'CLAUDE_CONFIG_DIR', action: 'set', value: '$HOME/x' }
+    ],
+    '/Users/newbie'
+  )
+  assert.equal(r.set['CODEX_HOME'], '/Users/newbie/x')
+  assert.equal(r.set['CLAUDE_CONFIG_DIR'], '/Users/newbie/x')
 })

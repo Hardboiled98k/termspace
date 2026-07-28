@@ -60,6 +60,7 @@ import {
   IconHand,
   IconCursor
 } from './Icons'
+import { PROVIDERS } from '../../shared/provider-manifest'
 
 
 /** 挂起中的工具审批（Claude PermissionRequest hook，主进程把那次 HTTP 请求挂着等决定） */
@@ -546,7 +547,9 @@ function IdentityPanel({
   identities,
   onChanged,
   usageOf,
-  onDeleted
+  onDeleted,
+  onOpenIdentity,
+  onOpenSystem
 }: {
   identities: IdentityMeta[]
   onChanged: (list: IdentityMeta[]) => void
@@ -554,48 +557,89 @@ function IdentityPanel({
   usageOf: (id: string) => { terminals: number; nodes: number; presets: number }
   /** 删库**之前**先撤销画布上的引用（关会话、清 identityId、删凭证节点和线） */
   onDeleted: (id: string) => Promise<void>
+  /** 新建隔离账号后，只开绑定好的普通 shell；绝不自动执行 login。 */
+  onOpenIdentity: (id: string, provider: IdentityMeta['provider'], name: string) => void
+  onOpenSystem: (provider: IdentityMeta['provider'], name: string) => void
 }): React.JSX.Element {
+  type Mode = 'closed' | 'menu' | 'system' | 'subscription' | 'api' | 'advanced'
+  type EditAction = 'set' | 'unset' | 'retain' | 'replace' | 'delete'
+  type Row = { key: string; action: EditAction; value: string }
+  const [mode, setMode] = useState<Mode>('closed')
   const [name, setName] = useState('')
-  const [provider, setProvider] = useState<IdentityMeta['provider']>('claude')
-  const [envText, setEnvText] = useState('')
+  const [provider, setProvider] = useState<IdentityMeta['provider']>('codex')
+  const [rows, setRows] = useState<Row[]>([{ key: '', action: 'set', value: '' }])
+  const [editingId, setEditingId] = useState<string>()
+  const [presentVars, setPresentVars] = useState<string[]>([])
   const [error, setError] = useState('')
 
-  /* 一键模板：多订阅账号是这个面板最主要的用途，但没人会自己想到
-     「原来隔离靠的是 CODEX_HOME」。实测过：换目录后 `codex login status`
-     确实报 Not logged in，两个号互不相干。
-     末尾那条空值是**删掉**继承来的 API key —— 不删的话 CLI 会优先走按量计费，
-     订阅号白开，而且账单不吭声。 */
-  const fillTemplate = (kind: 'codex' | 'claude'): void => {
-    const n = (identities.filter((i) => i.provider === kind).length + 1).toString()
-    setProvider(kind)
-    setName(`${kind === 'codex' ? 'Codex' : 'Claude'} 订阅号 ${n}`)
-    setEnvText(
-      kind === 'codex'
-        ? `CODEX_HOME=~/.codex-acct${n}\nOPENAI_API_KEY=`
-        : `CLAUDE_CONFIG_DIR=~/.claude-acct${n}\nANTHROPIC_API_KEY=`
-    )
+  const selectedSpec = PROVIDERS.find((p) => p.id === provider)
+
+  useEffect(() => {
+    const keys = selectedSpec?.conflictVariables ?? []
+    void window.termspace.identityEnvPresence(keys).then(setPresentVars)
+  }, [provider, selectedSpec])
+
+  const resetForm = (): void => {
+    setName('')
+    setRows([{ key: '', action: 'set', value: '' }])
+    setEditingId(undefined)
+    setError('')
+    setMode('closed')
   }
 
-  const save = async (): Promise<void> => {
-    const env: Record<string, string> = {}
-    for (const line of envText.split('\n')) {
-      const t = line.trim()
-      if (!t || t.startsWith('#')) continue
-      const eq = t.indexOf('=')
-      if (eq <= 0) continue
-      env[t.slice(0, eq).trim()] = t.slice(eq + 1).trim()
+  const saveRows = async (): Promise<void> => {
+    const envOps = rows
+      .filter((r) => r.key.trim())
+      .map((r) =>
+        r.action === 'set' || r.action === 'replace'
+          ? { key: r.key.trim(), action: r.action, value: r.value }
+          : { key: r.key.trim(), action: r.action }
+      )
+    if (!name.trim() || envOps.length === 0) {
+      setError('请填写名称和至少一项环境操作')
+      return
     }
-    if (!name.trim() || Object.keys(env).length === 0) {
-      setError('名称和至少一条 KEY=VALUE 必填')
+    if (envOps.some((op) => (op.action === 'set' || op.action === 'replace') && !('value' in op && op.value))) {
+      setError('“设置新值/替换”必须填写值')
       return
     }
     try {
-      onChanged(await window.termspace.upsertIdentity({ name, provider, env }))
-      setName('')
-      setEnvText('')
-      setError('')
-    } catch {
-      setError('保存失败（系统加密不可用？）')
+      onChanged(await window.termspace.upsertIdentity({ id: editingId, name, provider, envOps }))
+      resetForm()
+    } catch (e) {
+      setError((e as Error).message || '保存失败')
+    }
+  }
+
+  const saveApiKey = async (): Promise<void> => {
+    if (!selectedSpec) return
+    const envOps = selectedSpec.fields
+      .map((field) => {
+        const row = rows.find((r) => r.key === field.envKey)
+        return row?.value ? { key: field.envKey, action: 'set' as const, value: row.value } : null
+      })
+      .filter((x): x is { key: string; action: 'set'; value: string } => !!x)
+    if (!name.trim() || !envOps.some((op) => selectedSpec.fields.find((f) => f.envKey === op.key)?.secret)) {
+      setError('请填写名称和 API key')
+      return
+    }
+    try {
+      onChanged(await window.termspace.upsertIdentity({ name, provider, envOps }))
+      resetForm()
+    } catch (e) {
+      setError((e as Error).message || '保存失败')
+    }
+  }
+
+  const createSubscription = async (): Promise<void> => {
+    try {
+      const result = await window.termspace.createSubscriptionIdentity({ provider, name })
+      onChanged(result.list)
+      const created = result.list.find((i) => i.id === result.id)
+      onOpenIdentity(result.id, provider, created?.name ?? (name || provider))
+      resetForm()
+    } catch (e) {
+      setError((e as Error).message || '创建失败')
     }
   }
 
@@ -607,7 +651,7 @@ function IdentityPanel({
           {identities.map((i) => (
             <div key={i.id} className="identity-row">
               <span className={`identity-provider ${i.provider}`}>{i.provider}</span>
-              {/* 就地改名。以前只能删了重建 —— 而 env 值渲染层拿不到（只有 envKeys），
+              {/* 就地改名。以前只能删了重建 —— 而 env 值渲染层只拿得到 key/action，
                   重建就得把所有密钥重新输一遍，等于根本不能改名。 */}
               <input
                 className="identity-name-edit"
@@ -625,7 +669,21 @@ function IdentityPanel({
                   onChanged(await window.termspace.renameIdentity(i.id, v))
                 }}
               />
-              <span className="identity-keys">{i.envKeys.join(' · ')}</span>
+              <span className="identity-keys">
+                {i.envOps.map((op) => `${op.key}：${op.action === 'unset' ? '移除' : '已设置'}`).join(' · ')}
+              </span>
+              <button
+                className="identity-del"
+                onClick={() => {
+                  setEditingId(i.id)
+                  setName(i.name)
+                  setProvider(i.provider)
+                  setRows(i.envOps.map((op) => ({ key: op.key, action: 'retain', value: '' })))
+                  setMode('advanced')
+                }}
+              >
+                编辑
+              </button>
               <button
                 className="identity-del"
                 onClick={async () => {
@@ -652,64 +710,160 @@ function IdentityPanel({
           ))}
         </div>
         <div className="identity-form">
-          <div className="identity-form-row">
-            <button className="toolbar-btn" onClick={() => fillTemplate('codex')}>
-              ＋ Codex 订阅号
+          {mode === 'closed' && (
+            <button className="toolbar-btn identity-add-main" onClick={() => setMode('menu')}>
+              添加账号或密钥
             </button>
-            <button className="toolbar-btn" onClick={() => fillTemplate('claude')}>
-              ＋ Claude 订阅号
-            </button>
-          </div>
-          <p className="settings-note">
-            <b>同一台机器上挂多个订阅账号</b>：codex 认 <code>CODEX_HOME</code>、claude 认{' '}
-            <code>CLAUDE_CONFIG_DIR</code>，各指一个目录就是各自独立的登录态 ——
-            两个终端节点跑同一条 <code>codex</code> 命令，登的是两个号。
-            <br />
-            流程：上面点模板 → 保存 → 在节点的凭证下拉里选它（会重开会话）→
-            在那个终端里跑一次 <code>codex login</code>（claude 则是 <code>/login</code>）。
-            以后这个节点一直是这个号。
-            <br />
-            写 <code>KEY=</code>（等号后留空）表示<b>删掉</b>继承来的变量。模板里默认删
-            <code> OPENAI_API_KEY</code> / <code>ANTHROPIC_API_KEY</code> —— 你的 shell 里
-            export 过的话，CLI 会优先走按量计费，订阅号等于白开且账单不吭声。
-            值支持 <code>~/</code> 与 <code>$HOME/</code> 开头（env 不过 shell，不展开会
-            真的建一个叫 <code>~</code> 的目录）。
-            <br />
-            {/* **别把这条省掉**。画布上「拉一根线到终端」的视觉语言很容易被理解成
-                "agent 用得到但看不到 key" —— 而任意 CLI 的凭证是以环境变量注入的，
-                做不到知情/使用分离。说不清楚的话，用户会按一个不存在的边界做决定。 */}
-            <b>凭证是注入到那个终端的环境变量，里面的 agent 读得到它</b>
-            （连线只决定「用哪个账号」，不是「用得到但看不见」）。
-            所以别把不该给某个 agent 的密钥连到它身上。
-          </p>
-          <div className="identity-form-row">
-            <input
-              placeholder="名称（留空自动叫 codex1 / claude2…）"
-              value={name}
-              onChange={(e) => setName(e.currentTarget.value)}
-            />
-            <select
-              value={provider}
-              onChange={(e) => setProvider(e.currentTarget.value as IdentityMeta['provider'])}
-            >
-              <option value="claude">claude</option>
-              <option value="codex">codex</option>
-              <option value="gemini">gemini</option>
-              <option value="custom">custom</option>
-            </select>
-          </div>
-          <textarea
-            rows={4}
-            placeholder={
-              '每行一条 KEY=VALUE，例如\nCODEX_HOME=~/.codex-work\nOPENAI_API_KEY=   ← 留空 = 删掉这个变量'
-            }
-            value={envText}
-            onChange={(e) => setEnvText(e.currentTarget.value)}
-          />
+          )}
+          {mode === 'menu' ? (
+            <>
+              <div className="identity-choice-title">你想做什么？</div>
+              <button className="identity-choice" onClick={() => {
+                setProvider('codex')
+                setMode('system')
+              }}>
+                使用这台机器已登录的账号 <b>推荐</b>
+              </button>
+              <button className="identity-choice" onClick={() => {
+                setProvider('codex')
+                setMode('subscription')
+              }}>
+                登录另一个订阅账号
+              </button>
+              <button className="identity-choice" onClick={() => {
+                setProvider('codex')
+                setRows([{ key: 'OPENAI_API_KEY', action: 'set', value: '' }])
+                setMode('api')
+              }}>
+                添加 API key
+              </button>
+              <button className="identity-choice" onClick={() => {
+                setProvider('custom')
+                setMode('advanced')
+              }}>
+                高级：自定义环境变量
+              </button>
+            </>
+          ) : mode !== 'closed' ? (
+            <button className="identity-back" onClick={resetForm}>← 返回四种添加方式</button>
+          ) : null}
+
+          {mode === 'system' && (
+            <>
+              <div className="identity-form-row">
+                <select value={provider} onChange={(e) => setProvider(e.currentTarget.value as IdentityMeta['provider'])}>
+                  {PROVIDERS.filter((p) => p.authModes.includes('system')).map((p) => (
+                    <option key={p.id} value={p.id}>{p.displayName}</option>
+                  ))}
+                </select>
+              </div>
+              <p className="settings-note">
+                Termspace 使用自动发现到的系统登录状态，不读取或复制登录令牌。
+                Copilot、Cursor 和 Antigravity 的系统登录只能共享。
+              </p>
+              <button className="toolbar-btn" onClick={() => {
+                const spec = PROVIDERS.find((p) => p.id === provider)
+                onOpenSystem(provider, `${spec?.displayName ?? provider} · 系统账号`)
+                resetForm()
+              }}>用新终端打开</button>
+            </>
+          )}
+
+          {mode === 'subscription' && (
+            <>
+              <div className="identity-form-row">
+                <select value={provider} onChange={(e) => setProvider(e.currentTarget.value as IdentityMeta['provider'])}>
+                  {PROVIDERS.filter((p) => p.authModes.includes('isolated-subscription')).map((p) => (
+                    <option key={p.id} value={p.id}>{p.displayName}</option>
+                  ))}
+                </select>
+                <input placeholder="给账号起个名字（可选）" value={name} onChange={(e) => setName(e.currentTarget.value)} />
+              </div>
+              <div className="identity-safe-copy">✓ 使用独立登录空间（目录由 Termspace 自动生成）</div>
+              <div className="identity-safe-copy">✓ 防止意外按 API 计费 —— 此账号会移除终端继承的 {selectedSpec?.conflictVariables[0]}</div>
+              {presentVars.length > 0 && <div className="identity-warning">⚠ 检测到父环境含 {presentVars.join('、')}。这里只显示存在性，不读取值。</div>}
+              {/* **必须写出具体命令**。只说"运行该 CLI 的 login"等于把认知成本
+                  全留给用户，而各家形状根本不一样、猜不到：
+                  claude 的登录是进 TUI 之后的斜杠命令、不是 shell 命令；
+                  gemini / antigravity 压根没有 login 子命令。
+                  这是 codex 自己在交付报告里点出的缺口。 */}
+              <p className="settings-note">
+                会创建并打开一个绑定此账号的新终端。Termspace <b>不会</b>自动执行登录 —— 在那个终端里敲：
+              </p>
+              <div className="identity-login-cmd">{selectedSpec?.loginHint}</div>
+              <button className="toolbar-btn" onClick={() => void createSubscription()}>创建并打开登录终端</button>
+            </>
+          )}
+
+          {mode === 'api' && (
+            <>
+              <div className="identity-form-row">
+                <select value={provider} onChange={(e) => {
+                  const next = e.currentTarget.value as IdentityMeta['provider']
+                  setProvider(next)
+                  const spec = PROVIDERS.find((p) => p.id === next)
+                  setRows((spec?.fields ?? []).map((f) => ({ key: f.envKey, action: 'set', value: '' })))
+                }}>
+                  {PROVIDERS.filter((p) => p.authModes.includes('api-key')).map((p) => (
+                    <option key={p.id} value={p.id}>{p.displayName}</option>
+                  ))}
+                  <option value="custom">自定义服务</option>
+                </select>
+                <input placeholder="名称" value={name} onChange={(e) => setName(e.currentTarget.value)} />
+              </div>
+              {(selectedSpec?.fields ?? []).map((field) => (
+                <input
+                  key={field.envKey}
+                  type={field.secret ? 'password' : 'text'}
+                  placeholder={field.label}
+                  value={rows.find((r) => r.key === field.envKey)?.value ?? ''}
+                  onChange={(e) => setRows((old) => [
+                    ...old.filter((r) => r.key !== field.envKey),
+                    { key: field.envKey, action: 'set', value: e.currentTarget.value }
+                  ])}
+                />
+              ))}
+              {provider === 'custom' && <button className="toolbar-btn" onClick={() => setMode('advanced')}>填写自定义服务变量</button>}
+              <div className="identity-danger-copy">这把 key 会注入整个终端会话，其中运行的命令和 agent 都能读取它。</div>
+              <button className="toolbar-btn" disabled={provider === 'custom'} onClick={() => void saveApiKey()}>保存 API key</button>
+            </>
+          )}
+
+          {mode === 'advanced' && (
+            <>
+              <div className="identity-form-row">
+                <input placeholder="名称" value={name} onChange={(e) => setName(e.currentTarget.value)} />
+                <select value={provider} onChange={(e) => setProvider(e.currentTarget.value as IdentityMeta['provider'])}>
+                  {PROVIDERS.map((p) => <option key={p.id} value={p.id}>{p.displayName}</option>)}
+                  <option value="custom">自定义服务</option>
+                </select>
+              </div>
+              {rows.map((row, index) => (
+                <div className="identity-op-row" key={`${index}-${row.key}`}>
+                  <input placeholder="变量名，例如 MY_API_KEY" value={row.key} disabled={!!editingId} onChange={(e) => setRows((old) => old.map((r, n) => n === index ? { ...r, key: e.currentTarget.value } : r))} />
+                  <select value={row.action} onChange={(e) => setRows((old) => old.map((r, n) => n === index ? { ...r, action: e.currentTarget.value as EditAction, value: '' } : r))}>
+                    {editingId ? (
+                      <>
+                        <option value="retain">保留原值</option>
+                        <option value="replace">替换</option>
+                        <option value="delete">删除这项</option>
+                      </>
+                    ) : (
+                      <>
+                        <option value="set">设置</option>
+                        <option value="unset">从终端移除</option>
+                      </>
+                    )}
+                  </select>
+                  {(row.action === 'set' || row.action === 'replace') && <input type="password" placeholder="新值" value={row.value} onChange={(e) => setRows((old) => old.map((r, n) => n === index ? { ...r, value: e.currentTarget.value } : r))} />}
+                </div>
+              ))}
+              {!editingId && <button className="identity-back" onClick={() => setRows((r) => [...r, { key: '', action: 'set', value: '' }])}>＋ 添加变量</button>}
+              <div className="identity-danger-copy">这些值会注入整个终端会话，其中运行的命令和 agent 都能读取它们。危险的启动注入变量会被主进程拒绝。</div>
+              <button className="toolbar-btn" onClick={() => void saveRows()}>{editingId ? '保存修改' : '保存自定义凭证'}</button>
+            </>
+          )}
           {error && <div className="identity-error">{error}</div>}
-          <button className="toolbar-btn" onClick={() => void save()}>
-            保存凭证（Keychain 加密）
-          </button>
         </div>
     </div>
   )
@@ -2078,6 +2232,23 @@ function Board(): React.JSX.Element {
                 onChanged={setIdentities}
                 usageOf={identityUsage}
                 onDeleted={revokeIdentityEverywhere}
+                onOpenIdentity={(id, provider, identityName) =>
+                  addTerminal({
+                    id: `identity-${id}`,
+                    name: identityName,
+                    provider,
+                    command: '',
+                    identityId: id
+                  })
+                }
+                onOpenSystem={(provider, identityName) =>
+                  addTerminal({
+                    id: `system-${provider}`,
+                    name: identityName,
+                    provider,
+                    command: ''
+                  })
+                }
               />
             )}
             /* 导出取的是内存里的实时状态，不是磁盘那份 —— 磁盘那份最多落后一个 500ms 防抖周期，

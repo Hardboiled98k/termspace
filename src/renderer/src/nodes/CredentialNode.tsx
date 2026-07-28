@@ -16,7 +16,7 @@ import { useZoom, FAR_ZOOM, FarChip } from './FarChip'
  *    所以这里显示登录态 —— 未登录直接写"去终端里跑 codex login"。
  * 2. **换凭证会杀掉会话重开**（identityId 变更即 destroy + respawn），
  *    所以连线动作在 App 那边会先确认，不是拉一下就默默重启用户的活。
- * 3. **绝不显示 env 值**。渲染层本来就只拿得到 envKeys，这里也只列键名。
+ * 3. **绝不显示 env 值**。渲染层本来就只拿得到 envOps 的 key/action。
  */
 export type CredentialNodeType = Node<
   { identityId?: string; title?: string },
@@ -91,13 +91,13 @@ export function CredentialNode({ data, selected }: NodeProps<CredentialNodeType>
           {login.home.replace(/^\/Users\/[^/]+/, '~')}
         </div>
       )}
-      {me && me.envKeys.length > 0 && (
+      {me && me.envOps.length > 0 && (
         /* 只列键名。值在主进程里加密存着，渲染层根本拿不到 —— 别改成显示值。
            title 里那句话不能省：画布上「拉一根线」的视觉语言很容易被读成
            "agent 用得到但看不到 key"，而这些值是以环境变量注入的，
            那个终端里的 agent 读得到。说不清楚 = 用户按一个不存在的边界做决定。 */
         <div className="cred-keys" title="这些变量会注入连过来的终端，里面的 agent 读得到它们的值">
-          {me.envKeys.join(' · ')}
+          {me.envOps.map((op) => op.key).join(' · ')}
         </div>
       )}
       {state === 'out' && (

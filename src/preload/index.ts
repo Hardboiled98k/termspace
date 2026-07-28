@@ -185,6 +185,10 @@ const api = {
   listIdentities: (): Promise<unknown> => ipcRenderer.invoke('identity:list'),
   upsertIdentity: (input: unknown): Promise<unknown> =>
     ipcRenderer.invoke('identity:upsert', input),
+  createSubscriptionIdentity: (input: unknown): Promise<unknown> =>
+    ipcRenderer.invoke('identity:createSubscription', input),
+  identityEnvPresence: (keys: string[]): Promise<string[]> =>
+    ipcRenderer.invoke('identity:envPresence', keys),
   deleteIdentity: (id: string): Promise<unknown> => ipcRenderer.invoke('identity:delete', id),
   renameIdentity: (id: string, name: string): Promise<unknown> =>
     ipcRenderer.invoke('identity:rename', id, name),

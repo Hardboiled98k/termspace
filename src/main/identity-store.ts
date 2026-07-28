@@ -3,7 +3,7 @@
  * 密文落盘 userData/identities.bin；明文只在内存；渲染层只拿元数据（不含 env 值）
  */
 import { app, safeStorage } from 'electron'
-import { readFile, writeFile, rename, unlink } from 'node:fs/promises'
+import { readFile, writeFile, rename, unlink, copyFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { execFile } from 'node:child_process'
@@ -12,20 +12,32 @@ import {
   applyIdentityEnv,
   billingKind,
   isReservedEnvKey,
-  materializeEnv,
+  materializeEnvOps,
   type ResolvedEnv
 } from './identity-env'
+import {
+  identityMeta,
+  migrateIdentity,
+  type EnvOp,
+  type StoredIdentity
+} from './identity-model.ts'
 import { parseClaudeAuth, parseCodexLogin, type LoginStatus } from './login-status.ts'
 
 // 展开规则搬到 identity-env.ts（不依赖 electron，才能被 node --test 覆盖）
 export { materializeEnv } from './identity-env'
 export type { ResolvedEnv } from './identity-env'
 
-export interface Identity {
-  id: string
-  name: string
-  provider: 'claude' | 'codex' | 'gemini' | 'custom'
-  env: Record<string, string>
+export type IdentityProvider =
+  | 'claude'
+  | 'codex'
+  | 'gemini'
+  | 'copilot'
+  | 'cursor'
+  | 'antigravity'
+  | 'openrouter'
+  | 'custom'
+export interface Identity extends StoredIdentity {
+  provider: IdentityProvider
 }
 
 /** 渲染层可见的元数据：绝不含 env 值 */
@@ -33,8 +45,13 @@ export interface IdentityMeta {
   id: string
   name: string
   provider: Identity['provider']
-  envKeys: string[]
+  envOps: { key: string; action: EnvOp['action'] }[]
 }
+
+export type EnvEditOp =
+  | EnvOp
+  | { key: string; action: 'retain' | 'delete' }
+  | { key: string; action: 'replace'; value: string }
 
 const file = (): string => path.join(app.getPath('userData'), 'identities.bin')
 
@@ -60,8 +77,29 @@ async function load(): Promise<Identity[]> {
     const buf = await readFile(file())
     const parsed = JSON.parse(safeStorage.decryptString(buf)) as unknown
     if (!Array.isArray(parsed)) throw new Error('不是数组')
-    cache = parsed as Identity[]
     readError = null
+    const needsMigration = parsed.some(
+      (item) =>
+        !!item &&
+        typeof item === 'object' &&
+        'env' in item &&
+        !Array.isArray((item as { envOps?: unknown }).envOps)
+    )
+    cache = parsed.map((item) => migrateIdentity(item) as Identity)
+    // 不是只在内存里“兼容读取”：成功解密后立刻把旧格式原子重写成 envOps。
+    // 这样下一版删掉兼容分支时，空串=unset 的历史语义也不会漂移。
+    if (needsMigration) {
+      /* **重写前留一份原始密文**。这是对用户真实凭证的**单向**格式转换：
+         `""` 的语义（删掉这个变量，防订阅号被 API key 顶走）迁错一次，
+         用户不会看到报错，只会在月底账单上看到。
+         项目对 workspace.json 已有同一条判据（tmp+rename + .bak + 损坏隔离），
+         凭证比画布更值钱，没理由反而没有退路。
+         备份失败**不阻断迁移** —— 迁移本身是对的，备份只是保险。 */
+      await copyFile(file(), `${file()}.pre-envops.bak`).catch((err) =>
+        console.error('凭证迁移前的备份没写成（迁移继续）：', err)
+      )
+      await persist(cache)
+    }
   } catch (e) {
     // **绝不 cache=[]**：那会让后续任何一次写入把整库抹平
     readError = String((e as Error)?.message ?? e)
@@ -106,12 +144,7 @@ async function persist(list: Identity[]): Promise<void> {
   cache = list
 }
 
-const toMeta = (i: Identity): IdentityMeta => ({
-  id: i.id,
-  name: i.name,
-  provider: i.provider,
-  envKeys: Object.keys(i.env)
-})
+const toMeta = (i: Identity): IdentityMeta => identityMeta(i) as IdentityMeta
 
 export async function listIdentities(): Promise<IdentityMeta[]> {
   return (await load()).map(toMeta)
@@ -121,15 +154,28 @@ async function upsertIdentityInner(input: {
   id?: string
   name: string
   provider: Identity['provider']
-  env: Record<string, string>
+  envOps: EnvEditOp[]
 }): Promise<IdentityMeta[]> {
   const list = await load()
-  const env: Record<string, string> = {}
-  for (const [k, v] of Object.entries(input.env)) {
-    const key = k.trim()
+  const current = input.id ? list.find((i) => i.id === input.id) : undefined
+  const oldByKey = new Map(current?.envOps.map((op) => [op.key, op]) ?? [])
+  const envOps: EnvOp[] = []
+  for (const op of input.envOps) {
+    const key = op.key.trim()
     // 保留键（TERMBOARD_* / PATH / TMUX…）连存都不让存：见 identity-env.ts 的 RESERVED
-    if (isReservedEnvKey(key)) continue
-    if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) && typeof v === 'string') env[key] = v
+    if (isReservedEnvKey(key)) throw new Error(`不允许把危险环境变量 ${key} 保存为凭证`)
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) throw new Error(`环境变量名无效：${key}`)
+    if (op.action === 'delete') continue
+    if (op.action === 'retain') {
+      const old = oldByKey.get(key)
+      if (old) envOps.push(old)
+    } else if (op.action === 'unset') envOps.push({ key, action: 'unset' })
+    else if (op.action === 'set' || op.action === 'replace') {
+      if (typeof op.value !== 'string' || !op.value) {
+        throw new Error(`设置 ${key} 时必须提供新值`)
+      }
+      envOps.push({ key, action: 'set', value: op.value })
+    }
   }
   /* 没起名就按 provider 自动编号：codex1 / codex2…
      「未命名」在有多个订阅号时完全没法区分，等于逼用户每次都想名字。 */
@@ -147,9 +193,9 @@ async function upsertIdentityInner(input: {
   if (existing) {
     existing.name = name
     existing.provider = input.provider
-    existing.env = env
+    existing.envOps = envOps
   } else {
-    next.push({ id: randomUUID(), name, provider: input.provider, env })
+    next.push({ id: randomUUID(), name, provider: input.provider, envOps })
   }
   await persist(next)
   return next.map(toMeta)
@@ -159,7 +205,7 @@ async function upsertIdentityInner(input: {
  * 只改名，不动 env。
  *
  * 单独一个入口是因为 upsert 会用传进来的 env 整体替换 —— 而渲染层**拿不到 env 值**
- * （只有 envKeys），想改名就必须重新输一遍全部密钥，等于不能改名。
+ * （只有 envOps 的 key/action），想改名就必须重新输一遍全部密钥，等于不能改名。
  */
 async function renameIdentityInner(id: string, name: string): Promise<IdentityMeta[]> {
   const list = (await load()).map((i) => ({ ...i }))
@@ -209,7 +255,7 @@ const findBin = (name: string): string | null =>
 export async function identityLoginStatus(id: string): Promise<LoginStatus> {
   const found = (await load()).find((i) => i.id === id)
   if (!found) return { state: 'unknown', detail: '凭证不存在' }
-  const resolved = materializeEnv(found.env, app.getPath('home'))
+  const resolved = materializeEnvOps(found.envOps, app.getPath('home'))
   const { set } = resolved
   /* **必须带上 unset**：订阅型凭证配了 `ANTHROPIC_API_KEY=` 时终端里那把 key 是删掉的，
      这里若只合并 set，查出来会是 `api_key` → 界面显示「按量计费」，
@@ -267,5 +313,5 @@ export async function identityLoginStatus(id: string): Promise<LoginStatus> {
 export async function resolveIdentityEnv(id: string | undefined): Promise<ResolvedEnv | null> {
   if (!id) return null
   const found = (await load()).find((i) => i.id === id)
-  return found ? materializeEnv(found.env, app.getPath('home')) : null
+  return found ? materializeEnvOps(found.envOps, app.getPath('home')) : null
 }

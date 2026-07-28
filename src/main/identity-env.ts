@@ -12,6 +12,8 @@ export interface ResolvedEnv {
   unset: string[]
 }
 
+import type { EnvOp } from './identity-model.ts'
+
 /**
  * 两条语义，都是为了「同一台机器上开两个订阅账号」这个场景：
  *
@@ -39,9 +41,11 @@ export interface ResolvedEnv {
  * 所以堵在这个唯一收口：set 和 unset 一起挡，凭证存进来和取出去都过这里。
  */
 const RESERVED = /^(TERMBOARD_|PATH$|TMUX$|TMUX_PANE$|TERM$|SHELL$|HOME$)/
+const DANGEROUS =
+  /^(DYLD_|LD_|NODE_OPTIONS$|BASH_ENV$|ENV$|ZDOTDIR$|PROMPT_COMMAND$|SSH_ASKPASS$|GIT_SSH_COMMAND$|PERL5OPT$|PYTHONSTARTUP$)/
 
 /** 这个键能不能出现在凭证里 */
-export const isReservedEnvKey = (k: string): boolean => RESERVED.test(k)
+export const isReservedEnvKey = (k: string): boolean => RESERVED.test(k) || DANGEROUS.test(k)
 
 /**
  * 把一个 identity 的 env 包应用到基础环境上。**set 和 unset 必须一起用**。
@@ -64,15 +68,26 @@ export function applyIdentityEnv(
 }
 
 export function materializeEnv(raw: Record<string, string>, home: string): ResolvedEnv {
+  return materializeEnvOps(
+    Object.entries(raw).map(([key, value]): EnvOp =>
+      value === '' ? { key, action: 'unset' } : { key, action: 'set', value }
+    ),
+    home
+  )
+}
+
+export function materializeEnvOps(ops: EnvOp[], home: string): ResolvedEnv {
   const set: Record<string, string> = {}
   const unset: string[] = []
-  for (const [k, v] of Object.entries(raw)) {
+  for (const op of ops) {
+    const k = op.key
     // 保留键一律丢弃：删掉它们等于让这个节点静默失能
     if (isReservedEnvKey(k)) continue
-    if (v === '') {
+    if (op.action === 'unset') {
       unset.push(k)
       continue
     }
+    const v = op.value
     set[k] = v.startsWith('~/')
       ? `${home}/${v.slice(2)}`
       : v.startsWith('$HOME/')

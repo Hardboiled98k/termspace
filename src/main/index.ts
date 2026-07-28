@@ -22,6 +22,7 @@ import {
   identityLoginStatus,
   resolveIdentityEnv
 } from './identity-store'
+import { PROVIDERS } from '../shared/provider-manifest.ts'
 import { listPresets, upsertPreset, deletePreset } from './preset-store'
 import { startWorkerWatch, workerAction, resolveCdx, type WorkerWatch } from './worker-watch'
 import { execFile } from 'node:child_process'
@@ -1376,6 +1377,51 @@ ipcMain.handle('identity:list', (e) => (fromMainWin(e) ? listIdentities() : []))
 ipcMain.handle('identity:upsert', async (e, input: Parameters<typeof upsertIdentity>[0]) =>
   fromMainWin(e) ? afterIdentityChange(await upsertIdentity(input)) : []
 )
+ipcMain.handle(
+  'identity:createSubscription',
+  async (e, input: { provider?: unknown; name?: unknown }) => {
+    if (!fromMainWin(e)) return null
+    const provider = String(input?.provider ?? '')
+    const spec = PROVIDERS.find(
+      (p) => p.id === provider && p.authModes.includes('isolated-subscription')
+    )
+    if (!spec || spec.isolationCapability !== 'directory') {
+      throw new Error('这个工具不支持可靠的独立登录空间')
+    }
+    const id = randomUUID()
+    const dir = path.join(app.getPath('home'), '.termspace', 'accounts', provider, id)
+    await mkdir(dir, { recursive: true, mode: 0o700 })
+    const homeKey =
+      provider === 'codex'
+        ? 'CODEX_HOME'
+        : provider === 'claude'
+          ? 'CLAUDE_CONFIG_DIR'
+          : 'GEMINI_CLI_HOME'
+    const conflictKey =
+      provider === 'codex'
+        ? 'OPENAI_API_KEY'
+        : provider === 'claude'
+          ? 'ANTHROPIC_API_KEY'
+          : 'GEMINI_API_KEY'
+    const list = await upsertIdentity({
+      id,
+      name: String(input?.name ?? ''),
+      provider: provider as Parameters<typeof upsertIdentity>[0]['provider'],
+      envOps: [
+        { key: homeKey, action: 'set', value: dir },
+        { key: conflictKey, action: 'unset' }
+      ]
+    })
+    return { id, list: afterIdentityChange(list) }
+  }
+)
+ipcMain.handle('identity:envPresence', (e, keys: unknown) => {
+  if (!fromMainWin(e) || !Array.isArray(keys)) return []
+  return keys
+    .filter((key): key is string => typeof key === 'string' && /^[A-Z_][A-Z0-9_]*$/.test(key))
+    .slice(0, 30)
+    .filter((key) => Object.hasOwn(process.env, key))
+})
 ipcMain.handle('identity:delete', async (e, id: string) =>
   fromMainWin(e) ? afterIdentityChange(await deleteIdentity(id)) : []
 )
@@ -2384,6 +2430,27 @@ app.whenReady().then(async () => {
           console.log(`[lod-bench] 缩到 LOD ${vis} → renderer ${cold.toFixed(1)}%`)
           // 自检产物必须自己收干净，否则留一地孤儿 tmux 会话
           for (const tid of ids) await destroyPty(tid)
+        }
+        /* `TERMBOARD_CLICK=<CSS 选择器>[|<选择器>…]`：截图前依次点一遍。
+           没有它就只能拍到"入口"，拍不到点进去之后的样子 ——
+           而需要验的恰恰是流程本身（比如「添加账号」点开后的四选一）。
+           选中器里可以用 `text=xxx` 按可见文字找，因为按钮多半没有稳定的 class。 */
+        const clicks = (process.env['TERMBOARD_CLICK'] ?? '').split('|').filter(Boolean)
+        for (const sel of clicks) {
+          const ok = await win.webContents.executeJavaScript(
+            `(() => {
+              const s = ${JSON.stringify(sel)}
+              const el = s.startsWith('text=')
+                ? [...document.querySelectorAll('button,a,[role=button]')]
+                    .find(n => n.textContent?.trim() === s.slice(5))
+                : document.querySelector(s)
+              if (!el) return false
+              el.click()
+              return true
+            })()`
+          )
+          console.log(`[shot-click] ${sel} → ${ok ? '点到了' : '**没找到**'}`)
+          await new Promise((r) => setTimeout(r, 600))
         }
         const img = await win.webContents.capturePage()
         await writeFile(shotPath, img.toPNG())

@@ -75,7 +75,12 @@ export const isSecretEnvKey = (k: string): boolean => /(KEY|TOKEN|SECRET|PASSWOR
  * 例外的这几个是**路径**：指向哪个账号目录不是秘密，而且它们必须走 `-e` ——
  * 那样用户在会话里手开一个 window 才还是同一个账号。
  */
-const IDENTITY_PUBLIC_KEYS = new Set(['CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GEMINI_CONFIG_DIR'])
+const IDENTITY_PUBLIC_KEYS = new Set([
+  'CODEX_HOME',
+  'CLAUDE_CONFIG_DIR',
+  'GEMINI_CLI_HOME',
+  'GEMINI_CONFIG_DIR'
+])
 export const identityValueIsSecret = (k: string): boolean => !IDENTITY_PUBLIC_KEYS.has(k)
 
 export function assembleSpawnArgs(

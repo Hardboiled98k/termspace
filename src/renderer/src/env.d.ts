@@ -119,8 +119,16 @@ interface PolicyVerdict {
 interface IdentityMeta {
   id: string
   name: string
-  provider: 'claude' | 'codex' | 'gemini' | 'custom'
-  envKeys: string[]
+  provider:
+    | 'claude'
+    | 'codex'
+    | 'gemini'
+    | 'copilot'
+    | 'cursor'
+    | 'antigravity'
+    | 'openrouter'
+    | 'custom'
+  envOps: { key: string; action: 'set' | 'unset' }[]
 }
 
 /** 一条访问凭据的元数据。**没有 token 本身** —— 它只在签发那一刻出过主进程一次 */
@@ -136,7 +144,7 @@ interface RemoteTokenMeta {
 interface Preset {
   id: string
   name: string
-  provider: 'claude' | 'codex' | 'gemini' | 'custom'
+  provider: IdentityMeta['provider']
   command: string
   identityId?: string
 }
@@ -313,8 +321,16 @@ interface TermspaceApi {
     id?: string
     name: string
     provider: IdentityMeta['provider']
-    env: Record<string, string>
+    envOps: (
+      | { key: string; action: 'set' | 'replace'; value: string }
+      | { key: string; action: 'unset' | 'retain' | 'delete' }
+    )[]
   }) => Promise<IdentityMeta[]>
+  createSubscriptionIdentity: (input: {
+    provider: IdentityMeta['provider']
+    name: string
+  }) => Promise<{ id: string; list: IdentityMeta[] }>
+  identityEnvPresence: (keys: string[]) => Promise<string[]>
   deleteIdentity: (id: string) => Promise<IdentityMeta[]>
   renameIdentity: (id: string, name: string) => Promise<IdentityMeta[]>
   /** 凭证登录态。只有 codex 能真查（codex login status），其余如实报 unknown */
