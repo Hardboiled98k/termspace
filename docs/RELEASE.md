@@ -75,7 +75,41 @@ arm64 机器只认 url 里带 `arm64` 的，Intel 机器只认不带的（Rosett
 顶层的 `path:` 字段指向最后打的那个架构（现在是 x64），这是 electron-builder
 的行为，不用管 —— `MacUpdater` 走的是 `files` 数组。
 
-## 更新源
+## 更新源：Cloudflare R2（2026-07-28 起）
+
+```
+桶        termspace-updates（ENAM，标准存储类）
+自定义域  https://updates.termspace.app/
+账号 ID   CLOUDFLARE_ACCOUNT_ID
+令牌      termspace-publish —— 对象读写，仅限这一个桶
+配置      ~/.termspace-publish.env（600，不进仓库）
+```
+
+**为什么不是 Cloudflare Pages**：Pages 单文件上限 25 MiB，我们的 zip 是 124 MB。
+R2 没有这个限制，而且**出站流量免费** —— 这正是它适合发安装包的原因。
+
+**`r2.dev` 公共开发 URL 保持禁用**：它有速率限制，且 Cloudflare 的缓存规则
+对它不生效（R2 面板自己也写着"请将自定义域连接到存储桶来支持生产工作负载"）。
+
+### 缓存：两层，各自独立成立
+
+| 层 | 做法 | 挡什么 |
+|---|---|---|
+| 对象头 | `publish.sh` 上传 yml 时打 `Cache-Control: no-store` | 换 CDN、直连 R2 端点时仍然成立 |
+| Cloudflare 缓存规则 | `updates.termspace.app` + 路径 `/latest-mac.yml` → Bypass | 对象头被谁改掉时兜底 |
+
+zip 反过来是 `max-age=31536000, immutable` —— 文件名带版本号，内容永不改变。
+
+**为什么值得做两层**：yml 被缓存住的症状是"发了新版没人收到"，
+而发布者自己往往命中另一个边缘节点、看到一切正常。这种问题只能在发布时当场验，
+所以 `publish.sh` 收尾会真读回响应头查 `Cache-Control` 与 `cf-cache-status`。
+
+实测验证方式（两层要分开证）：给 `latest-mac.yml` 故意上传一个
+`max-age=31536000` 的头，若规则生效则两次请求都应是 `DYNAMIC`；
+同时用一个同样头的 `probe.zip` 做对照，它第二次应该是 `HIT`。
+两个结果都对，才说明规则真的只作用在 yml 上、而不是整个域都没缓存。
+
+## 更新源怎么配
 
 在 app 里配（设置 → 更新 → 更新源），不在打包配置里。指向一个存着上面两个文件的
 **HTTPS 目录**，结尾要有斜杠。

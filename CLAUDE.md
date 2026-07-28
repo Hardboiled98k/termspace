@@ -56,7 +56,8 @@ npm run dev        # 开发模式
 npm run typecheck  # tsc --noEmit
 npm test           # 派活准入 smoke test（Node 原生 type stripping，无框架依赖）
 npm run rebuild    # node-pty 重编译（换 Electron 版本后必跑）
-npm run dist       # 未签名 arm64 dmg（本机自用，随时可打）
+npm run dist       # 未签名双架构（CI 用，只验证能打出来）
+npm run dist:local # 签名、跳过公证、**只出 arm64**、收尾自动 rebuild（本机自用走这个）
 npm run dist:signed  # 签名 + 公证正式包（需下面四个环境变量）
 TERMBOARD_SHOT=/tmp/shot.png npm run dev  # 自检：6 秒后截图退出
 TERMBOARD_PANEL=terminal npm run dev      # 自检：直接展开设置面板某分区
@@ -374,13 +375,15 @@ feed URL 做成用户可改的是有代价的（能被诱导改源），现在�
 ## 路线图（真实状态见 PRD.md「优先级排序」，那张表已重校）
 
 M1–M6 与 F1–F8 均有可用实现；签名公证、手机端、三家额度采集、崩溃日志、工作区导出导入
-均已完成。明确未做的：
+均已完成。**发布工程已就绪**（2026-07-28）：x64 包、oxlint、CI skeleton、应用图标、
+GitHub 私有仓库（`Hardboiled98k/termspace`）、Cloudflare R2 更新源
+（`updates.termspace.app`，见 `docs/RELEASE.md`）。明确未做的：
 
 | 未做 | 为什么 |
 |------|--------|
 | **MCP 形态** | F7/F8 现在走 `tb` + 回环 HTTP，够用 |
 | `tb agents` 列远端节点 | 目标 id 现在得去对面画布上看。逐台 ssh 查会拖慢默认命令，等真觉得烦了再做 `tb agents <peer>` |
-| **CI / x64 包** | 仓库还没有 remote。等真要发了再配，现在纯投机 |
+| **公开仓库** | 现在是私有。要公开得先做一次历史清洗 —— Apple API Key ID 与 issuer UUID 在 2 个 commit 里，Tailscale IP 与 `/Users/you` 路径在 9 个 docs 里。Team ID 不用管（本来就印在每个签名二进制里） |
 | **手机端完整 PWA / 后台推送** | 受安全上下文与 Web Push 限制（见上） |
 | **手机端按设备可撤销 token** | 单用户单机时轮换那把 token 就是撤销，够了 |
 | **记忆系统统筹** | 还没想清形态 |
