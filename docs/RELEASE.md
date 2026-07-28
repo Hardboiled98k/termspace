@@ -166,7 +166,29 @@ cp "$SP/$F" ~/Library/Caches/electron/$DIR/
 Apple 的公证队列说慢就慢，实测排过 40 分钟还是 `In Progress`，
 而 electron-builder 等不到时报的是**一条空错误**（`Failed with unexpected result:` 后面什么都没有）。
 
-看到它先查真实状态，别去查代码：
+**实测这不是偶发**（2026-07-28）：`dist:signed` 连着三次死在这里，而
+`notarytool history` 里那条提交状态是 `In Progress` —— 东西提上去了，
+只是 electron-builder 等不到。
+
+所以**别把公证放在构建里**。拆成两步，各自不受对方拖累：
+
+```bash
+# 1. 构建：双架构 + 签名，不公证（约 50 分钟，全程可控）
+npm run build
+npx electron-builder --mac --arm64 --x64 --config electron-builder.yml -c.mac.notarize=false
+npm run rebuild
+
+# 2. 公证：单独提交，--wait 想等多久等多久
+xcrun notarytool submit dist/Termspace-<版本>-arm64-mac.zip \
+  --key "$APPLE_API_KEY" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER" --wait --timeout 2h
+xcrun stapler staple dist/mac-arm64/Termspace.app     # staple 到 .app，然后重新打 zip
+```
+
+**测自动更新不需要公证** —— Squirrel 校验的是候选包与当前包的**代码签名**同源，
+不是公证票据。公证是给别人下载时过 Gatekeeper 用的。所以链路验证可以先跑，
+公证慢慢排队。
+
+看到空错误时先查真实状态，别去查代码：
 
 ```bash
 xcrun notarytool history --key $APPLE_API_KEY --key-id $APPLE_API_KEY_ID --issuer $APPLE_API_ISSUER
