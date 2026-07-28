@@ -21,6 +21,8 @@ const COLLAPSED_H = 46
 function GroupNodeImpl({ id, data }: NodeProps<GroupNodeT>): React.JSX.Element {
   const { setNodes, getNodes } = useReactFlow()
   const [bcast, setBcast] = useState<string | null>(null)
+  /** 建树进行中：按钮要禁用，否则双击会建出两棵、其中一棵成孤儿 */
+  const [binding, setBinding] = useState(false)
   const tmuxOk = useContext(TmuxContext)
   const requestDelete = useContext(RequestDeleteContext)
 
@@ -52,23 +54,36 @@ function GroupNodeImpl({ id, data }: NodeProps<GroupNodeT>): React.JSX.Element {
   const [wtStat, setWtStat] = useState<{ branch: string | null; dirty: number } | null>(null)
   const wt = data.worktree
 
+  /* 组内终端的 cwd 列表（稳定序列化，当 effect 依赖）。
+     **不能只依赖成员数量**：终端改了 cwd、同数量换了成员、顺序变了，
+     数量都不变 —— 于是 `repo` 会一直是旧值，随后"隔离"可能在一个
+     已经不属于这个组的仓库里建树。 */
+  const cwdKey = useStore((s) =>
+    s.nodes
+      .filter((n) => n.parentId === id && n.type === 'terminal')
+      .map((n) => String((n.data as { cwd?: string }).cwd ?? ''))
+      .toSorted()
+      .join('\u0000')
+  )
+
   useEffect(() => {
-    const cwd = terms()
-      .map((n) => (n.data as { cwd?: string }).cwd)
-      .find(Boolean)
-    if (!cwd) {
+    const cwds = [...new Set(cwdKey.split('\u0000').filter(Boolean))]
+    if (!cwds.length) {
       setRepo(null)
       return
     }
     let alive = true
-    void window.termspace.gitProbe(cwd).then((r) => {
-      if (alive) setRepo(r ? { repoRoot: r.repoRoot } : null)
+    void Promise.all(cwds.map((c) => window.termspace.gitProbe(c))).then((rs) => {
+      if (!alive) return
+      const roots = [...new Set(rs.map((r) => r?.repoRoot).filter(Boolean))]
+      /* **组员分属不同仓库时不给绑**：一棵树只能属于一个仓库，
+         这种情况下"在哪建"没有正确答案，宁可不出这个按钮。 */
+      setRepo(roots.length === 1 && rs.every(Boolean) ? { repoRoot: roots[0] as string } : null)
     })
     return () => {
       alive = false
     }
-    // total 变了说明组员变了，重探一次
-  }, [total])
+  }, [cwdKey])
 
   useEffect(() => {
     if (!wt) {
@@ -76,41 +91,90 @@ function GroupNodeImpl({ id, data }: NodeProps<GroupNodeT>): React.JSX.Element {
       return
     }
     let alive = true
+    let timer = 0
+    /* **一次完成再排下一次**，不用 setInterval：runGit 单次可以跑到 15 秒
+       （网络盘、海量未跟踪文件、git 锁竞争），定时器不等上一次结束就会
+       并发堆叠多个 git status，几个组一起放大。`alive` 只挡 setState，
+       拦不住已经起来的子进程。 */
     const pull = (): void => {
       void window.termspace.gitWorktreeStatus(wt.path).then((s) => {
-        if (alive) setWtStat(s)
+        if (!alive) return
+        setWtStat(s)
+        timer = window.setTimeout(pull, 5000)
       })
     }
     pull()
-    // 脏不脏是随时在变的，但没必要太密 —— 5s 一拍，git status 在大仓库上也就几十毫秒
-    const t = setInterval(pull, 5000)
     return () => {
       alive = false
-      clearInterval(t)
+      window.clearTimeout(timer)
     }
   }, [wt?.path])
 
   const bindWorktree = async (): Promise<void> => {
-    if (!repo) return
+    if (!repo || binding) return
+    const existing = terms()
     const branch = window.prompt(
       `在「${data.title}」上开一棵 worktree\n\n` +
         `仓库：${repo.repoRoot}\n` +
-        '输入分支名（不存在会新建）。目录落在 <仓库名>.worktrees/ 下。',
+        '输入分支名（不存在会新建）。目录落在 <仓库名>.worktrees/ 下。' +
+        (existing.length
+          ? `\n\n组里现有 ${existing.length} 个终端，建好后会问你要不要把它们一起迁过去。`
+          : ''),
       ''
     )
     if (!branch) return
-    const r = await window.termspace.gitCreateWorktree(repo.repoRoot, branch)
+    /* **in-flight 锁**：按钮在 await 期间不禁用的话，双击会建出两棵树，
+       后返回的那次覆盖 data.worktree，先建的那棵成为磁盘上没人认领的孤儿。 */
+    setBinding(true)
+    let r: { ok: boolean; path?: string; error?: string }
+    try {
+      r = await window.termspace.gitCreateWorktree(repo.repoRoot, branch)
+    } finally {
+      setBinding(false)
+    }
     if (!r.ok || !r.path) {
       window.alert(`建不了：${r.error ?? '未知错误'}`)
       return
     }
-    setNodes((ns) =>
-      ns.map((n) =>
-        n.id === id
-          ? { ...n, data: { ...n.data, worktree: { repo: repo.repoRoot, branch, path: r.path as string } } }
-          : n
+    const wtPath = r.path
+    /* await 期间组可能已经被删/解组了。这时候直接 setNodes 会静默什么都不做，
+       而磁盘上那棵树已经建出来了 —— 必须告诉用户它在哪，别让它变成看不见的孤儿。 */
+    if (!getNodes().some((n) => n.id === id)) {
+      window.alert(`组已经不在了，但 worktree 已经建好：\n${wtPath}\n\n不需要的话请手工删除。`)
+      return
+    }
+
+    /* **只挂徽标不算隔离**。绑定之前组里已有的终端，其 cwd 和正在跑的 tmux 会话
+       都还在原来的工作树上 —— 界面显示 `⎇ 分支`、按钮写着"物理隔离"，
+       而 agent 其实还在共享目录里改文件。这是最危险的那种假成功，
+       所以这里必须明确问一次，并把两种语义都说清楚。 */
+    const migrate =
+      existing.length > 0 &&
+      window.confirm(
+        `worktree 已建好：\n${wtPath}\n\n` +
+          `把组里现有的 ${existing.length} 个终端也迁到这棵树上？\n` +
+          '会结束它们当前的会话，再用新目录重开（跑着的进程会停）。\n\n' +
+          '选「取消」= 只有**以后**在这个组里新建的终端落在新树上，现有的不动。'
       )
+
+    setNodes((ns) =>
+      ns.map((n) => {
+        if (n.id === id) {
+          return { ...n, data: { ...n.data, worktree: { repo: repo.repoRoot, branch, path: wtPath } } }
+        }
+        if (!migrate || n.parentId !== id || n.type !== 'terminal') return n
+        return {
+          ...n,
+          data: {
+            ...n.data,
+            cwd: wtPath,
+            status: 'idle',
+            restartTick: ((n.data as { restartTick?: number }).restartTick ?? 0) + 1
+          }
+        }
+      })
     )
+    if (migrate) for (const n of existing) void window.termspace.destroy(n.id)
   }
 
   const unbindWorktree = (): void => {
@@ -311,13 +375,16 @@ function GroupNodeImpl({ id, data }: NodeProps<GroupNodeT>): React.JSX.Element {
             {repo && !wt && (
               <button
                 className="group-act nodrag"
-                title="给这个组开一棵 git worktree，让组内 agent 和别处物理隔离"
+                disabled={binding}
+                /* 文案不能只说"物理隔离" —— 建完还要问一次迁不迁现有终端，
+                   不迁的话已有 agent 仍在原工作树上。别让按钮许下代码没兑现的承诺 */
+                title="给这个组开一棵 git worktree。建好后可选择把组内已有终端一起迁过去（会重开会话）"
                 onClick={(e) => {
                   e.stopPropagation()
                   void bindWorktree()
                 }}
               >
-                ⎇ 隔离
+                {binding ? '⎇ 建树中…' : '⎇ 隔离'}
               </button>
             )}
             {wt && (

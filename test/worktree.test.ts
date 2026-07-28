@@ -112,21 +112,40 @@ test('feat/x 和 feat-x 绝不映射到同一个目录', () => {
   assert.notEqual(a, b, 'feat/x 与 feat-x 撞到了同一个目录名')
 })
 
-test('没被转义的分支名保持原样（目录名好认）', () => {
-  assert.equal(worktreeDirName('feat-x'), 'feat-x')
-  assert.equal(worktreeDirName('fix_123.v2'), 'fix_123.v2')
+test('目录名 = 好认的前缀 + hash，同一分支每次一致', () => {
+  assert.match(worktreeDirName('feat-x'), /^feat-x-[0-9a-f]{12}$/)
+  assert.match(worktreeDirName('fix_123.v2'), /^fix_123\.v2-[0-9a-f]{12}$/)
+  assert.equal(worktreeDirName('feat/x'), worktreeDirName('feat/x'))
 })
 
-test('转义过的必定带 hash 后缀，且同一分支每次一致', () => {
+test('输出名本身当分支名喂回去，也不会撞（老实现的反例）', () => {
+  /* 老实现是"只有转义过才加 hash"：`feat/x` → `feat-x-79b4cc`，
+     而 `feat-x-79b4cc` 是合法分支名、不需转义、原样返回 —— 两者同一个目录。
+     注释当时还写着"两者永不相等"。codex 对手方审查逮到的。 */
   const a = worktreeDirName('feat/x')
-  assert.match(a, /^feat-x-[0-9a-f]{6}$/)
-  assert.equal(a, worktreeDirName('feat/x'))
+  assert.notEqual(a, worktreeDirName(a), `${a} 和它自己当分支名时撞了`)
+})
+
+test('批量：一千个相近分支名，目录名互不相同', () => {
+  const names = []
+  for (let i = 0; i < 250; i++) {
+    names.push(`feat/x${i}`, `feat-x${i}`, `feat.x${i}`, `feat x${i}`.replace(' ', '/'))
+  }
+  const dirs = new Set(names.map(worktreeDirName))
+  assert.equal(dirs.size, new Set(names).size, '有分支名映射到了同一个目录')
+})
+
+test('超长分支名不会造出超长目录（前缀截断，唯一性靠 hash）', () => {
+  const long = 'feat/' + 'a'.repeat(300)
+  const d = worktreeDirName(long)
+  assert.ok(d.length <= 53, `目录名太长：${d.length}`)
+  assert.notEqual(d, worktreeDirName(long + 'b'), '截断之后仍要互不相同')
 })
 
 test('worktree 落在仓库旁边的 <仓库名>.worktrees/ 里', () => {
-  assert.equal(
+  assert.match(
     worktreePath('/Users/me/code/proj', 'feat-a'),
-    '/Users/me/code/proj.worktrees/feat-a'
+    /^\/Users\/me\/code\/proj\.worktrees\/feat-a-[0-9a-f]{12}$/
   )
 })
 
@@ -153,54 +172,63 @@ test('端到端：建树 → 脏了删不掉 → 干净后删得掉', async () =
   const { execFileSync } = await import('node:child_process')
   const { tmpdir } = await import('node:os')
   const path = await import('node:path')
-  const { existsSync } = await import('node:fs')
+  const { existsSync, realpathSync } = await import('node:fs')
 
   const base = await mkdtemp(path.join(tmpdir(), 'wt-'))
-  const repo = path.join(base, 'repo')
-  const git = (args: string[], cwd: string): string =>
-    execFileSync('/usr/bin/git', args, {
-      cwd,
-      encoding: 'utf8',
-      env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 'a@b', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 'a@b' }
-    })
-  execFileSync('/usr/bin/git', ['init', '-q', repo])
-  git(['commit', '-q', '--allow-empty', '-m', 'init'], repo)
+  // 用例里 mkdtemp 出来的仓库要收干净，否则每跑一次测试就在临时目录多留一个仓库
+  try {
+    const repo = path.join(base, 'repo')
+    const git = (args: string[], cwd: string): string =>
+      execFileSync('/usr/bin/git', args, {
+        cwd,
+        encoding: 'utf8',
+        env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 'a@b', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 'a@b' }
+      })
+    execFileSync('/usr/bin/git', ['init', '-q', repo])
+    git(['commit', '-q', '--allow-empty', '-m', 'init'], repo)
 
-  // probeRepo 认得出这是仓库
-  const probe = await probeRepo(repo)
-  assert.ok(probe, 'probeRepo 应当认出这是 git 仓库')
-  assert.equal(probe.repoRoot, existsSync(repo) ? probe.repoRoot : '', '')
-  assert.equal(probe.worktrees.length, 1, '一开始只有主仓库这一棵')
+    // probeRepo 认得出这是仓库
+    const probe = await probeRepo(repo)
+    assert.ok(probe, 'probeRepo 应当认出这是 git 仓库')
+    /* ⚠️ 这条原来写的是 `assert.equal(probe.repoRoot, existsSync(repo) ? probe.repoRoot : '')`
+       —— 等价于 `assert.equal(x, x)`，probeRepo 返回任意字符串都能通过。
+       codex 对手方审查逮到的。要和**真的仓库路径**比，且两边都 realpath：
+       macOS 的 /var 是 /private/var 的符号链接，git 吐的是解析后的路径。 */
+    assert.equal(realpathSync(probe.repoRoot), realpathSync(repo), 'repoRoot 必须就是那个仓库')
+    assert.equal(probe.worktrees.length, 1, '一开始只有主仓库这一棵')
 
-  // 建一棵
-  const made = await createWorktree(probe.repoRoot, 'feat/iso')
-  assert.ok(made.ok, `建 worktree 失败：${made.error}`)
-  assert.ok(made.path && existsSync(made.path), 'worktree 目录应当真的存在')
-  assert.match(made.path, /repo\.worktrees\/feat-iso-[0-9a-f]{6}$/, '路径要落在仓库旁边且带转义 hash')
+    // 建一棵
+    const made = await createWorktree(probe.repoRoot, 'feat/iso')
+    assert.ok(made.ok, `建 worktree 失败：${made.error}`)
+    assert.ok(made.path && existsSync(made.path), 'worktree 目录应当真的存在')
+    assert.match(made.path, /repo\.worktrees\/feat-iso-[0-9a-f]{12}$/, '路径要落在仓库旁边且带 hash')
 
-  // git 自己也认
-  const after = await probeRepo(probe.repoRoot)
-  assert.equal(after?.worktrees.length, 2)
+    // git 自己也认
+    const after = await probeRepo(probe.repoRoot)
+    assert.equal(after?.worktrees.length, 2)
 
-  // 干净时状态是干净
-  const st0 = await worktreeStatus(made.path)
-  assert.equal(st0?.dirty, 0)
-  assert.equal(st0?.branch, 'feat/iso')
+    // 干净时状态是干净
+    const st0 = await worktreeStatus(made.path)
+    assert.equal(st0?.dirty, 0)
+    assert.equal(st0?.branch, 'feat/iso')
 
-  // 造脏 → 必须删不掉
-  await writeFile(path.join(made.path, 'dirty.txt'), 'x')
-  const st1 = await worktreeStatus(made.path)
-  assert.equal(st1?.dirty, 1)
-  const bad = await removeWorktree(made.path)
-  assert.equal(bad.ok, false, '**脏树必须删不掉** —— 这条挡的是 agent 干了一半的活被一键抹掉')
-  assert.match(bad.error ?? '', /未提交的改动/)
-  assert.ok(existsSync(made.path), '删除失败后目录必须还在')
+    // 造脏 → 必须删不掉
+    await writeFile(path.join(made.path, 'dirty.txt'), 'x')
+    const st1 = await worktreeStatus(made.path)
+    assert.equal(st1?.dirty, 1)
+    const bad = await removeWorktree(made.path)
+    assert.equal(bad.ok, false, '**脏树必须删不掉** —— 这条挡的是 agent 干了一半的活被一键抹掉')
+    assert.match(bad.error ?? '', /未提交的改动/)
+    assert.ok(existsSync(made.path), '删除失败后目录必须还在')
 
-  // 清干净 → 删得掉
-  await rm(path.join(made.path, 'dirty.txt'))
-  const good = await removeWorktree(made.path)
-  assert.ok(good.ok, `清干净后应当删得掉：${good.error}`)
-  assert.equal(existsSync(made.path), false)
+    // 清干净 → 删得掉
+    await rm(path.join(made.path, 'dirty.txt'))
+    const good = await removeWorktree(made.path)
+    assert.ok(good.ok, `清干净后应当删得掉：${good.error}`)
+    assert.equal(existsSync(made.path), false)
+  } finally {
+    await rm(base, { recursive: true, force: true })
+  }
 })
 
 test('端到端：不合法的分支名根本不会走到 git', async () => {
@@ -209,19 +237,66 @@ test('端到端：不合法的分支名根本不会走到 git', async () => {
   const { tmpdir } = await import('node:os')
   const path = await import('node:path')
 
+  const { rm } = await import('node:fs/promises')
   const base = await mkdtemp(path.join(tmpdir(), 'wt2-'))
-  const repo = path.join(base, 'repo')
-  execFileSync('/usr/bin/git', ['init', '-q', repo])
+  try {
+      const repo = path.join(base, 'repo')
+      execFileSync('/usr/bin/git', ['init', '-q', repo])
 
-  const r = await createWorktree(repo, '-b')
-  assert.equal(r.ok, false)
-  assert.match(r.error ?? '', /分支名不合法/, '要在自己的闸上失败，不是让 git 把 -b 当成选项')
+      const r = await createWorktree(repo, '-b')
+      assert.equal(r.ok, false)
+      assert.match(r.error ?? '', /分支名不合法/, '要在自己的闸上失败，不是让 git 把 -b 当成选项')
+  } finally {
+    await rm(base, { recursive: true, force: true })
+  }
 })
 
 test('端到端：非 git 目录 probeRepo 返回 null（UI 据此完全隐藏该功能）', async () => {
   const { mkdtemp } = await import('node:fs/promises')
   const { tmpdir } = await import('node:os')
   const path = await import('node:path')
+  const { rm } = await import('node:fs/promises')
   const dir = await mkdtemp(path.join(tmpdir(), 'notgit-'))
-  assert.equal(await probeRepo(dir), null)
+  try {
+      assert.equal(await probeRepo(dir), null)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('端到端：删除只认该仓库列出的 worktree，且不许删主仓库', async () => {
+  /* removeWorktree 是这四个 IPC 里唯一破坏性的那个，入参却是一条裸路径。
+     不做归属校验的话，传错/被构造的路径会让 git 去动一棵不相干的树 ——
+     git 大多会自己拒，但"大多"不是判据。codex 对手方审查提的。 */
+  const { mkdtemp, rm } = await import('node:fs/promises')
+  const { execFileSync } = await import('node:child_process')
+  const { tmpdir } = await import('node:os')
+  const path = await import('node:path')
+
+  const base = await mkdtemp(path.join(tmpdir(), 'wt3-'))
+  try {
+    const repo = path.join(base, 'repo')
+    execFileSync('/usr/bin/git', ['init', '-q', repo])
+    execFileSync('/usr/bin/git', ['commit', '-q', '--allow-empty', '-m', 'i'], {
+      cwd: repo,
+      env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 'a@b', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 'a@b' }
+    })
+    const made = await createWorktree(repo, 'feat/z')
+    assert.ok(made.ok && made.path)
+
+    // 主仓库本身不是可删的 worktree
+    const main = await removeWorktree(repo)
+    assert.equal(main.ok, false)
+    assert.match(main.error ?? '', /主仓库/)
+
+    // 相对路径直接拒（不给 git 机会按进程 cwd 解析）
+    const rel = await removeWorktree('repo')
+    assert.equal(rel.ok, false)
+    assert.match(rel.error ?? '', /路径不合法/)
+
+    // 真的那棵删得掉
+    assert.ok((await removeWorktree(made.path as string)).ok)
+  } finally {
+    await rm(base, { recursive: true, force: true })
+  }
 })

@@ -10,7 +10,7 @@
  */
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync } from 'node:fs'
+import { existsSync, realpathSync } from 'node:fs'
 import { access, constants } from 'node:fs/promises'
 import path from 'node:path'
 
@@ -87,15 +87,20 @@ export function isSafeBranch(name: string): boolean {
  *
  * **最容易写错的一条**：分支名可以含 `/`，直接拿来当目录会建出嵌套结构；
  * 而单纯把 `/` 换成 `-` 又会让 `feat/x` 和 `feat-x` **撞进同一个目录** ——
- * 两棵不同的树互相覆盖，且症状是"我明明建了两个 worktree，怎么只有一个"。
+ * 两棵不同的树互相覆盖，症状是"我明明建了两个 worktree，怎么只有一个"。
  *
- * 所以：只要发生过转义，就追加一段原始分支名的短 hash。没转义的名字保持原样
- * （常见情况下目录名仍然好认），转义过的必定带 hash，两者永不相等。
+ * 第一版是"只有转义过才加 hash"，并在注释里写了"两者永不相等" —— **那是错的**：
+ * `worktreeDirName('feat/x')` 得到 `feat-x-79b4cc`，而 `feat-x-79b4cc` 本身
+ * 是个合法分支名、不需要转义、原样返回 —— 两者撞在同一个目录上。
+ * （codex 对手方审查逮到的：一个"看起来严谨、实际有反例"的判据。）
+ *
+ * 现在**一律加 hash**。目录名丑一点，但这是个不变量而不是一个大概率成立的启发式：
+ * 前缀只负责好认，唯一性完全由 hash 承担。12 hex（48 bit）足够 ——
+ * 一个仓库里的分支数量级下碰撞概率可以忽略。
  */
 export function worktreeDirName(branch: string): string {
-  const safe = branch.replace(/[^A-Za-z0-9._-]/g, '-')
-  if (safe === branch) return safe
-  return `${safe}-${createHash('sha256').update(branch).digest('hex').slice(0, 6)}`
+  const safe = branch.replace(/[^A-Za-z0-9._-]/g, '-').slice(0, 40)
+  return `${safe}-${createHash('sha256').update(branch).digest('hex').slice(0, 12)}`
 }
 
 /**
@@ -249,7 +254,10 @@ export async function createWorktree(repoRoot: string, branch: string): Promise<
  * 让他自己决定提交还是丢弃。
  */
 export async function removeWorktree(wtPath: string): Promise<{ ok: boolean; error?: string }> {
-  if (!wtPath || !existsSync(wtPath)) return { ok: false, error: '这个路径不存在' }
+  if (!wtPath || !path.isAbsolute(wtPath) || wtPath.includes('\0')) {
+    return { ok: false, error: '路径不合法' }
+  }
+  if (!existsSync(wtPath)) return { ok: false, error: '这个路径不存在' }
 
   /* **必须从主仓库里执行**。不给 cwd 的话 git 在**进程的当前目录**解析仓库 ——
      那是 Termspace 自己的目录，跟目标 worktree 毫无关系，报的是一句
@@ -258,6 +266,19 @@ export async function removeWorktree(wtPath: string): Promise<{ ok: boolean; err
   const common = await runGit(['rev-parse', '--path-format=absolute', '--git-common-dir'], wtPath)
   if (!common.ok) return { ok: false, error: explainGitError(common.stderr) }
   const mainRepo = path.dirname(common.stdout.trim()) // <主仓库>/.git → <主仓库>
+
+  /* **归属校验**：这是唯一一个破坏性操作，而入参是一个裸路径。
+     要求 canonical 路径确实出现在该仓库的 worktree 列表里、且**不是主树** ——
+     否则一个传错/被构造的路径就能让 git 去动一棵不相干的树，或者把主仓库当成
+     worktree 去删。git 自己大多会拒，但"大多"不是判据。 */
+  const list = await runGit(['worktree', 'list', '--porcelain'], mainRepo)
+  if (!list.ok) return { ok: false, error: explainGitError(list.stderr) }
+  const trees = parseWorktreeList(list.stdout)
+  const real = realpathSync.native(wtPath)
+  const isMain = trees.length > 0 && realpathSync.native(trees[0].path) === real
+  const known = trees.some((w) => existsSync(w.path) && realpathSync.native(w.path) === real)
+  if (!known) return { ok: false, error: '这个路径不是该仓库的 worktree' }
+  if (isMain) return { ok: false, error: '这是主仓库本身，不是可以删的 worktree' }
 
   const r = await runGit(['worktree', 'remove', wtPath], mainRepo, 30_000)
   return r.ok ? { ok: true } : { ok: false, error: explainGitError(r.stderr) }

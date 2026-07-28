@@ -374,11 +374,15 @@ function BoardHUD({
 
   /* 每个账号有几个终端在用它。没绑凭证的节点算在「系统默认」头上 ——
      这一列就是把"终端里用的"和"账号"连起来的那根线。 */
+  /* `provider` 缺失 = **这不是个 agent 终端**（普通 zsh），不能默认成 claude ——
+     那样只要画布上有一个普通 shell，`system:claude` 的 usingCount 就 >0，
+     "没人在用就不显示"这条判据对 Claude 恰好永远不成立。
+     实测就是这个现象：还没在画布上登录 codex，右上角却已经有额度卡。 */
   const usingCount = (a: AccountQuota): number =>
     terms.filter((n) =>
       n.data.identityId
         ? n.data.identityId === a.accountId
-        : a.accountId === `system:${n.data.provider ?? 'claude'}`
+        : !!n.data.provider && a.accountId === `system:${n.data.provider}`
     ).length
 
   // 和 AccountBlock 共用同一个判据（quota-visibility.ts），不再各写一份
@@ -1350,7 +1354,19 @@ function Board(): React.JSX.Element {
           {
             id,
             type: 'terminal' as const,
-            position: { x: 120 + (n % 5) * 160, y: 160 + (n % 3) * 140 },
+            /* **parentId / extent 是节点的顶层字段，不是 data 里的** ——
+               放进 data 时 typecheck 照过（data 是宽松对象），React Flow 却完全
+               看不见，于是"新终端直接进这个组"从来没发生过：折叠、群发、批量重启、
+               父子持久化全都不认它。cwd 那半边是对的，所以现象是
+               "树进去了、组没进去"，最难看出来的那种半成功。 */
+            ...(groupId
+              ? {
+                  parentId: groupId,
+                  extent: 'parent' as const,
+                  // 有父节点时 position 是**相对组身**的，用绝对坐标会飞到组外
+                  position: { x: 24, y: 56 + (n % 3) * 40 }
+                }
+              : { position: { x: 120 + (n % 5) * 160, y: 160 + (n % 3) * 140 } }),
             ...DEFAULT_SIZE,
             data: {
               title: preset ? `${preset.name} · ${id}` : `zsh · ${id}`,
@@ -1362,7 +1378,6 @@ function Board(): React.JSX.Element {
                  否则回到项目目录。这就是隔离本身 —— 组 = 一棵树，
                  组内的 agent 和别处物理分开，不靠提示词约束。 */
               cwd: groupWt ?? projectCwd,
-              ...(groupId ? { parentId: groupId, extent: 'parent' as const } : {}),
               fontSize: defaultFontSize // 设置里的默认字号（此前存了但没人读，改了不生效）
             }
           }

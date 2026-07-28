@@ -30,9 +30,30 @@ test('用户自建的凭证永远显示，哪怕没人用', () => {
   assert.equal(shouldShowAccount({ accountId: 'i-abc123', usingCount: 0 }), true)
 })
 
-test('不看登录状态 —— 判据里根本没有这个入参', () => {
+test('不看登录状态 —— 同一个号在任何状态下结论都一样', () => {
   /* 旧规则栽在这：codex 在系统层登录着，state 是 'ok'，于是永远不满足
-     "unconfigured 才隐藏"。新判据只问一件事：画布上有没有人在用。 */
-  const keys = Object.keys({ accountId: '', usingCount: 0 })
-  assert.deepEqual(keys.toSorted(), ['accountId', 'usingCount'])
+     "unconfigured 才隐藏"。新判据只问一件事：画布上有没有人在用。
+
+     ⚠️ **这条原来是假绿的**：它只对一个临时对象跑 `Object.keys`，
+     压根没调用 `shouldShowAccount` —— 函数重新引入 state、去读外部状态、
+     或整个改写判据，它照样通过。codex 对手方审查逮到的。
+     现在改成表驱动真调用：状态是噪音，结论只由 usingCount 决定。 */
+  for (const state of ['ok', 'unconfigured', 'logged-out', 'unknown', 'error']) {
+    const extra = { state } as unknown as { accountId: string; usingCount: number }
+    assert.equal(
+      shouldShowAccount({ ...extra, accountId: 'system:codex', usingCount: 0 }),
+      false,
+      `state=${state} 时系统号没人用就该藏`
+    )
+    assert.equal(
+      shouldShowAccount({ ...extra, accountId: 'system:codex', usingCount: 1 }),
+      true,
+      `state=${state} 时有人用就该显示`
+    )
+    assert.equal(
+      shouldShowAccount({ ...extra, accountId: 'i-mine', usingCount: 0 }),
+      true,
+      `state=${state} 时用户自建的凭证永远显示`
+    )
+  }
 })
