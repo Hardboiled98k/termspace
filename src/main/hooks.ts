@@ -414,8 +414,16 @@ case "$cmd" in
     # target 含冒号 = 跨机（<ssh别名>:<节点>），主进程那边分流；
     # **ssh 由主进程跑，不在这个脚本里跑** —— 别名白名单在主进程设置里，
     # 脚本自己 ssh 就等于绕过白名单。跨机多一跳，所以超时比远端 delegate 更长。
-    curl -s -m ${Math.round(PEER_TIMEOUTS.tbMs / 1000)} -H "$H" --get \
-      --data-urlencode "target=$target" --data-urlencode "task=$*" "$BASE/tb/ask" ;;
+    # **整个请求走 POST body，不进 URL**：派活最常带长需求、路径、验收条件，
+    # 而中文一个字三字节 —— 塞在 query 里会先撞上 Node 的 request target 上限
+    # （在 TASK_MAX_BYTES 那道业务闸**之前**），curl 只吐一个空结果，
+    # agent 会把它当成"没人回答"。
+    # body 第一行是目标、其余是任务正文：目标 id 和 ssh 别名都不含换行（服务端校验过），
+    # 这样连 URL 编码都不需要，也不会有人往 query 里塞 & 拼参数。
+    # -f 让 HTTP 错误有非零退出码，-sS 保留错误正文。
+    { printf '%s\n' "$target"; printf '%s' "$*"; } |
+      curl -sS -f -m ${Math.round(PEER_TIMEOUTS.tbMs / 1000)} -H "$H" \
+        -X POST --data-binary @- "$BASE/tb/ask" ;;
   browser|web)
     action="$1"; shift 2>/dev/null
     node=""
@@ -647,6 +655,45 @@ export async function startHookSystem(
       const route = u.pathname.slice(4)
       // 调用方节点：由 token 反查得到，不再采信脚本自报的 X-Termspace-Node
       const source = callerNode
+
+      /**
+       * `tb ask` 的入参从 **POST body** 读：第一行是目标，其余是任务正文。
+       *
+       * 之所以不走 query：派活最常带长需求，中文一个字三字节 ——
+       * 塞在 URL 里会先撞上 Node 的 request target 上限，而那是在 `TASK_MAX_BYTES`
+       * 这道业务闸**之前**，调用方只拿到一个空结果，agent 会当成"没人回答"。
+       *
+       * 兼容老脚本：body 为空时回落到 query（用户可能还开着旧会话，
+       * 而 tb 脚本是 app 启动时才重写的）。
+       */
+      const askFromBody = (): Promise<string> =>
+        new Promise((resolve) => {
+          let size = 0
+          const parts: Buffer[] = []
+          let tooBig = false
+          req.on('data', (c: Buffer) => {
+            size += c.length
+            if (size > BODY_LIMIT) tooBig = true
+            else parts.push(c)
+          })
+          req.on('end', () => {
+            if (tooBig) return resolve(`任务太长（上限 ${TASK_MAX_BYTES} 字节）`)
+            const body = Buffer.concat(parts).toString('utf8')
+            const nl = body.indexOf('\n')
+            const target = nl < 0 ? body.trim() : body.slice(0, nl).trim()
+            const task = nl < 0 ? '' : body.slice(nl + 1)
+            resolve(
+              tb
+                ? tb.ask(
+                    source,
+                    target || (u.searchParams.get('target') ?? ''),
+                    task || (u.searchParams.get('task') ?? '')
+                  )
+                : Promise.resolve('内部错误')
+            )
+          })
+          req.on('error', () => resolve('读请求失败'))
+        })
       const run =
         route === 'skills'
           ? tb.skills(u.searchParams.get('q') ?? '')
@@ -657,11 +704,7 @@ export async function startHookSystem(
             : route === 'context'
               ? tb.context(source)
               : route === 'ask'
-                ? tb.ask(
-                    source,
-                    u.searchParams.get('target') ?? '',
-                    u.searchParams.get('task') ?? ''
-                  )
+                ? askFromBody()
                 : route === 'browser'
                   ? tb.browser(
                       source,

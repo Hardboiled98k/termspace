@@ -181,9 +181,13 @@ interface TermspaceApi {
   ) => () => void
   decideApproval: (id: string, allow: boolean) => Promise<{ ok: boolean; error?: string }>
   /** 抓终端当前屏尾部若干行（消息中心显示"它在问什么"） */
-  peek: (id: string, lines?: number) => Promise<string>
+  peek: (id: string, lines?: number) => Promise<{ text: string; sig: string }>
   /** 就地把内容写进该终端 */
-  reply: (id: string, text: string) => Promise<{ ok: boolean; error?: string }>
+  reply: (
+    id: string,
+    text: string,
+    expectSig?: string
+  ) => Promise<{ ok: boolean; error?: string; changed?: boolean }>
   onBrowserCmd: (
     cb: (req: {
       reqId: string

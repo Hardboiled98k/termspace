@@ -73,10 +73,15 @@ const api = {
   },
   decideApproval: (id: string, allow: boolean): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('approval:decide', id, allow),
-  peek: (id: string, lines?: number): Promise<string> =>
+  peek: (id: string, lines?: number): Promise<{ text: string; sig: string }> =>
     ipcRenderer.invoke('agent:peek', id, lines),
-  reply: (id: string, text: string): Promise<{ ok: boolean; error?: string }> =>
-    ipcRenderer.invoke('agent:reply', id, text),
+  /** expectSig = 调用方渲染那一屏时的指纹；主进程落笔前会重对一次（见 agent:reply） */
+  reply: (
+    id: string,
+    text: string,
+    expectSig?: string
+  ): Promise<{ ok: boolean; error?: string; changed?: boolean }> =>
+    ipcRenderer.invoke('agent:reply', id, text, expectSig),
   onData: (id: string, cb: (data: string) => void): (() => void) => {
     const listener = (_e: IpcRendererEvent, data: string): void => cb(data)
     ipcRenderer.on(`pty:data:${id}`, listener)

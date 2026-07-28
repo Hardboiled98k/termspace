@@ -3,7 +3,7 @@ import { readFile, writeFile, rename, mkdir, unlink, readdir, stat } from 'node:
 import { existsSync, appendFileSync, statSync } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { randomUUID } from 'node:crypto'
+import { randomUUID, createHash } from 'node:crypto'
 import * as pty from 'node-pty'
 import {
   startHookSystem,
@@ -872,9 +872,24 @@ ipcMain.handle('approval:decide', (e, id: string, allow: boolean) => {
  * 抓某个终端当前屏的尾部若干行 —— 消息中心用它把"终端到底在问什么"直接显示出来。
  * 只有看得见问题，就地回答才是安全的；否则就是盲按。
  */
+/**
+ * 当前屏的指纹。**回答必须绑定到"用户看见的那一屏"** ——
+ * 卡片每 2.5s 抓一次，而点击发生在两次抓取之间：这段时间里问题可能已经答完、
+ * agent 可能已经退到 shell、也可能是新会话接管了同一个节点。
+ * 那时写进去的内容会落到另一个提示、另一个会话，甚至直接变成 shell 命令。
+ *
+ * 用整屏内容做指纹而不是 session id：agent 退出到 shell 时 pane 内容必变，
+ * 一个判据同时覆盖"问题变了"和"人换了"。
+ */
+async function paneSig(id: string): Promise<string> {
+  const raw = await capturePane(id)
+  return raw ? createHash('sha256').update(raw).digest('hex').slice(0, 16) : ''
+}
+
 ipcMain.handle('agent:peek', async (e, id: string, lines = 8) => {
-  if (!fromMainWin(e) || !okId(id)) return ''
-  return peekPane(id, lines)
+  if (!fromMainWin(e) || !okId(id)) return { text: '', sig: '' }
+  const [text, sig] = await Promise.all([peekPane(id, lines), paneSig(id)])
+  return { text, sig }
 })
 
 /**
@@ -882,9 +897,18 @@ ipcMain.handle('agent:peek', async (e, id: string, lines = 8) => {
  * 与"盲发 y"的区别是 —— 上面 peek 已经把问题原文显示出来了，用户看着回答，
  * 等价于自己在终端里敲，不是替他猜。
  */
-ipcMain.handle('agent:reply', (e, id: string, text: string) => {
+ipcMain.handle('agent:reply', async (e, id: string, text: string, expectSig?: unknown) => {
   if (!fromMainWin(e) || !okId(id)) return { ok: false, error: '非法请求' }
   if (typeof text !== 'string' || text.length > 4096) return { ok: false, error: '内容不合法' }
+  /* **落笔前重新对一次指纹**。调用方传的是它渲染那一屏时的指纹；
+     对不上说明画面已经变了 —— 拒绝并让卡片刷新，绝不"大概是同一个问题"就写进去。
+     ⚠️ capturePane 之后到 p.write 之间**不许再出现 await**：那正是这条要堵的窗口。 */
+  if (typeof expectSig === 'string' && expectSig) {
+    const now = await paneSig(id)
+    if (now !== expectSig) {
+      return { ok: false, changed: true, error: '这个终端的画面已经变了，看一眼新内容再答' }
+    }
+  }
   const p = ptys.get(id)
   if (!p) return { ok: false, error: '终端已不存在' }
   p.write(text)

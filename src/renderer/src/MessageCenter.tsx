@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { TermNode } from './nodes/TerminalNode'
 import type { BoardNode, PendingApproval } from './App'
 
@@ -38,11 +38,19 @@ function AskCard({
   /** 抓不到当前屏就不让作答 —— 看不见问题的"回答"就是盲按，那正是被否掉的做法 */
   const blind = peek === ''
 
+  /* 当前屏的指纹。**回答要绑定到用户真正看见的那一屏** ——
+     卡片 2.5s 抓一次，点击发生在两次抓取之间：这段时间里问题可能已经答完、
+     agent 可能已经退到 shell（那时写进去的就是一条命令）、也可能是新会话
+     接管了同一个节点。主进程落笔前会拿这个指纹重对一次。 */
+  const sig = useRef('')
+
   useEffect(() => {
     let alive = true
     const pull = (): void => {
-      void window.termspace.peek(node.id, 8).then((t) => {
-        if (alive) setPeek(t)
+      void window.termspace.peek(node.id, 8).then((r) => {
+        if (!alive) return
+        setPeek(r.text)
+        sig.current = r.sig
       })
     }
     pull()
@@ -56,12 +64,19 @@ function AskCard({
   /* 只有真写进去了才清输入框。以前无视 reply 的返回值就清 ——
      终端已经没了 / 写入失败时，用户打的字直接蒸发，屏幕上还一切正常。 */
   const send = (s: string): void => {
-    void window.termspace.reply(node.id, s).then((r) => {
+    void window.termspace.reply(node.id, s, sig.current).then((r) => {
       if (r.ok) {
         setText('')
         setErr('')
-      } else {
-        setErr(r.error || '没能写进终端')
+        return
+      }
+      setErr(r.error || '没能写进终端')
+      // 画面变了 → 立刻拉一次新的，让用户看着新内容重新决定（输入的字保留）
+      if (r.changed) {
+        void window.termspace.peek(node.id, 8).then((n) => {
+          setPeek(n.text)
+          sig.current = n.sig
+        })
       }
     })
   }

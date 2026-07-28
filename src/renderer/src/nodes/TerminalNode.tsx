@@ -93,6 +93,10 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
   const requestDelete = useContext(RequestDeleteContext)
   const [editing, setEditing] = useState(false)
   const [ctxPct, setCtxPct] = useState<number | null>(null)
+  /* 起这个会话时注入的是哪几份上下文。和当前连线不一致 = 会话里的 system prompt
+     还是旧的 —— tmux 接回已存在会话时启动命令不会重跑，改连线改不了它。 */
+  const [injectedCtx, setInjectedCtx] = useState<string | null>(null)
+  const ctxStale = injectedCtx !== null && injectedCtx !== ctxIds
   const [fontHint, setFontHint] = useState(false)
 
   // per-node 订阅，避免高频 usage 更新走 setNodes 触发全画布 rerender
@@ -158,6 +162,11 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
       // 非零退出 = 真出事了，红边框比一行灰字显眼得多（缩到全景也看得见）
       if (code !== 0) updateNodeData(id, { status: 'error' })
     })
+    /* 记下这一轮注入的是哪几份上下文。**注意这只在真 fresh 时才是准的** ——
+       接回已存在的会话时启动命令不会重跑，那个会话里的 system prompt 是它
+       自己起来那次注入的。这里当基线用：之后连线一变就显示 stale，
+       让用户自己决定要不要重开，而不是替他猜。 */
+    setInjectedCtx(ctxIds)
     void window.termspace.spawn(id, term.cols, term.rows, {
       identityId: data.identityId,
       command: data.command,
@@ -210,10 +219,16 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
       term.dispose()
     }
     // identityId/command 变更 = 重生成会话（cleanup kill → respawn）
-    // ctxIds 变更也重生成：上下文是启动时注入的
     // fontSize 故意不在依赖里：改字号只重排，不重开会话
     // restartTick 变更 = 批量重启：调用方已 destroy 掉旧会话，这里重跑即新开
-  }, [id, data.identityId, data.command, data.cwd, ctxIds, data.restartTick])
+    //
+    // ⚠️ **ctxIds 故意不在依赖里**。它以前在，注释还写着"上下文是启动时注入的，
+    // 所以要重生成" —— 但 cleanup 走的是 releasePty（会话续存），respawn 用
+    // `new-session -A` 接回同一个会话，**启动命令根本不会再跑一遍**。
+    // 于是 effect 白重跑一轮，`--append-system-prompt` 仍是旧快照，
+    // 而画布上连线显示"已连接"。这是最难查的那种静默错：看起来生效了。
+    // 现在改成如实显示 stale + 让用户显式重开（见下面的 ctxStale）。
+  }, [id, data.identityId, data.command, data.cwd, data.restartTick])
 
   // 字号变更：改渲染 + refit + 通知 pty 新 cols/rows（会话不动）
   useEffect(() => {
@@ -348,6 +363,25 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
           >
             <span className="ctx-fill" style={{ width: `${ctxPct}%` }} />
           </span>
+        )}
+        {/* 连线改了但会话里的 system prompt 还是旧的。**必须显式说出来** ——
+            以前的做法是让 effect 重跑一轮假装重新注入了，而 tmux 接回已存在会话
+            时启动命令根本不会再执行。点它才真重开（会结束正在跑的那一轮）。 */}
+        {ctxStale && (
+          <button
+            className="status-chip attention nodrag"
+            title="画布上的上下文连线变了，但这个会话启动时注入的还是旧的那份。点击重开会话并注入新上下文（当前跑着的一轮会结束）"
+            onClick={(e) => {
+              e.stopPropagation()
+              if (!window.confirm('重开这个终端并注入新的上下文？\n当前会话会结束，正在跑的那一轮会中断。')) return
+              void window.termspace.destroy(id)
+              updateNodeData(id, {
+                restartTick: ((data as { restartTick?: number }).restartTick ?? 0) + 1
+              })
+            }}
+          >
+            上下文已变 · 重开注入
+          </button>
         )}
         <span className={`status-chip ${data.status}`}>{STATUS_LABEL[data.status]}</span>
         <button
