@@ -40,6 +40,7 @@ import {
 export type { BoardNode }
 import { IdentityContext, TmuxContext, RequestDeleteContext } from './identity-context'
 import { SettingsPanel, type SettingsSection } from './SettingsPanel'
+import { shouldShowAccount } from './quota-visibility'
 import { MessageCenter } from './MessageCenter'
 import {
   IconTerminal,
@@ -293,12 +294,8 @@ function AccountBlock({
   a: AccountQuota
   usingCount: number
 }): React.JSX.Element | null {
-  /* unconfigured 分两种，不能一刀切隐藏：
-     - 自动探测的系统默认号（本机压根没装 codex）→ 隐藏，那是噪音
-     - **用户自己建的凭证，或正被节点引用的号** → 必须显示
-       否则「未登录」这个状态在界面上永远不存在，用户只会觉得那个号凭空消失了 */
-  const userMade = !a.accountId.startsWith('system:')
-  if (a.state === 'unconfigured' && !userMade && usingCount === 0) return null
+  // 判据只有一份，见 quota-visibility.ts（这里和外层 filter 曾经各写一份）
+  if (!shouldShowAccount({ accountId: a.accountId, usingCount })) return null
   const stale = a.state === 'stale' || Date.now() / 1000 - a.capturedAt > STALE_SEC
   // 只有真拿到数了才画进度条。查不到/未登录画一根空槽 = 看着就像"用了 0%"
   const hasData = (a.state === 'ok' || a.state === 'stale') && a.windows.length > 0
@@ -384,10 +381,9 @@ function BoardHUD({
         : a.accountId === `system:${n.data.provider ?? 'claude'}`
     ).length
 
-  /* 隐藏规则和 AccountBlock 保持一致：自动探测到的、没装没登录、也没人用的系统号才藏。
-     用户自己建的凭证即使未登录也要占位，否则它在界面上就是凭空消失。 */
-  const accounts = quota.filter(
-    (a) => a.state !== 'unconfigured' || !a.accountId.startsWith('system:') || usingCount(a) > 0
+  // 和 AccountBlock 共用同一个判据（quota-visibility.ts），不再各写一份
+  const accounts = quota.filter((a) =>
+    shouldShowAccount({ accountId: a.accountId, usingCount: usingCount(a) })
   )
   if (accounts.length === 0 && agentRows.length === 0) return null
 
