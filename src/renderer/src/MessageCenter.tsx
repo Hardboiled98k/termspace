@@ -190,6 +190,70 @@ function ApproveButton({
  * （工具名 + 命令/路径摘要），批准/拒绝是真应答，不是往终端盲发按键。
  * 拿不到结构化审批的 attention（比如普通 Notification）只给「查看」，不给假的批准按钮。
  */
+/**
+ * 任务账本卡片。
+ *
+ * 存在的理由不是"记录好看"，而是**人离开一小时回来要知道哪些结果可信**。
+ * 所以只显示需要判断的那几条：失败/超时/被拒 + 还在跑 + 最近完成的少数几条。
+ * 全量历史不在这儿翻（那是账本文件的事），这里是"回来先看这个"。
+ */
+function TaskCards({ onFocus }: { onFocus: (id: string) => void }): React.JSX.Element | null {
+  const [rows, setRows] = useState<TaskRow[]>([])
+  useEffect(() => {
+    void window.termspace.listTasks().then(setRows)
+    return window.termspace.onTasks(setRows)
+  }, [])
+
+  /* 只留"需要判断的" + 最近 3 条已完成。
+     全都列出来的话，跑过几十次派活之后这块就没法看了 —— 而它的价值恰恰是
+     "一眼扫完"。真要翻历史去看账本文件。 */
+  const need = rows.filter((r) => r.state !== 'done')
+  const recent = rows.filter((r) => r.state === 'done').slice(0, 3)
+  const show = [...need, ...recent]
+  if (!show.length) return null
+
+  const label: Record<string, string> = {
+    running: '进行中',
+    done: '已完成',
+    failed: '失败',
+    timeout: '超时',
+    rejected: '被拒'
+  }
+  const dot: Record<string, string> = {
+    running: 'running',
+    done: 'idle',
+    failed: 'error',
+    timeout: 'error',
+    rejected: 'attention'
+  }
+
+  return (
+    <div className="msg-section">
+      <div className="msg-title">派活记录 · {need.length} 条待看</div>
+      {show.map((r) => (
+        <div className="msg-card task-card" key={r.id}>
+          <div className="msg-card-head">
+            <span className={`status-dot ${dot[r.state] ?? 'idle'}`} />
+            <span className="msg-card-title">
+              {r.source} → {r.target}
+            </span>
+            <span className="task-state">{label[r.state] ?? r.state}</span>
+            {/* 目标是本机节点时才跳得过去；跨机的 target 形如 mini:t-x，跳不了 */}
+            {!r.target.includes(':') && (
+              <button className="msg-act ghost" onClick={() => onFocus(r.target)}>
+                查看 →
+              </button>
+            )}
+          </div>
+          <div className="task-brief">{r.brief}</div>
+          {r.branch && <div className="task-meta">⎇ {r.branch}</div>}
+          {(r.result || r.error) && <div className="task-meta">{r.error ?? r.result}</div>}
+        </div>
+      ))}
+    </div>
+  )
+}
+
 export function MessageCenter({
   nodes,
   approvals,
@@ -208,12 +272,27 @@ export function MessageCenter({
   const attention = terms.filter((n) => n.data.status === 'attention' && !pendingIds.has(n.id))
   const running = terms.filter((n) => n.data.status === 'running')
   const groups = nodes.filter((n) => n.type === 'group').length
+  const [taskCount, setTaskCount] = useState(0)
+  useEffect(() => {
+    void window.termspace.listTasks().then((r) => setTaskCount(r.length))
+    return window.termspace.onTasks((r) => setTaskCount(r.length))
+  }, [])
 
-  if (approvals.length === 0 && attention.length === 0 && running.length === 0) return null
+  /* **有任务记录时也要出现**。原来只看 approvals/attention/running ——
+     于是"派活刚失败、所有终端都空闲"这个最需要被看见的场景，整块面板是隐藏的。 */
+  if (
+    approvals.length === 0 &&
+    attention.length === 0 &&
+    running.length === 0 &&
+    taskCount === 0
+  ) {
+    return null
+  }
 
   // 不自带 Panel：和额度 HUD 同属右上角栏（两个 top-right Panel 会叠在同一点上）
   return (
     <div className="msg-center">
+      <TaskCards onFocus={onFocus} />
       {approvals.length > 0 && (
         <div className="msg-section">
           <div className="msg-title needs">

@@ -32,6 +32,7 @@ import {
   removeWorktree
 } from './worktree.ts'
 import { sanitizeImportedWorkspace } from './workspace-import'
+import { createLedger, sortForReview, type Ledger } from './task-ledger'
 import { startRemoteApi, type RemoteApi } from './remote'
 import { startUpdater, type Updater } from './updater'
 import {
@@ -53,6 +54,7 @@ import { getSettings, setSettings, type Settings } from './settings-store'
 import { searchSkills, loadSkill, listSkills } from './skill-index'
 import {
   delegate,
+  classifyDelegateResult,
   noteTranscript,
   noteStatus,
   dropNode,
@@ -214,6 +216,67 @@ let boardLinks = new Set<string>()
 let boardCtxLinks = new Set<string>()
 /** 完整画布快照（布局 + 状态），远程 API 用；终端内容不在里面 */
 let boardSnapshot: unknown = null
+
+/**
+ * 任务账本。**每一次派活都要留痕** —— 派活状态原来只是运行时投影，
+ * app 一重启就没了，而"我离开一小时回来，哪些结果可信"正是多 agent 的真痛点。
+ */
+let ledger: Ledger | null = null
+
+/**
+ * 包一层记账。**分类判据用 delegate 自己的 classifyDelegateResult** ——
+ * 那些话术是它产生的，调用方各猜一份就会改一处漏三处。
+ *
+ * 记账失败绝不能影响派活本身：账本是观测，派活是正事。
+ */
+async function withLedger(
+  meta: { source: string; target: string; task: string; branch?: string },
+  run: () => Promise<string>
+): Promise<string> {
+  const id = await ledger
+    ?.start({ source: meta.source, target: meta.target, brief: meta.task, branch: meta.branch })
+    .catch(() => undefined)
+  let text = ''
+  try {
+    text = await run()
+    return text
+  } finally {
+    if (id) {
+      const state = classifyDelegateResult(text)
+      void ledger
+        ?.finish(id, {
+          state,
+          ...(state === 'done' ? { result: text } : { error: text })
+        })
+        .then(() => pushTasks())
+        .catch(() => undefined)
+    }
+  }
+}
+
+/**
+ * 这个终端此刻落在哪个 worktree 分支上。
+ *
+ * **写进账本的关键上下文**：同一句"改好了"，在 main 上和在 feat/x 上
+ * 是两件可信度完全不同的事。从画布快照里查（组 → worktree.branch）——
+ * 主进程本来就有这份快照，不必再问 renderer。
+ */
+function branchOfNode(nodeId: string): string | undefined {
+  const b = boardSnapshot as { nodes?: { id: string; parentId?: string; worktree?: { branch?: string } }[] } | null
+  const nodes = b?.nodes
+  if (!nodes) return undefined
+  const me = nodes.find((n) => n.id === nodeId)
+  if (!me?.parentId) return undefined
+  return nodes.find((n) => n.id === me.parentId)?.worktree?.branch
+}
+
+/** 账本变了就推给画布（卡片列表要跟着变） */
+function pushTasks(): void {
+  void ledger
+    ?.list()
+    .then((rows) => sendToWin('tasks:update', sortForReview(rows)))
+    .catch(() => undefined)
+}
 
 /**
  * 起远程 API。抽出来是因为**设置里点掉总开关必须立刻断服务**，
@@ -1040,6 +1103,12 @@ ipcMain.handle('git:removeWorktree', async (e, p: unknown) => {
   return removeWorktree(p)
 })
 
+/** 任务账本快照。renderer reload 后靠它重新填卡片（推送是增量的） */
+ipcMain.handle('tasks:list', async (e) => {
+  if (!fromMainWin(e)) return []
+  return sortForReview((await ledger?.list()) ?? [])
+})
+
 ipcMain.handle('remote:status', async (e) => {
   if (!fromMainWin(e)) return null
   const s = await getSettings()
@@ -1664,7 +1733,8 @@ app.whenReady().then(async () => {
             }
             return askPeer(source, peer, task)
           }
-          return delegate(
+          return withLedger({ source, target, task, branch: branchOfNode(target) }, () =>
+            delegate(
             {
               hasNode: (nid) => ptys.has(nid),
               writeToPty: (nid, data) => ptys.get(nid)?.write(data),
@@ -1681,6 +1751,7 @@ app.whenReady().then(async () => {
             source,
             target,
             task
+            )
           )
         },
         /* 别的机器 ssh 过来派的活。**授权判据和本机那条完全不同**：
@@ -1705,7 +1776,8 @@ app.whenReady().then(async () => {
           if (!(await getSettings()).peerDelegate) {
             return '派活被拒：这台机器没开「接受跨机派活」（设置 → 跨机协作）。'
           }
-          return delegate(
+          return withLedger({ source: `peer:${source || '?'}`, target, task }, () =>
+            delegate(
             {
               hasNode: (nid) => ptys.has(nid),
               writeToPty: (nid, data) => ptys.get(nid)?.write(data),
@@ -1721,6 +1793,7 @@ app.whenReady().then(async () => {
             target,
             task,
             PEER_TIMEOUTS.remoteDelegateMs
+            )
           )
         },
         browser: async (source, action, arg, nodeId) => {
@@ -1783,6 +1856,10 @@ app.whenReady().then(async () => {
   } catch (err) {
     console.error('hook system failed to start:', err)
   }
+
+  // 任务账本（派活留痕）。JSONL 追加写，见 task-ledger.ts
+  ledger = createLedger(path.join(app.getPath('userData'), 'tasks.jsonl'))
+  pushTasks()
 
   // F7 worker 卡片：轮询 cdx list（franke_skills 引擎）
   workerWatch = startWorkerWatch((rows) => sendToWin('workers:update', rows))

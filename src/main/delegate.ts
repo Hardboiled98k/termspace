@@ -339,6 +339,24 @@ export function setDelegateFlightListener(fn: typeof onFlight): void {
  * 注入任务 → 轮询等这一轮的 Stop（相对发起时刻的新 Stop）→ 取 transcript 尾。
  * 超时/无 transcript 有明确回话，绝不无限挂起。
  */
+/**
+ * 把 `delegate` 的返回文本分类成账本状态。
+ *
+ * **判据放在这里而不是调用方**：这些话术是 delegate 自己产生的，
+ * 调用方（本机 tb/ask、跨机 peer、将来的 UI）各猜一份 = 改一处漏三处。
+ *
+ * 注意 `[派活中断…]` 归到 failed 而不是 timeout：中断的语义是
+ * "本轮结果不可取，去那个终端确认"，和"还在跑"完全不同 ——
+ * 用户回来时这两种要区别对待。
+ */
+export function classifyDelegateResult(text: string): 'done' | 'failed' | 'timeout' | 'rejected' {
+  if (text.startsWith('派活被拒')) return 'rejected'
+  if (text.startsWith('派活失败')) return 'failed'
+  if (text.startsWith('[派活超时')) return 'timeout'
+  if (text.startsWith('[派活中断')) return 'failed'
+  return 'done'
+}
+
 export async function delegate(
   deps: DelegateDeps,
   sourceId: string,

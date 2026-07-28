@@ -73,6 +73,13 @@ const api = {
   },
   decideApproval: (id: string, allow: boolean): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('approval:decide', id, allow),
+  /** 任务账本：快照 + 变更推送（派活留痕，见 main/task-ledger.ts） */
+  listTasks: (): Promise<unknown[]> => ipcRenderer.invoke('tasks:list'),
+  onTasks: (cb: (rows: unknown[]) => void): (() => void) => {
+    const h = (_e: unknown, rows: unknown[]): void => cb(rows)
+    ipcRenderer.on('tasks:update', h)
+    return () => ipcRenderer.off('tasks:update', h)
+  },
   peek: (id: string, lines?: number): Promise<{ text: string; sig: string }> =>
     ipcRenderer.invoke('agent:peek', id, lines),
   /** expectSig = 调用方渲染那一屏时的指纹；主进程落笔前会重对一次（见 agent:reply） */

@@ -1,5 +1,22 @@
 /// <reference types="vite/client" />
 
+/* **不能写 export**：这个文件靠"没有顶层 import/export"才是全局声明文件，
+   一加 export 它就变成模块，`interface Window` 增强整个失效 ——
+   症状是所有 `window.termspace` 一起报 TS2339（实测）。 */
+interface TaskRow {
+  id: string
+  source: string
+  target: string
+  brief: string
+  startedAt: number
+  endedAt?: number
+  state: 'running' | 'done' | 'failed' | 'timeout' | 'rejected'
+  result?: string
+  error?: string
+  branch?: string
+  transcript?: string
+}
+
 interface AppSettings {
   defaultFontSize: number
   defaultShell: string
@@ -181,6 +198,8 @@ interface TermspaceApi {
   ) => () => void
   decideApproval: (id: string, allow: boolean) => Promise<{ ok: boolean; error?: string }>
   /** 抓终端当前屏尾部若干行（消息中心显示"它在问什么"） */
+  listTasks: () => Promise<TaskRow[]>
+  onTasks: (cb: (rows: TaskRow[]) => void) => () => void
   peek: (id: string, lines?: number) => Promise<{ text: string; sig: string }>
   /** 就地把内容写进该终端 */
   reply: (

@@ -2374,3 +2374,28 @@ body {
 .palette-foot {
   border-top: 0.5px solid var(--tb-hairline);
 }
+
+/* 派活记录卡片 */
+.task-state {
+  padding: 1px 7px;
+  font: 500 10px/1.6 var(--tb-font-ui);
+  color: var(--tb-muted);
+  border: 0.5px solid var(--tb-hairline-strong);
+  border-radius: var(--tb-radius-pill);
+}
+.task-brief,
+.task-meta {
+  font: 400 11px/1.45 var(--tb-font-ui);
+  color: var(--tb-muted);
+  /* 三行截断：卡片是"一眼扫完"用的，长任务正文在账本里 */
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.task-brief {
+  color: var(--tb-text);
+}
+.task-meta {
+  -webkit-line-clamp: 2;
+}
