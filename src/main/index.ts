@@ -791,7 +791,15 @@ ipcMain.handle(
        每个订阅账号一个目录，所以只能在 spawn 时按需装。
        ⚠️ 装了不等于会跑 —— codex 对 hook 有授信机制，未授信时**静默跳过**。
        体检里有一条探针专门验这个，别在这里假设成功。 */
-    if (opts?.provider === 'codex' && hookSystem && settings.claudeHooks === 'on') {
+    /* **不判 provider —— 任何终端都装**。原来只给 `provider === 'codex'` 的节点装，
+       而用户最常见的用法是先开一个普通 zsh、再手敲 `codex`：那种节点
+       provider 是空，于是它**完全不上报状态**，发光边框不亮、额度面板数不到它、
+       `tb ask` 也接不了单。而 Claude 那边的 hook 装在全局 `~/.claude`，
+       同样的用法就一切正常 —— 两边不对称，用户感知到的就是"codex 少算了"。
+
+       代价：给每个终端的 CODEX_HOME 写一次 hooks.json（幂等、有备份、
+       只在用户已同意写 hook 时执行）。没装 codex 的用户那边就是一个没人读的文件。 */
+    if (hookSystem && settings.claudeHooks === 'on') {
       const codexHome = env['CODEX_HOME'] || path.join(os.homedir(), '.codex')
       await hookSystem.enableCodexHooks(codexHome).catch((err) => {
         console.warn('codex hook 安装失败:', err)

@@ -42,6 +42,7 @@ import { IdentityContext, TmuxContext, RequestDeleteContext } from './identity-c
 import { SettingsPanel, type SettingsSection } from './SettingsPanel'
 import { shouldShowAccount } from './quota-visibility'
 import { countUsing } from './quota-usage'
+import { placeNewNode, viewportCenter } from './place-node'
 import { CommandPalette } from './CommandPalette'
 import type { PaletteNode } from './palette'
 import { MessageCenter } from './MessageCenter'
@@ -308,7 +309,18 @@ function AccountBlock({
         <span className={`identity-provider ${a.provider}`}>{a.provider}</span>
         <span className="quota-account-name">{a.name}</span>
         {a.plan && <span className="quota-plan">{a.plan}</span>}
-        <span className={`quota-using${usingCount ? ' on' : ''}`}>{usingCount} 节点</span>
+        {/* **说"终端"不说"节点"**：用户会把"1 节点"读成"1 个凭证/1 把 key"，
+            而它的意思是"画布上有几个终端在用这个账号"。实测被误解过一次。 */}
+        <span
+          className={`quota-using${usingCount ? ' on' : ''}`}
+          title={
+            usingCount
+              ? `画布上有 ${usingCount} 个终端正在用这个账号`
+              : '画布上暂时没有终端在用这个账号'
+          }
+        >
+          {usingCount} 个终端
+        </span>
       </div>
       {/* 邮箱是区分两个同 provider 订阅号的唯一可靠标识 —— planType 都叫 'pro' */}
       {a.email && <div className="quota-email">{a.email}</div>}
@@ -835,7 +847,22 @@ function Board(): React.JSX.Element {
   const boardsRef = useRef<Record<string, SavedBoard>>({})
   const hadSaved = useRef(false)
   const viewportRef = useRef<Viewport | null>(null)
-  const { setViewport, fitView } = useReactFlow()
+  const { setViewport, fitView, getViewport } = useReactFlow()
+  /* 新节点落在**当前视口正中**（判据见 place-node.ts）。
+     老实现用画布绝对坐标的固定网格，把画布拖走之后新建的节点会出现在几千像素外，
+     每次都要满画布找 —— 用户实测报的就是这个。 */
+  const centerOf = useCallback(
+    (size: { width: number; height: number }, existing: { x: number; y: number }[]) => {
+      const pane = document.querySelector('.react-flow__viewport')?.parentElement
+      const r = pane?.getBoundingClientRect()
+      const center = viewportCenter(getViewport(), {
+        width: r?.width ?? window.innerWidth,
+        height: r?.height ?? window.innerHeight
+      })
+      return placeNewNode(center, size, existing)
+    },
+    [getViewport]
+  )
 
   // HUD 画布概览用：收集各节点 context 用量（事件只在变化时来，频率低）
   useEffect(
@@ -1480,7 +1507,7 @@ function Board(): React.JSX.Element {
                   // 有父节点时 position 是**相对组身**的，用绝对坐标会飞到组外
                   position: { x: 24, y: 56 + (n % 3) * 40 }
                 }
-              : { position: { x: 120 + (n % 5) * 160, y: 160 + (n % 3) * 140 } }),
+              : { position: centerOf(DEFAULT_SIZE, ns.map((x) => x.position)) }),
             ...DEFAULT_SIZE,
             data: {
               title: preset ? `${preset.name} · ${id}` : `zsh · ${id}`,
@@ -1509,13 +1536,12 @@ function Board(): React.JSX.Element {
       const newId = nextId(nodesRef.current, 'b')
       setNodes((ns) => {
         if (ns.some((n) => n.id === newId)) return ns
-        const n = ns.length
         return [
           ...ns,
           {
             id: newId,
             type: 'browser' as const,
-            position: { x: 200 + (n % 4) * 120, y: 200 + (n % 3) * 100 },
+            position: centerOf({ width: 640, height: 460 }, ns.map((x) => x.position)),
             width: 640,
             height: 460,
             data: { url: url || 'https://www.google.com' }
@@ -1535,13 +1561,12 @@ function Board(): React.JSX.Element {
       )
       if (existing) return ns.map((n) => ({ ...n, selected: n.id === existing.id }))
       const newId = nextId(ns, 'k')
-      const n = ns.length
       return [
         ...ns,
         {
           id: newId,
           type: 'credential' as const,
-          position: { x: 120 + (n % 4) * 60, y: 420 + (n % 3) * 80 },
+          position: centerOf({ width: 220, height: 132 }, ns.map((x) => x.position)),
           width: 220,
           height: 132,
           data: { identityId }
@@ -1564,7 +1589,7 @@ function Board(): React.JSX.Element {
         {
           id: `ctx-${activeProject}`,
           type: 'context' as const,
-          position: { x: 40, y: 300 },
+          position: centerOf({ width: 420, height: 320 }, ns.map((x) => x.position)),
           width: 420,
           height: 320,
           data: { title: '共享上下文' }
