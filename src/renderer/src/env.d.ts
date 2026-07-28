@@ -3,6 +3,13 @@
 /* **不能写 export**：这个文件靠"没有顶层 import/export"才是全局声明文件，
    一加 export 它就变成模块，`interface Window` 增强整个失效 ——
    症状是所有 `window.termspace` 一起报 TS2339（实测）。 */
+interface BrokerMeta {
+  id: string
+  name: string
+  kind: 'ssh' | 'postgres'
+  readOnly: boolean
+}
+
 interface TaskRow {
   id: string
   source: string
@@ -38,6 +45,7 @@ interface AppSettings {
   /** 更新源（存 latest-mac.yml + zip 的 HTTPS 目录）。空 = 没配，更新不工作 */
   updateFeedUrl: string
   editorCommand: string
+  brokers: BrokerMeta[]
 }
 
 /** 更新状态。五档必须能区分 —— 界面据此决定显示什么 */
@@ -314,6 +322,14 @@ interface TermspaceApi {
     branch: string
   ) => Promise<{ ok: boolean; path?: string; error?: string }>
   /** 绝不 --force：脏树删不掉是特性，error 里带 git 的原话 */
+  saveBroker: (b: {
+    id?: string
+    name: string
+    kind: 'ssh' | 'postgres'
+    readOnly: boolean
+    target?: string
+  }) => Promise<{ ok: boolean; error?: string; brokers?: BrokerMeta[] }>
+  deleteBroker: (id: string) => Promise<{ ok: boolean; brokers?: BrokerMeta[] }>
   exportLayout: (payload: {
     name: string
     description?: string

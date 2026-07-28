@@ -424,6 +424,18 @@ case "$cmd" in
     { printf '%s\n' "$target"; printf '%s' "$*"; } |
       curl -sS -f -m ${Math.round(PEER_TIMEOUTS.tbMs / 1000)} -H "$H" \
         -X POST --data-binary @- "$BASE/tb/ask" ;;
+  db|sql)
+    # 代理连接：**连接串在主进程里，这个终端拿不到** —— 只把 SQL 送过去。
+    # 正文走 stdin（同 ask），名字在第一行。
+    name="$1"; shift 2>/dev/null
+    if [ -z "$name" ] || [ -z "$*" ]; then echo "用法: tb db <连接名> <SQL>" >&2; exit 2; fi
+    { printf '%s\n' "$name"; printf '%s' "$*"; } |
+      curl -sS -f -m 60 -H "$H" -X POST --data-binary @- "$BASE/tb/broker?kind=postgres" ;;
+  ssh)
+    name="$1"; shift 2>/dev/null
+    if [ -z "$name" ] || [ -z "$*" ]; then echo "用法: tb ssh <连接名> <命令>" >&2; exit 2; fi
+    { printf '%s\n' "$name"; printf '%s' "$*"; } |
+      curl -sS -f -m 60 -H "$H" -X POST --data-binary @- "$BASE/tb/broker?kind=ssh" ;;
   browser|web)
     action="$1"; shift 2>/dev/null
     node=""
@@ -449,6 +461,9 @@ tb — Termspace 工具中枢
   tb browser js <代码>     在页面里执行 JS 并返回结果（如 document.title）
   tb browser shot          截图当前页面，返回图片路径（可用读图能力查看）
   tb browser list          列出画布上的浏览器节点
+  tb db <连接名> <SQL>     在代理数据库连接上跑一条 SQL（只读连接会拒写语句）
+  tb ssh <连接名> <命令>   在代理 ssh 连接上跑一条命令
+                           —— 这两个的凭证在主进程里，**你拿不到，也不需要**
 
 用法：先 skills 找、load 取全文，不要凭记忆猜 skill。
 派活前先 tb agents 看有哪些节点，再 tb ask <id> "任务描述"。
@@ -475,6 +490,11 @@ export interface TbHandlers {
   peerAsk?: (source: string, target: string, task: string) => Promise<string>
   /** 别的机器问「你这儿有哪些 agent 终端」。只读，但同样受跨机开关门控 */
   peerAgents?: (source: string) => Promise<string>
+  /**
+   * 代理连接（`tb db` / `tb ssh`）：agent 只给**名字和正文**，
+   * 连接串在主进程里取用，一个字节都不回给终端（见 broker.ts）。
+   */
+  broker?: (source: string, kind: string, name: string, payload: string) => Promise<string>
   browser: (source: string, action: string, arg: string, nodeId: string) => Promise<string>
 }
 
@@ -666,6 +686,34 @@ export async function startHookSystem(
        * 兼容老脚本：body 为空时回落到 query（用户可能还开着旧会话，
        * 而 tb 脚本是 app 启动时才重写的）。
        */
+      /** 读 body：第一行是名字，其余是正文。和 ask 同一个形状 */
+      const readNamedBody = (): Promise<{ name: string; body: string } | null> =>
+        new Promise((resolve) => {
+          let size = 0
+          const parts: Buffer[] = []
+          let tooBig = false
+          req.on('data', (c: Buffer) => {
+            size += c.length
+            if (size > BODY_LIMIT) tooBig = true
+            else parts.push(c)
+          })
+          req.on('end', () => {
+            if (tooBig) return resolve(null)
+            const text = Buffer.concat(parts).toString('utf8')
+            const nl = text.indexOf('\n')
+            if (nl < 0) return resolve(null)
+            resolve({ name: text.slice(0, nl).trim(), body: text.slice(nl + 1) })
+          })
+          req.on('error', () => resolve(null))
+        })
+
+      const brokerFromBody = async (kind: string): Promise<string> => {
+        if (!tb?.broker) return '这台机器不支持代理连接'
+        const p = await readNamedBody()
+        if (!p) return '请求格式不对'
+        return tb.broker(source, kind, p.name, p.body)
+      }
+
       const askFromBody = (): Promise<string> =>
         new Promise((resolve) => {
           let size = 0
@@ -703,6 +751,8 @@ export async function startHookSystem(
               ? tb.agents(source, u.searchParams.get('peer') ?? '')
             : route === 'context'
               ? tb.context(source)
+              : route === 'broker'
+                ? brokerFromBody(u.searchParams.get('kind') ?? '')
               : route === 'ask'
                 ? askFromBody()
                 : route === 'browser'

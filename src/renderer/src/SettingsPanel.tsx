@@ -101,6 +101,11 @@ export function SettingsPanel({
   const [backupMsg, setBackupMsg] = useState('')
   /** 白名单里的编辑器（主进程给，渲染层不自己维护一份 —— 两份必然漂） */
   const [editors, setEditors] = useState<string[]>([])
+  const [brokerName, setBrokerName] = useState('')
+  const [brokerKind, setBrokerKind] = useState<'ssh' | 'postgres'>('postgres')
+  const [brokerRO, setBrokerRO] = useState(true)
+  /** 连接串草稿。**只在内存里活一次** —— 保存后主进程不会再回传它 */
+  const [brokerTarget, setBrokerTarget] = useState('')
 
   useEffect(() => {
     void window.termspace.getSettings().then(setS)
@@ -347,6 +352,101 @@ export function SettingsPanel({
                   </span>
                 </div>
               ))}
+
+              <h3 className="settings-h">代理连接（agent 用得到、拿不到凭证）</h3>
+              <p className="settings-note">
+                这是<b>唯一</b>真正做到「AI 能用但看不到密码」的地方：连接串加密存在钥匙串里、
+                只在主进程内使用，agent 只能说「在 <code>prod</code> 上跑这条 SQL」。
+                终端里用 <code>tb db &lt;名字&gt; &quot;select …&quot;</code> 或{' '}
+                <code>tb ssh &lt;名字&gt; &quot;ls /var/log&quot;</code>。
+                <br />
+                只读模式：数据库会拒绝写语句并让整个会话进只读事务；ssh 只放行一小组
+                查看类命令且不含管道分号。<b>只对能代理的协议承诺</b> —— API key
+                作为环境变量注入时做不到这件事，那是协议本身的性质。
+              </p>
+              <div className="identity-list">
+                {(s?.brokers ?? []).map((b) => (
+                  <div key={b.id} className="identity-row">
+                    <span className={`identity-provider ${b.kind === 'ssh' ? 'custom' : 'codex'}`}>
+                      {b.kind}
+                    </span>
+                    <span className="identity-name">{b.name}</span>
+                    <span className="identity-keys">{b.readOnly ? '只读' : '可写'}</span>
+                    <button
+                      className="identity-del"
+                      onClick={() => {
+                        if (!window.confirm(`删除代理连接「${b.name}」？连接串一并删除。`)) return
+                        void window.termspace.deleteBroker(b.id).then(() => {
+                          void window.termspace.getSettings().then(setS)
+                        })
+                      }}
+                    >
+                      删除
+                    </button>
+                  </div>
+                ))}
+                {(s?.brokers ?? []).length === 0 && (
+                  <div className="identity-empty">还没有代理连接</div>
+                )}
+              </div>
+              <div className="identity-form-row">
+                <input
+                  placeholder="名字（agent 用它来指认，如 prod）"
+                  value={brokerName}
+                  onChange={(e) => setBrokerName(e.currentTarget.value)}
+                />
+                <select
+                  value={brokerKind}
+                  onChange={(e) => setBrokerKind(e.currentTarget.value as 'ssh' | 'postgres')}
+                >
+                  <option value="postgres">postgres</option>
+                  <option value="ssh">ssh</option>
+                </select>
+                <label className="settings-inline">
+                  <input
+                    type="checkbox"
+                    checked={brokerRO}
+                    onChange={(e) => setBrokerRO(e.currentTarget.checked)}
+                  />
+                  只读
+                </label>
+              </div>
+              <div className="identity-form-row">
+                <input
+                  type="password"
+                  placeholder={
+                    brokerKind === 'ssh'
+                      ? 'ssh 目标（别名或 user@host）'
+                      : 'postgres://用户:密码@主机/库'
+                  }
+                  value={brokerTarget}
+                  onChange={(e) => setBrokerTarget(e.currentTarget.value)}
+                />
+                <button
+                  className="settings-btn"
+                  disabled={!brokerName.trim() || !brokerTarget.trim()}
+                  onClick={() => {
+                    void window.termspace
+                      .saveBroker({
+                        name: brokerName.trim(),
+                        kind: brokerKind,
+                        readOnly: brokerRO,
+                        target: brokerTarget
+                      })
+                      .then((r) => {
+                        if (!r.ok) return setSaveErr(r.error ?? '保存失败')
+                        setBrokerName('')
+                        setBrokerTarget('')
+                        void window.termspace.getSettings().then(setS)
+                      })
+                  }}
+                >
+                  保存
+                </button>
+              </div>
+              <p className="settings-note">
+                连接串保存后<b>再也读不回来</b>（没有那条 IPC，这是有意的）。要改就重填一次。
+              </p>
 
               <h3 className="settings-h">在编辑器打开</h3>
               <div className="settings-row">

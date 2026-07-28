@@ -34,6 +34,8 @@ import {
 } from './worktree.ts'
 import { openInEditor, editorNames } from './open-in-editor'
 import { toTemplate, fromTemplate, type LayoutTemplate } from './layout-template'
+import { brokerRun } from './broker'
+import { getBrokerTarget, setBrokerTarget, deleteBrokerTarget } from './broker-store'
 import { sanitizeImportedWorkspace } from './workspace-import'
 import { createLedger, sortForReview, type Ledger } from './task-ledger'
 import { startRemoteApi, type RemoteApi } from './remote'
@@ -1556,6 +1558,43 @@ ipcMain.handle('workspace:export', async (e, data: unknown) => {
  * 导出任务布局模板。**和导出工作区是两件事**：
  * 模板要能发给别人，所以不含凭证、cwd 相对化、命令改名成"建议命令"。
  */
+/* 代理连接的管理。**连接串只进不出** —— 没有任何 IPC 能把它读回渲染层，
+   那正是这层设计的意义（见 broker-store.ts）。 */
+ipcMain.handle('broker:save', async (e, input: unknown) => {
+  if (!fromMainWin(e)) return { ok: false, error: 'denied' }
+  const b = input as {
+    id?: string
+    name?: string
+    kind?: 'ssh' | 'postgres'
+    readOnly?: boolean
+    target?: string
+  }
+  if (!b?.name || (b.kind !== 'ssh' && b.kind !== 'postgres')) {
+    return { ok: false, error: '参数不合法' }
+  }
+  const id = b.id || randomUUID()
+  const st = await getSettings()
+  const rest = st.brokers.filter((x) => x.id !== id)
+  const next = [...rest, { id, name: b.name, kind: b.kind, readOnly: b.readOnly !== false }]
+  try {
+    // 有给新连接串才写；编辑名字/只读时不必重填
+    if (typeof b.target === 'string' && b.target) await setBrokerTarget(id, b.target)
+    await setSettings({ brokers: next })
+    return { ok: true, brokers: next }
+  } catch (err) {
+    return { ok: false, error: String((err as Error)?.message ?? err) }
+  }
+})
+
+ipcMain.handle('broker:delete', async (e, id: unknown) => {
+  if (!fromMainWin(e) || typeof id !== 'string') return { ok: false }
+  const st = await getSettings()
+  await deleteBrokerTarget(id)
+  const next = st.brokers.filter((b) => b.id !== id)
+  await setSettings({ brokers: next })
+  return { ok: true, brokers: next }
+})
+
 ipcMain.handle('layout:export', async (e, payload: unknown) => {
   if (!fromMainWin(e) || !mainWin) return { ok: false, error: 'denied' }
   const p = payload as {
@@ -1866,6 +1905,29 @@ app.whenReady().then(async () => {
           return rows.length
             ? `[来自 ${source || '对端'} 的查询]\n${rows.join('\n')}`
             : '这台机器的画布上没有终端节点。'
+        },
+        /**
+         * 代理连接：agent 给名字和正文，**连接串在这里取、用完就走**，
+         * 一个字节都不回给终端。这是整个产品里唯一真正做到
+         * "用得到、拿不到"的地方（见 broker.ts 的文件头）。
+         */
+        broker: async (source, kind, name, payload) => {
+          const cfg = await getSettings()
+          const prof = cfg.brokers.find((b) => b.name === name && b.kind === kind)
+          if (!prof) {
+            const avail = cfg.brokers.filter((b) => b.kind === kind).map((b) => b.name)
+            return `没有名为「${name}」的${kind}连接。${avail.length ? `可用：${avail.join('、')}` : '去设置 → 代理连接里加一个。'}`
+          }
+          const target = await getBrokerTarget(prof.id)
+          if (!target) return `连接「${name}」还没配连接串（设置 → 代理连接）`
+          const r = await brokerRun({ ...prof, kind: prof.kind, target }, payload)
+          /* **错误原文要回给 agent**（它要据此改 SQL），
+             但错误里可能带连接串 —— psql 的报错会打印 host/dbname。
+             这里做一次兜底剥离：连接串本身绝不出现在返回里。 */
+          const scrub = (t: string): string => (target ? t.split(target).join('«已隐去»') : t)
+          if (!r.ok) return `执行失败：${scrub(r.error ?? '未知错误')}`
+          void source // 调用方节点 id：将来记进账本用
+          return r.output || '（无输出）'
         },
         peerAsk: async (source, target, task) => {
           if (!(await getSettings()).peerDelegate) {

@@ -64,6 +64,14 @@ export interface Settings {
    * 空 = 一律 Finder。
    */
   editorCommand: string
+  /**
+   * 代理连接（见 broker.ts）：agent 能用、但拿不到里面的凭证。
+   *
+   * ⚠️ **target 里通常带密码**，而 settings.json 是明文的 —— 所以这里只存
+   * `id/name/kind/readOnly`，真正的连接串走 Keychain（identity-store 那套）。
+   * 别为了"少一次跳转"把 target 放进来。
+   */
+  brokers: { id: string; name: string; kind: 'ssh' | 'postgres'; readOnly: boolean }[]
 }
 
 /**
@@ -91,7 +99,8 @@ export const DEFAULTS: Settings = {
   peerDelegate: false,
   autoUpdate: true,
   updateFeedUrl: OFFICIAL_FEED,
-  editorCommand: ''
+  editorCommand: '',
+  brokers: []
 }
 
 const file = (): string => path.join(app.getPath('userData'), 'settings.json')
@@ -150,7 +159,25 @@ function sanitize(s: Settings): Settings {
     /* 只留字母数字：它是白名单的**键**，脏值反正查不到表，
        但把长度和字符集卡住可以让日志和界面不至于出现一整条命令行 */
     editorCommand:
-      typeof s.editorCommand === 'string' ? s.editorCommand.trim().slice(0, 20).replace(/[^A-Za-z0-9_-]/g, '') : ''
+      typeof s.editorCommand === 'string' ? s.editorCommand.trim().slice(0, 20).replace(/[^A-Za-z0-9_-]/g, '') : '',
+    brokers: Array.isArray(s.brokers)
+      ? s.brokers
+          .filter(
+            (b) =>
+              b &&
+              typeof b.id === 'string' &&
+              typeof b.name === 'string' &&
+              (b.kind === 'ssh' || b.kind === 'postgres')
+          )
+          .map((b) => ({
+            id: b.id.slice(0, 64),
+            name: b.name.slice(0, 40),
+            kind: b.kind,
+            // 只读默认**开**：手改文件把它删掉时应该更严，不是更松
+            readOnly: b.readOnly !== false
+          }))
+          .slice(0, 30)
+      : []
   }
 }
 

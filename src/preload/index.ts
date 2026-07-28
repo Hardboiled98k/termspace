@@ -198,6 +198,17 @@ const api = {
     ipcRenderer.invoke('git:worktreeStatus', path),
   gitCreateWorktree: (repoRoot: string, branch: string): Promise<unknown> =>
     ipcRenderer.invoke('git:createWorktree', repoRoot, branch),
+  /** 代理连接：**没有读回连接串的通道，那是有意的**（见 broker-store.ts） */
+  saveBroker: (b: {
+    id?: string
+    name: string
+    kind: 'ssh' | 'postgres'
+    readOnly: boolean
+    target?: string
+  }): Promise<{ ok: boolean; error?: string; brokers?: unknown[] }> =>
+    ipcRenderer.invoke('broker:save', b),
+  deleteBroker: (id: string): Promise<{ ok: boolean; brokers?: unknown[] }> =>
+    ipcRenderer.invoke('broker:delete', id),
   exportLayout: (payload: unknown): Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }> =>
     ipcRenderer.invoke('layout:export', payload),
   importLayout: (): Promise<unknown> => ipcRenderer.invoke('layout:import'),
