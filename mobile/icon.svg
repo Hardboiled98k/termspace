@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Termscape">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Termspace">
   <!-- maskable：内容全部收在中心 80% 安全区内，被系统裁成圆形也不缺角 -->
   <rect width="512" height="512" fill="#0b0d12" />
   <g stroke="#3a3a3f" stroke-width="9" stroke-linecap="round">

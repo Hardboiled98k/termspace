@@ -14,9 +14,9 @@ export APPLE_TEAM_ID=85V88J2F3F
 npm run dist:signed
 
 # 3. 验收（两个架构都要 —— x64 那份在这台机上跑不起来，签名却照样得对）
-codesign --verify --deep --strict dist/mac-arm64/Termscape.app
-codesign --verify --deep --strict dist/mac/Termscape.app
-spctl --assess --type execute dist/mac-arm64/Termscape.app   # 要看到 source=Notarized Developer ID
+codesign --verify --deep --strict dist/mac-arm64/Termspace.app
+codesign --verify --deep --strict dist/mac/Termspace.app
+spctl --assess --type execute dist/mac-arm64/Termspace.app   # 要看到 source=Notarized Developer ID
 
 # 4. **打完包必须重编译 node-pty**，否则本机 npm run dev 起不来（见下）
 npm run rebuild
@@ -25,12 +25,12 @@ npm run rebuild
 # electron-builder 只公证 .app，**dmg 默认没有 ticket** —— 不做这两步就直接
 # stapler validate 必然报 "does not have a ticket stapled to it"。
 # 自动更新走的是 zip，不受影响；publish.sh 也只发 zip + yml。
-xcrun notarytool submit dist/Termscape-<版本>-arm64.dmg \
+xcrun notarytool submit dist/Termspace-<版本>-arm64.dmg \
   --key "$APPLE_API_KEY" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER" --wait
-xcrun stapler staple dist/Termscape-<版本>-arm64.dmg
-xcrun stapler validate dist/Termscape-<版本>-arm64.dmg
+xcrun stapler staple dist/Termspace-<版本>-arm64.dmg
+xcrun stapler validate dist/Termspace-<版本>-arm64.dmg
 
-# 5. 发布（第一次要先填 ~/.termscape-publish.env，见脚本头部）
+# 5. 发布（第一次要先填 ~/.termspace-publish.env，见脚本头部）
 ./scripts/publish.sh
 ```
 
@@ -133,9 +133,9 @@ quarantine 属性只有浏览器/AirDrop 下载才加，本机构建和 `scp` �
 ## 装到另一台机
 
 ```bash
-scp dist/Termscape-<版本>-arm64-mac.zip 那台机:/tmp/
-ssh 那台机 'cd /tmp && unzip -q Termscape-*.zip && rm -rf /Applications/Termscape.app && cp -R Termscape.app /Applications/'
-ssh 那台机 'open -a /Applications/Termscape.app'   # 用 open，不要 launchctl asuser（要 root）
+scp dist/Termspace-<版本>-arm64-mac.zip 那台机:/tmp/
+ssh 那台机 'cd /tmp && unzip -q Termspace-*.zip && rm -rf /Applications/Termspace.app && cp -R Termspace.app /Applications/'
+ssh 那台机 'open -a /Applications/Termspace.app'   # 用 open，不要 launchctl asuser（要 root）
 ```
 
 传大文件断了要续传，**macOS 自带的 rsync 2.6.9 不支持 `--append-verify`**，用：

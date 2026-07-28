@@ -86,9 +86,9 @@ export function SettingsPanel({
   /** 刚签发的完整链接。**只在内存里活一次** —— 主进程之后只回前 6 位 */
   const [shareUrl, setShareUrl] = useState('')
   const [remote, setRemote] = useState<Awaited<
-    ReturnType<typeof window.termscape.remoteStatus>
+    ReturnType<typeof window.termspace.remoteStatus>
   > | null>(null)
-  const [info, setInfo] = useState<Awaited<ReturnType<typeof window.termscape.appInfo>>>(null)
+  const [info, setInfo] = useState<Awaited<ReturnType<typeof window.termspace.appInfo>>>(null)
   const [upd, setUpd] = useState<UpdateState | null>(null)
   /** 更新源输入框的草稿。null = 没在编辑，显示已保存的值。见那个 input 上的注释 */
   const [feedDraft, setFeedDraft] = useState<string | null>(null)
@@ -96,22 +96,22 @@ export function SettingsPanel({
   const [backupMsg, setBackupMsg] = useState('')
 
   useEffect(() => {
-    void window.termscape.getSettings().then(setS)
-    void window.termscape.hooksStatus().then(setHooks)
-    void window.termscape.listSkills().then(setSkills)
-    void window.termscape.doctor().then(setDoctor)
-    void window.termscape.remoteStatus().then(setRemote)
-    void window.termscape.remoteTokens().then(setTokens)
-    void window.termscape.appInfo().then(setInfo)
-    void window.termscape.updateState().then((u) => u && setUpd(u))
+    void window.termspace.getSettings().then(setS)
+    void window.termspace.hooksStatus().then(setHooks)
+    void window.termspace.listSkills().then(setSkills)
+    void window.termspace.doctor().then(setDoctor)
+    void window.termspace.remoteStatus().then(setRemote)
+    void window.termspace.remoteTokens().then(setTokens)
+    void window.termspace.appInfo().then(setInfo)
+    void window.termspace.updateState().then((u) => u && setUpd(u))
     // 光靠开面板时拉一次是不够的：下载进度得能动
-    return window.termscape.onUpdateState(setUpd)
+    return window.termspace.onUpdateState(setUpd)
   }, [])
 
   const patch = (p: Partial<AppSettings>): void => {
     const before = s
     setS((cur) => (cur ? { ...cur, ...p } : cur)) // 乐观更新，控件不卡手
-    void window.termscape.setSettings(p).then(setS, (e) => {
+    void window.termspace.setSettings(p).then(setS, (e) => {
       // 失败必须回滚：勾选框停在新状态、实际没生效，是最难查的一类"看着好了"
       setS(before)
       setSaveErr(String((e as { message?: string })?.message ?? e))
@@ -190,7 +190,7 @@ export function SettingsPanel({
                   className="settings-btn"
                   onClick={() => {
                     setBackupMsg('')
-                    void window.termscape.exportWorkspace(getWorkspace()).then((r) => {
+                    void window.termspace.exportWorkspace(getWorkspace()).then((r) => {
                       if (r.canceled) return
                       setBackupMsg(r.ok ? `已导出到 ${r.path}` : `导出失败：${r.error}`)
                     })
@@ -203,14 +203,14 @@ export function SettingsPanel({
                   onClick={() => {
                     setBackupMsg('')
                     // 成功的话主进程会直接重启 app，这个 then 根本不会跑到
-                    void window.termscape.importWorkspace().then((r) => {
+                    void window.termspace.importWorkspace().then((r) => {
                       if (!r.ok && !r.canceled) setBackupMsg(`导入失败：${r.error}`)
                     })
                   }}
                 >
                   导入工作区…
                 </button>
-                <button className="settings-btn" onClick={() => void window.termscape.revealUserData()}>
+                <button className="settings-btn" onClick={() => void window.termspace.revealUserData()}>
                   打开数据目录
                 </button>
               </div>
@@ -220,7 +220,7 @@ export function SettingsPanel({
               {info && (
                 <>
                   <p className="settings-note">
-                    Termscape {info.version} · Electron {info.electron}
+                    Termspace {info.version} · Electron {info.electron}
                     <br />
                     数据目录 <code>{info.userData}</code>
                   </p>
@@ -294,10 +294,10 @@ export function SettingsPanel({
                 {hooks?.consent === 'on' && (
                   <button
                     className="group-act"
-                    title="从 ~/.claude/settings.json 摘掉 Termscape 的 hook 条目"
+                    title="从 ~/.claude/settings.json 摘掉 Termspace 的 hook 条目"
                     onClick={() => {
-                      void window.termscape.uninstallHooks().then(() => {
-                        void window.termscape.hooksStatus().then(setHooks)
+                      void window.termspace.uninstallHooks().then(() => {
+                        void window.termspace.hooksStatus().then(setHooks)
                       })
                     }}
                   >
@@ -306,11 +306,11 @@ export function SettingsPanel({
                 )}
               </div>
               <p className="settings-note">
-                Termscape 在本机回环端口跑一个 hook 服务，Claude Code 通过它上报运行状态
+                Termspace 在本机回环端口跑一个 hook 服务，Claude Code 通过它上报运行状态
                 （运行中 / 需要你 / 空闲），工具调用审批也走这条通道回到画布上。配置合并进{' '}
                 <code>{hooks?.settingsPath}</code>，原文件首次备份为同名{' '}
                 <code>.termboard-backup</code>。
-                托管脚本对非 Termscape 终端会立即退出，不影响你在别处正常使用 Claude Code。
+                托管脚本对非 Termspace 终端会立即退出，不影响你在别处正常使用 Claude Code。
                 卸载后需重启应用才会完全停止上报。
               </p>
 
@@ -481,10 +481,10 @@ export function SettingsPanel({
                       className="settings-btn"
                       onClick={async () => {
                         setShareUrl('')
-                        const r = await window.termscape.issueViewerLink(shareLabel)
+                        const r = await window.termspace.issueViewerLink(shareLabel)
                         if (!r || r.error) return setShareUrl(`失败：${r?.error ?? '未知'}`)
                         setShareUrl(r.url ?? '')
-                        setTokens(await window.termscape.remoteTokens())
+                        setTokens(await window.termspace.remoteTokens())
                       }}
                     >
                       生成只读链接
@@ -526,7 +526,7 @@ export function SettingsPanel({
                           <button
                             className="identity-del"
                             onClick={async () =>
-                              setTokens(await window.termscape.revokeRemoteToken(t.hint))
+                              setTokens(await window.termspace.revokeRemoteToken(t.hint))
                             }
                           >
                             撤销
@@ -582,7 +582,7 @@ export function SettingsPanel({
                 />
                 <button
                   className="btn-ghost"
-                  onClick={() => void window.termscape.checkUpdate()}
+                  onClick={() => void window.termspace.checkUpdate()}
                   disabled={upd?.phase === 'checking' || upd?.phase === 'downloading'}
                 >
                   立即检查
@@ -598,11 +598,11 @@ export function SettingsPanel({
                 <input
                   type="text"
                   value={feedDraft ?? s.updateFeedUrl}
-                  placeholder="https://你的域名/termscape/"
+                  placeholder="https://你的域名/termspace/"
                   onChange={(e) => setFeedDraft(e.currentTarget.value)}
                   onBlur={() => {
                     if (feedDraft === null || feedDraft === s.updateFeedUrl) return setFeedDraft(null)
-                    void window.termscape.setSettings({ updateFeedUrl: feedDraft }).then(
+                    void window.termspace.setSettings({ updateFeedUrl: feedDraft }).then(
                       (next) => {
                         setS(next)
                         /* 用 sanitize 之后的值回填，让用户看见"我填的被改成了什么"
@@ -657,7 +657,7 @@ export function SettingsPanel({
               </p>
               {upd?.phase === 'ready' && (
                 <>
-                  <button className="btn-primary" onClick={() => void window.termscape.installUpdate()}>
+                  <button className="btn-primary" onClick={() => void window.termspace.installUpdate()}>
                     重启并安装 {upd.version}
                   </button>
                   <p className="settings-note">
@@ -675,7 +675,7 @@ export function SettingsPanel({
               <h3 className="settings-h">派活到别的机器</h3>
               <p className="settings-note">
                 在终端里跑 <code>tb ask 机器名:节点id 任务</code>，任务会派到那台机器上
-                Termscape 里的那个终端，做完把回答带回来。走的是你已经配好的{' '}
+                Termspace 里的那个终端，做完把回答带回来。走的是你已经配好的{' '}
                 <code>ssh</code>，<b>不新开任何网络端口</b>。
               </p>
               <label className="settings-row">
@@ -728,7 +728,7 @@ export function SettingsPanel({
 
               <h3 className="settings-h">对面要装什么</h3>
               <p className="settings-note">
-                那台机器上也要跑 Termscape，并在这一页把「允许跨机派活进来」打开。
+                那台机器上也要跑 Termspace，并在这一页把「允许跨机派活进来」打开。
                 入口脚本是它自己生成的（<code>userData/bin/tb-peer</code>），
                 你不用手动拷任何东西 —— 本机 ssh 过去直接执行它。
                 <br />

@@ -91,7 +91,7 @@ function GroupNodeImpl({ id, data }: NodeProps<GroupNodeT>): React.JSX.Element {
     const cmd = (bcast ?? '').trim()
     const list = terms()
     if (!cmd || !list.length) return
-    for (const n of list) window.termscape.write(n.id, `${cmd}\r`)
+    for (const n of list) window.termspace.write(n.id, `${cmd}\r`)
     closeBcast()
   }
 
@@ -106,7 +106,7 @@ function GroupNodeImpl({ id, data }: NodeProps<GroupNodeT>): React.JSX.Element {
     ) {
       return
     }
-    for (const n of list) void window.termscape.destroy(n.id)
+    for (const n of list) void window.termspace.destroy(n.id)
     setNodes((ns) =>
       ns.map((n) =>
         n.parentId === id && n.type === 'terminal'

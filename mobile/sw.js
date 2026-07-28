@@ -2,7 +2,7 @@
  * 只缓存"壳"（HTML/JS/CSS/图标），/api/* 一律直连。
  * 缓存 API 响应会让手机上显示的 agent 状态是过期的 —— 那比看不到更危险。
  */
-const CACHE = 'termscape-shell-v1'
+const CACHE = 'termspace-shell-v1'
 const SHELL = ['/', '/index.html', '/app.js', '/style.css', '/icon.svg', '/icon-180.png', '/icon-512.png', '/manifest.webmanifest']
 
 self.addEventListener('install', (e) => {

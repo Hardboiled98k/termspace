@@ -135,7 +135,7 @@ export const TIMEOUT_LADDER = [
  */
 export function buildPeerHelper(port: number, token: string): string {
   return `#!/bin/sh
-# Termscape 跨机派活入口（自动生成，每次启动重写 —— 端口会变）。
+# Termspace 跨机派活入口（自动生成，每次启动重写 —— 端口会变）。
 # 由对端 ssh 过来执行，任务正文走 stdin。不接受命令行参数。
 exec curl -sS -m ${Math.round(PEER_TIMEOUTS.helperMs / 1000)} \\
   -H 'X-Termboard-Peer: ${token}' \\

@@ -98,7 +98,7 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
   // per-node 订阅，避免高频 usage 更新走 setNodes 触发全画布 rerender
   useEffect(
     () =>
-      window.termscape.onAgentContext((e) => {
+      window.termspace.onAgentContext((e) => {
         if (e.nodeId === id) setCtxPct(e.usedPercent)
       }),
     [id]
@@ -147,25 +147,25 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
 
     /* 起不来的原因要写进屏幕。**不写的话这个终端就是一块纯黑板** ——
        用户看不出是"还没输出"还是"根本没起来"，这正是这个项目反复栽的静默失败。 */
-    const offSpawnErr = window.termscape.onSpawnError((e) => {
+    const offSpawnErr = window.termspace.onSpawnError((e) => {
       if (e.nodeId !== id) return
       term.write(`\r\n\x1b[38;5;203m[起不来] ${e.message}\x1b[0m\r\n`)
       updateNodeData(id, { status: 'error' })
     })
-    const offData = window.termscape.onData(id, (d) => term.write(d))
-    const offExit = window.termscape.onExit(id, (code) => {
+    const offData = window.termspace.onData(id, (d) => term.write(d))
+    const offExit = window.termspace.onExit(id, (code) => {
       term.write(`\r\n\x1b[38;5;244m[进程已退出 code=${code}]\x1b[0m\r\n`)
       // 非零退出 = 真出事了，红边框比一行灰字显眼得多（缩到全景也看得见）
       if (code !== 0) updateNodeData(id, { status: 'error' })
     })
-    void window.termscape.spawn(id, term.cols, term.rows, {
+    void window.termspace.spawn(id, term.cols, term.rows, {
       identityId: data.identityId,
       command: data.command,
       provider: data.provider,
       contextNodeIds: ctxIds ? ctxIds.split(',') : [],
       cwd: data.cwd
     })
-    const inputSub = term.onData((d) => window.termscape.write(id, d))
+    const inputSub = term.onData((d) => window.termspace.write(id, d))
 
     // Warp 式复制粘贴：选中即可复制（⌘C），⌘V 粘贴；右键也走这套
     const onKey = term.attachCustomKeyEventHandler((e) => {
@@ -175,7 +175,7 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
         return false
       }
       if (e.key === 'v') {
-        void navigator.clipboard.readText().then((t) => window.termscape.write(id, t))
+        void navigator.clipboard.readText().then((t) => window.termspace.write(id, t))
         return false
       }
       return true
@@ -192,7 +192,7 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
            元素被 display:none / 折叠 / 尚未布局时都会走到这里。 */
         if (!el.clientWidth || !el.clientHeight) return
         fit.fit()
-        window.termscape.resize(id, term.cols, term.rows)
+        window.termspace.resize(id, term.cols, term.rows)
       })
     })
     ro.observe(el)
@@ -204,7 +204,7 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
       offSpawnErr()
       offData()
       offExit()
-      window.termscape.kill(id)
+      window.termspace.kill(id)
       termRef.current = null
       fitRef.current = null
       term.dispose()
@@ -222,7 +222,7 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
     if (!term || !fit) return
     term.options.fontSize = data.fontSize ?? FONT_DEFAULT
     fit.fit()
-    window.termscape.resize(id, term.cols, term.rows)
+    window.termspace.resize(id, term.cols, term.rows)
   }, [id, data.fontSize])
 
   // 字号改动时头部短暂提示当前值（⌥滚轮 / 右键菜单调节）
@@ -320,7 +320,7 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
             }
             onChange={(e) => {
               // 换身份 = 新 env → 必须真杀旧会话（否则 tmux -A 会接回旧 env 的会话）
-              void window.termscape.destroy(id)
+              void window.termspace.destroy(id)
               updateNodeData(id, { identityId: e.currentTarget.value || undefined })
             }}
           >
@@ -366,7 +366,7 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
           if (term?.hasSelection()) {
             void navigator.clipboard.writeText(term.getSelection())
           } else {
-            void navigator.clipboard.readText().then((t) => window.termscape.write(id, t))
+            void navigator.clipboard.readText().then((t) => window.termspace.write(id, t))
           }
         }}
       />

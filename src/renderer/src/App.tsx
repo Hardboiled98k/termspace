@@ -361,7 +361,7 @@ function BoardHUD({
 }): React.JSX.Element | null {
   const [quota, setQuota] = useState<AccountQuota[]>([])
   const [collapsed, setCollapsed] = useState(false)
-  useEffect(() => window.termscape.onQuota(setQuota), [])
+  useEffect(() => window.termspace.onQuota(setQuota), [])
 
   const terms = nodes.filter((n): n is TermNode => n.type === 'terminal')
   const running = terms.filter((n) => n.data.status === 'running').length
@@ -523,7 +523,7 @@ function IdentityPanel({
       return
     }
     try {
-      onChanged(await window.termscape.upsertIdentity({ name, provider, env }))
+      onChanged(await window.termspace.upsertIdentity({ name, provider, env }))
       setName('')
       setEnvText('')
       setError('')
@@ -555,7 +555,7 @@ function IdentityPanel({
                     e.currentTarget.value = i.name
                     return
                   }
-                  onChanged(await window.termscape.renameIdentity(i.id, v))
+                  onChanged(await window.termspace.renameIdentity(i.id, v))
                 }}
               />
               <span className="identity-keys">{i.envKeys.join(' · ')}</span>
@@ -576,7 +576,7 @@ function IdentityPanel({
                     : ''
                   if (!window.confirm(`删除凭证「${i.name}」？${detail}\n\n这个操作不能撤回。`)) return
                   await onDeleted(i.id) // 先撤销引用，再删库
-                  onChanged(await window.termscape.deleteIdentity(i.id))
+                  onChanged(await window.termspace.deleteIdentity(i.id))
                 }}
               >
                 删除
@@ -663,7 +663,7 @@ function PresetPanel({
       return
     }
     onChanged(
-      await window.termscape.upsertPreset({
+      await window.termspace.upsertPreset({
         name,
         provider,
         command,
@@ -696,7 +696,7 @@ function PresetPanel({
               </span>
               <button
                 className="identity-del"
-                onClick={async () => onChanged(await window.termscape.deletePreset(p.id))}
+                onClick={async () => onChanged(await window.termspace.deletePreset(p.id))}
               >
                 删除
               </button>
@@ -782,7 +782,7 @@ function Board(): React.JSX.Element {
   const [notice, setNotice] = useState<string | null>(null)
   /** 挂起中的工具审批（来自 Claude PermissionRequest hook，主进程把请求挂着） */
   const [approvals, setApprovals] = useState<PendingApproval[]>([])
-  useEffect(() => window.termscape.onApprovals(setApprovals), [])
+  useEffect(() => window.termspace.onApprovals(setApprovals), [])
   const [identities, setIdentities] = useState<IdentityMeta[]>([])
   const [presets, setPresets] = useState<Preset[]>([])
   const [defaultIdentity, setDefaultIdentity] = useState('')
@@ -816,7 +816,7 @@ function Board(): React.JSX.Element {
   // HUD 画布概览用：收集各节点 context 用量（事件只在变化时来，频率低）
   useEffect(
     () =>
-      window.termscape.onAgentContext((e) => {
+      window.termspace.onAgentContext((e) => {
         setCtxMap((m) => ({ ...m, [e.nodeId]: { pct: e.usedPercent, model: e.model } }))
       }),
     []
@@ -832,7 +832,7 @@ function Board(): React.JSX.Element {
   // 审批应答：走 Claude 的 PermissionRequest 结构化通道（主进程把那次 hook 请求挂着等这一下），
   // 不再往 pty 盲写 y —— 盲写没法保证落在正确的提示上。
   const decideApproval = useCallback((id: string, allow: boolean) => {
-    void window.termscape.decideApproval(id, allow).then((r) => {
+    void window.termspace.decideApproval(id, allow).then((r) => {
       if (!r.ok) setNotice(r.error ?? '应答失败')
     })
   }, [])
@@ -840,7 +840,7 @@ function Board(): React.JSX.Element {
   // F7：cdx worker 状态 → 卡片节点（upsert 保留用户拖过的位置；不持久化）
   useEffect(
     () =>
-      window.termscape.onWorkers((rows) => {
+      window.termspace.onWorkers((rows) => {
         setNodes((ns) => {
           const existing = new Map(
             ns.filter((n) => n.type === 'worker').map((n) => [n.id, n])
@@ -880,15 +880,15 @@ function Board(): React.JSX.Element {
   )
 
   useEffect(() => {
-    void window.termscape.listIdentities().then(setIdentities)
-    void window.termscape.listPresets().then(setPresets)
-    void window.termscape.getSettings().then((s) => {
+    void window.termspace.listIdentities().then(setIdentities)
+    void window.termspace.listPresets().then(setPresets)
+    void window.termspace.getSettings().then((s) => {
       const cfg = s as { defaultFontSize?: number; tmuxEnabled?: boolean } | null
       if (typeof cfg?.defaultFontSize === 'number' && cfg.defaultFontSize > 0) {
         setDefaultFontSize(cfg.defaultFontSize)
       }
       // 设置里开着还不够，本机得真装了 tmux
-      void window.termscape.doctor().then((items) => {
+      void window.termspace.doctor().then((items) => {
         const tmux = items.find((d) => d.key === 'tmux')
         setTmuxOk(!!cfg?.tmuxEnabled && !!tmux?.ok)
       })
@@ -938,7 +938,7 @@ function Board(): React.JSX.Element {
   // 启动恢复（含 v1 单画布 → v2 多项目迁移）
   useEffect(() => {
     let reapTimer = 0
-    void window.termscape.loadWorkspace().then((raw) => {
+    void window.termspace.loadWorkspace().then((raw) => {
       const ws = raw as Workspace | null
       let projs = ws?.projects
       let boards = ws?.boards
@@ -990,7 +990,7 @@ function Board(): React.JSX.Element {
       if (raw) {
         const known = Object.values(boardsRef.current).flatMap((b) => b.nodes.map((n) => n.id))
         // 延迟 5s，等活跃画布节点 spawn 完（它们也在 ptys 里被保护）
-        reapTimer = window.setTimeout(() => void window.termscape.reapSessions(known), 5000)
+        reapTimer = window.setTimeout(() => void window.termspace.reapSessions(known), 5000)
       }
     })
     return () => window.clearTimeout(reapTimer)
@@ -1029,7 +1029,7 @@ function Board(): React.JSX.Element {
         boardsRef.current,
         projects.map((p) => p.id)
       )
-      void window.termscape
+      void window.termspace
         .saveWorkspace({
           projects,
           activeProjectId: activeProject,
@@ -1051,7 +1051,7 @@ function Board(): React.JSX.Element {
   )
 
   const addProject = useCallback(async () => {
-    const dir = await window.termscape.pickFolder()
+    const dir = await window.termspace.pickFolder()
     if (!dir) return
     boardsRef.current[activeProject] = snapshot()
     // 这个目录以前开过又关掉了？认领回原来的 pid —— 画布和里面还活着的终端一起回来。
@@ -1139,7 +1139,7 @@ function Board(): React.JSX.Element {
           ),
           ...addEdge({ ...c, ...edgeStyle('credential') }, [])
         ])
-        void window.termscape.destroy(tgt.id)
+        void window.termspace.destroy(tgt.id)
         setNodes((ns) =>
           ns.map((n) =>
             n.id === tgt.id && n.type === 'terminal'
@@ -1213,7 +1213,7 @@ function Board(): React.JSX.Element {
         )
         continue
       }
-      void window.termscape.destroy(termId)
+      void window.termspace.destroy(termId)
       setNodes((ns) =>
         ns.map((n) =>
           n.id === termId && n.type === 'terminal'
@@ -1241,7 +1241,7 @@ function Board(): React.JSX.Element {
      屏幕上唯一在动的东西，应该是"现在真有事发生"。 */
   useEffect(
     () =>
-      window.termscape.onDelegateFlight(({ source, target, active }) => {
+      window.termspace.onDelegateFlight(({ source, target, active }) => {
         setEdges((es) =>
           es.map((e) =>
             e.source === source && e.target === target && !!e.animated !== active
@@ -1281,7 +1281,7 @@ function Board(): React.JSX.Element {
       )
     }
 
-    const off = window.termscape.onAgentStatus((e) => {
+    const off = window.termspace.onAgentStatus((e) => {
       lastEventAt.set(e.nodeId, Date.now())
       const fresh = e.newTurn || e.event === 'SessionStart' // 新一轮才允许清 error
       if (e.state === 'working') {
@@ -1483,16 +1483,16 @@ function Board(): React.JSX.Element {
 
   // 所有订阅 effect 注册完之后握手：主进程收到才重推 quota/workers（防启动竞态）
   useEffect(() => {
-    window.termscape.ready()
+    window.termspace.ready()
   }, [])
 
   // tb browser 驱动：主进程转发指令 → 操作对应 webview → 回结果
   useEffect(
     () =>
-      window.termscape.onBrowserCmd(async (req) => {
+      window.termspace.onBrowserCmd(async (req) => {
         const { reqId, nodeId, action, arg } = req
         const done = (ok: boolean, result: string): void =>
-          window.termscape.browserResult({ reqId, ok, result })
+          window.termspace.browserResult({ reqId, ok, result })
         // nodeId 为空 → 取第一个浏览器节点（agent 常只开一个）；
         // 但**指名了却找不到**必须报错，不能静默回退 —— 否则 goto/js 会打到另一个
         // 浏览器节点上，而那个节点里可能是用户已登录的会话。
@@ -1561,7 +1561,7 @@ function Board(): React.JSX.Element {
   // 把画布 agent 摘要 + 授权连线同步给主进程（tb agents / 派活 / 浏览器驱动都要用）。
   // 连线即授权：终端→终端 = 可派活，终端→浏览器 = 可驱动该浏览器。删线即撤销。
   useEffect(() => {
-    window.termscape.reportAgents({
+    window.termspace.reportAgents({
       agents: nodes
         .filter((n): n is TermNode => n.type === 'terminal')
         .map((n) => ({
@@ -1665,7 +1665,7 @@ function Board(): React.JSX.Element {
       const screens: Record<string, string> = {}
       await Promise.all(
         terms.map(async (n) => {
-          screens[n.id] = await window.termscape.destroy(n.id).catch(() => '')
+          screens[n.id] = await window.termspace.destroy(n.id).catch(() => '')
         })
       )
       const keptEdges = edgesRef.current.filter((e) => gone.has(e.source) || gone.has(e.target))
@@ -1736,7 +1736,7 @@ function Board(): React.JSX.Element {
           (n.data as { identityId?: string }).identityId === idn
       )
       await Promise.all(
-        hit.filter((n) => n.type === 'terminal').map((n) => window.termscape.destroy(n.id).catch(() => ''))
+        hit.filter((n) => n.type === 'terminal').map((n) => window.termspace.destroy(n.id).catch(() => ''))
       )
       const credIds = new Set(hit.filter((n) => n.type === 'credential').map((n) => n.id))
       setNodes((ns) =>
@@ -1773,7 +1773,7 @@ function Board(): React.JSX.Element {
     setUndoHint(null)
     await Promise.all(
       Object.entries(entry.screens).map(([id, text]) =>
-        text ? window.termscape.seedScrollback(id, text) : Promise.resolve(false)
+        text ? window.termspace.seedScrollback(id, text) : Promise.resolve(false)
       )
     )
     /* 老 id（t1/t2…）是 max+1 生成的、会被复用；新 id 已不可复用。

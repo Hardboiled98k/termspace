@@ -3,7 +3,7 @@
  *
  * Claude Code hook → 托管脚本 → POST 127.0.0.1:<随机port> → 归一化 → 回调
  * - 端口/token 写 endpoint 文件（0600），脚本每次调用时 source（app 重启端口会变）
- * - 脚本用 TERMBOARD_NODE_ID 门控：非 Termscape 终端瞬间 exit 0
+ * - 脚本用 TERMBOARD_NODE_ID 门控：非 Termspace 终端瞬间 exit 0
  * - 全链路 fail-open：任何错误 204，永不阻塞 agent
  */
 import { app } from 'electron'
@@ -106,7 +106,7 @@ function normalizeClaude(event: string, payload: unknown): AgentState | null {
 function buildScript(): string {
   // POSIX sh；$1 = hook 事件名；stdin = hook JSON payload
   return `#!/bin/sh
-# Termscape managed hook — 非 Termscape 终端瞬间退出，可安全常驻
+# Termspace managed hook — 非 Termspace 终端瞬间退出，可安全常驻
 [ -n "$TERMBOARD_NODE_ID" ] || exit 0
 [ -n "$TERMBOARD_HOOK_ENDPOINT" ] || exit 0
 [ -f "$TERMBOARD_HOOK_ENDPOINT" ] || exit 0
@@ -387,9 +387,9 @@ export interface HookSystem {
 /** F8：tb 命令 —— agent 在终端里直接调，零常驻 token */
 function buildTbScript(): string {
   return `#!/bin/sh
-# Termscape 工具中枢客户端（自动生成）
+# Termspace 工具中枢客户端（自动生成）
 [ -n "$TERMBOARD_HOOK_ENDPOINT" ] && [ -f "$TERMBOARD_HOOK_ENDPOINT" ] && . "$TERMBOARD_HOOK_ENDPOINT"
-if [ -z "$TERMBOARD_HOOK_PORT" ]; then echo "tb: Termscape 服务不可用（请在 Termscape 终端内使用）" >&2; exit 1; fi
+if [ -z "$TERMBOARD_HOOK_PORT" ]; then echo "tb: Termspace 服务不可用（请在 Termspace 终端内使用）" >&2; exit 1; fi
 BASE="http://127.0.0.1:$TERMBOARD_HOOK_PORT"
 H="X-Termboard-Token: $TERMBOARD_HOOK_TOKEN"
 # 调用方身份由 token 反查，不再自报节点 id
@@ -423,7 +423,7 @@ case "$cmd" in
       --data-urlencode "node=$node" "$BASE/tb/browser" ;;
   ""|help|-h|--help)
     cat <<'EOF'
-tb — Termscape 工具中枢
+tb — Termspace 工具中枢
 
   tb skills <关键词>       搜索可用 skill（返回名称 + 一行说明）
   tb load <名称>           取出该 skill 全文，按其指示执行
@@ -431,7 +431,7 @@ tb — Termscape 工具中枢
   tb agents <机器>         列出那台机器上的 agent 终端（派活前用它找节点 id）
   tb context               读取连到本终端的共享上下文（实时，改了立刻能看到）
   tb ask <节点id> <任务>   把任务派给另一个终端里的 agent，等它做完返回结果
-  tb ask <机器>:<节点id> <任务>  派到另一台机器上的 Termscape（机器名在设置里配）
+  tb ask <机器>:<节点id> <任务>  派到另一台机器上的 Termspace（机器名在设置里配）
   tb browser open <url>    在画布上打开浏览器测试目标网页
   tb browser goto <url>    让画布浏览器导航到某地址
   tb browser text          抓取当前页面可见文本
@@ -642,7 +642,7 @@ export async function startHookSystem(
         res.end(text)
       }
       const route = u.pathname.slice(4)
-      // 调用方节点：由 token 反查得到，不再采信脚本自报的 X-Termscape-Node
+      // 调用方节点：由 token 反查得到，不再采信脚本自报的 X-Termspace-Node
       const source = callerNode
       const run =
         route === 'skills'

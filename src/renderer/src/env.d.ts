@@ -103,7 +103,7 @@ interface Preset {
   identityId?: string
 }
 
-interface TermscapeApi {
+interface TermspaceApi {
   spawn: (
     id: string,
     cols: number,
@@ -280,5 +280,5 @@ interface TermscapeApi {
 }
 
 declare interface Window {
-  termscape: TermscapeApi
+  termspace: TermspaceApi
 }

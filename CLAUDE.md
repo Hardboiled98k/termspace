@@ -1,4 +1,4 @@
-# Termscape — 无限画布终端管理器
+# Termspace — 无限画布终端管理器
 
 ## 项目概述
 
@@ -9,9 +9,17 @@
 - **技术栈**: Electron + electron-vite + React 19 + TS + Tailwind 4 + @xyflow/react 12 + @xterm/xterm 6 + node-pty
 - **UI 规范**: 见 `DESIGN.md`（画布学 Figma、节点内部学 Warp、气质 Linear + 未来感 glow）
 
-### 命名（2026-07-25 由 TermBoard 改为 Termscape）
+### 命名（TermBoard → Termscape → **Termspace**）
 
-改名只覆盖**品牌面**：appId `dev.termscape.app`、productName、窗口/页面标题、`window.termscape` bridge、文档。
+- **2026-07-25** TermBoard → Termscape（38 个候选里选的，域名与商标全空）
+- **2026-07-28** Termscape → **Termspace**（用户定名。上一轮改名混在一句「全都做」里
+  自动执行、没经用户确认，用户此后两天一直把它读作 Termspace —— 以此为准）
+
+改名只覆盖**品牌面**：appId `dev.termspace.app`、productName、窗口/页面标题、`window.termspace` bridge、文档。
+
+改名的安全判据是一条不变量，改动前后必须相等：**`termscape`/`termspace` 家族全改，
+`termboard` 家族（36 `termboard` + 4 `Termboard` + 1 `TermBoard` + 94 `TERMBOARD`）一处不动**。
+两个词没有公共子串，所以 sed 天然不会误伤 —— 但仍要逐形态计数核对，别只看总数。
 
 以下 `termboard` 字面量**故意保留，不要"顺手统一"**——它们指向磁盘上已存在的数据或运行中的会话，改了就断：
 
@@ -188,7 +196,7 @@ TERMBOARD_PANEL=terminal npm run dev      # 自检：直接展开设置面板某
   和 `quota2.sh` 把周窗口标成 5h 是同一类错
 - **别信 `~/scripts/quota2.sh` 的数**：它读的是 session jsonl / statusline 快照，都是
   **上一次落盘的历史值**，进程一停就冻住。实测真值 0% 时它报 8%（10 小时前的数）。
-  Termscape 走实时 API，以 app 里的为准
+  Termspace 走实时 API，以 app 里的为准
 - codex 的 `credits.balance` 是**余额字符串**（可能是 `"$766.76"`），不是上限；
   `Number()` 直接吃会得到 NaN。`QuotaSpend` 的 `usedMinor` 和 `remainingMinor` 是两个
   方向相反的数，缺哪个留 undefined，**绝不拿 0 顶上**

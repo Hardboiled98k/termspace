@@ -1,5 +1,5 @@
-appId: dev.termscape.app
-productName: Termscape
+appId: dev.termspace.app
+productName: Termspace
 directories:
   output: dist
   buildResources: build
@@ -18,7 +18,7 @@ asarUnpack:
 # electron-updater 一启动就找不到配置文件。
 publish:
   provider: generic
-  url: https://updates.invalid/termscape/
+  url: https://updates.invalid/termspace/
   # publishAutoUpdate 的意思是"生成更新元数据（latest-mac.yml）"，**不是**"自动上传"。
   # 真正决定上不上传的是构建命令有没有传 --publish，而 generic provider 根本没有上传端。
   publishAutoUpdate: true
@@ -54,4 +54,4 @@ mac:
   # （APPLE_TEAM_ID / APPLE_API_KEY / APPLE_API_KEY_ID / APPLE_API_ISSUER）
   notarize: true
 dmg:
-  title: Termscape
+  title: Termspace

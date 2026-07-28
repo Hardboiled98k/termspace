@@ -188,6 +188,6 @@ const api = {
   }
 }
 
-contextBridge.exposeInMainWorld('termscape', api)
+contextBridge.exposeInMainWorld('termspace', api)
 
-export type TermscapeApi = typeof api
+export type TermspaceApi = typeof api

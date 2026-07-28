@@ -41,7 +41,7 @@ function AskCard({
   useEffect(() => {
     let alive = true
     const pull = (): void => {
-      void window.termscape.peek(node.id, 8).then((t) => {
+      void window.termspace.peek(node.id, 8).then((t) => {
         if (alive) setPeek(t)
       })
     }
@@ -56,7 +56,7 @@ function AskCard({
   /* 只有真写进去了才清输入框。以前无视 reply 的返回值就清 ——
      终端已经没了 / 写入失败时，用户打的字直接蒸发，屏幕上还一切正常。 */
   const send = (s: string): void => {
-    void window.termscape.reply(node.id, s).then((r) => {
+    void window.termspace.reply(node.id, s).then((r) => {
       if (r.ok) {
         setText('')
         setErr('')

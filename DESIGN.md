@@ -1,4 +1,4 @@
-# Termscape 设计规范
+# Termspace 设计规范
 
 **定位**: 无限画布终端管理器。**视觉基准: Apple**（2026-07-24 用户定调）— macOS 原生质感 + apple-design-skill token 体系。画布交互仍学 Figma/tldraw。
 

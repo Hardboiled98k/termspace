@@ -67,7 +67,7 @@ function WorkerNodeImpl({ id, data }: NodeProps<WorkerNodeT>): React.JSX.Element
   const act = async (action: 'result' | 'kill' | 'send', text?: string): Promise<void> => {
     setBusy(true)
     try {
-      const r = await window.termscape.workerAction(action, data.task, text)
+      const r = await window.termspace.workerAction(action, data.task, text)
       if (action === 'result') setResultText(extractResult(r.output))
       if (action === 'send') setReply('')
     } finally {
@@ -112,9 +112,9 @@ function WorkerNodeImpl({ id, data }: NodeProps<WorkerNodeT>): React.JSX.Element
             try {
               // 未结束的先 kill，再 clean 掉记录，最后从画布移除
               if (!TERMINAL_STATES.has(data.state)) {
-                await window.termscape.workerAction('kill', data.task)
+                await window.termspace.workerAction('kill', data.task)
               }
-              await window.termscape.workerAction('clean', data.task)
+              await window.termspace.workerAction('clean', data.task)
             } finally {
               setBusy(false)
               void deleteElements({ nodes: [{ id }] })

@@ -39,7 +39,7 @@ export function CredentialNode({ id, data, selected }: NodeProps<CredentialNodeT
     if (!data.identityId) return
     let alive = true
     const pull = (): void => {
-      void window.termscape.identityLoginStatus(data.identityId as string).then((s) => {
+      void window.termspace.identityLoginStatus(data.identityId as string).then((s) => {
         if (alive) setLogin(s)
       })
     }

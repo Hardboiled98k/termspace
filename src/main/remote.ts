@@ -180,7 +180,7 @@ export async function startRemoteApi(deps: RemoteDeps): Promise<RemoteApi> {
       }
 
       // 健康检查不需要 token（只回一个固定标识，不泄露任何状态）
-      if (path === '/api/ping') return json(res, 200, { ok: true, app: 'termscape' })
+      if (path === '/api/ping') return json(res, 200, { ok: true, app: 'termspace' })
 
       /* 手机端页面本身不需要 token —— 它只是一段公开的前端代码，
          真正的数据全在下面要 token 的 /api/* 后面。页面自己负责引导用户配对。 */

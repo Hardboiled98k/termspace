@@ -1,16 +1,16 @@
 #!/bin/bash
 # 把打好的包发到自建更新源。
 #
-# 配置放在 ~/.termscape-publish.env（**不进仓库**），一次填好：
+# 配置放在 ~/.termspace-publish.env（**不进仓库**），一次填好：
 #
 #   PUBLISH_HOST=user@your-vps            # ssh 目标
-#   PUBLISH_PATH=/var/www/updates/termscape/   # 服务器上的目录（结尾带斜杠）
-#   PUBLISH_URL=https://updates.你的域名/termscape/  # 对应的公开地址，用来验收
+#   PUBLISH_PATH=/var/www/updates/termspace/   # 服务器上的目录（结尾带斜杠）
+#   PUBLISH_URL=https://updates.你的域名/termspace/  # 对应的公开地址，用来验收
 #
 # 用法：先 npm run dist:signed，再跑这个脚本。
 set -euo pipefail
 
-CONF="$HOME/.termscape-publish.env"
+CONF="$HOME/.termspace-publish.env"
 [ -f "$CONF" ] || { echo "缺 $CONF —— 见本脚本头部的三个变量" >&2; exit 1; }
 # shellcheck disable=SC1090
 . "$CONF"
@@ -22,8 +22,8 @@ VERSION=$(node -p "require('./package.json').version")
 # `process.arch` 过滤 yml 里的 files —— arm64 机器只认 url 里带 "arm64" 的，
 # Intel 机器只认不带的。少传一个，那个架构的用户会读到"有新版本"、
 # 然后去下一个 404，更新永远失败且错误信息毫无线索。
-ZIP_ARM="dist/Termscape-${VERSION}-arm64-mac.zip"
-ZIP_X64="dist/Termscape-${VERSION}-mac.zip"
+ZIP_ARM="dist/Termspace-${VERSION}-arm64-mac.zip"
+ZIP_X64="dist/Termspace-${VERSION}-mac.zip"
 YML="dist/latest-mac.yml"
 
 # ── 1. 产物齐不齐 ──
@@ -51,7 +51,7 @@ YML_VER=$(grep -m1 '^version:' "$YML" | awk '{print $2}')
 # 两个架构分别验：x64 那份在本机跑不起来，签名却照样要对，
 # 而 x64 用户装到坏包时你这边什么都看不到。
 UNNOTARIZED=""
-for APP in dist/mac-arm64/Termscape.app dist/mac/Termscape.app; do
+for APP in dist/mac-arm64/Termspace.app dist/mac/Termspace.app; do
   [ -d "$APP" ] || continue
   codesign --verify --deep --strict "$APP" || { echo "$APP 签名校验没过，别发" >&2; exit 1; }
   spctl --assess --type execute "$APP" 2>&1 | grep -q "Notarized" || UNNOTARIZED="$UNNOTARIZED $APP"

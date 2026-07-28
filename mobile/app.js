@@ -1,5 +1,5 @@
 /**
- * Termscape 手机端。
+ * Termspace 手机端。
  *
  * 刻意不用框架、不用打包器：整个客户端就三个静态文件，主进程白名单直发，
  * 改一行不用重新 build。CSP 也因此能锁到 script-src 'self'（无 'unsafe-inline'），

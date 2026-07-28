@@ -29,9 +29,9 @@ test('空 / 非字符串 / 不是 URL → 空串（合法的"没配"状态）', 
 
 test('https 收下，并补上结尾斜杠', () => {
   // electron-updater 按目录拼 latest-mac.yml，少一个斜杠会去请求同级的
-  // `termscapelatest-mac.yml`，报一个看不懂的 404
-  assert.equal(sanitizeFeedUrl('https://x.dev/termscape'), 'https://x.dev/termscape/')
-  assert.equal(sanitizeFeedUrl('https://x.dev/termscape/'), 'https://x.dev/termscape/')
+  // `termspacelatest-mac.yml`，报一个看不懂的 404
+  assert.equal(sanitizeFeedUrl('https://x.dev/termspace'), 'https://x.dev/termspace/')
+  assert.equal(sanitizeFeedUrl('https://x.dev/termspace/'), 'https://x.dev/termspace/')
   assert.equal(sanitizeFeedUrl('  https://x.dev/a/b  '), 'https://x.dev/a/b/')
 })
 

@@ -153,7 +153,7 @@ test('空任务拒绝', async () => {
 })
 
 test('放行路径：回答必须是**本轮新写入**的，不能是 transcript 里原有的旧答案', async () => {
-  const dir = await mkdtemp(path.join(tmpdir(), 'termscape-test-'))
+  const dir = await mkdtemp(path.join(tmpdir(), 'termspace-test-'))
   const tp = path.join(dir, 'transcript.jsonl')
   /* 这条验的是**放行路径能跑通** + 注入内容原样带一个回车。
      ⚠️ 它**不能**证明"不会返回旧答案"：旧答案写在前面、新答案 append 在后面，
@@ -197,7 +197,7 @@ test('放行路径：回答必须是**本轮新写入**的，不能是 transcrip
 })
 
 test('目标完成了但本轮没写正文 → 明说"没有新回答"，绝不返回旧答案', async () => {
-  const dir = await mkdtemp(path.join(tmpdir(), 'termscape-test-'))
+  const dir = await mkdtemp(path.join(tmpdir(), 'termspace-test-'))
   const tp = path.join(dir, 'transcript.jsonl')
   await writeFile(
     tp,
@@ -236,7 +236,7 @@ test('目标完成了但本轮没写正文 → 明说"没有新回答"，绝不�
 test('秒完成的任务不能被判成"不像活跃 agent"', async () => {
   /* 轮询每 1.5s 采样一次 status，一个 1 秒内跑完的任务整段错过 working，
      老实现 12s 后返回"不像活跃 agent 会话"，而它早就做完了。 */
-  const dir = await mkdtemp(path.join(tmpdir(), 'termscape-test-'))
+  const dir = await mkdtemp(path.join(tmpdir(), 'termspace-test-'))
   const tp = path.join(dir, 'transcript.jsonl')
   await writeFile(tp, '')
   dropNode('n8')
@@ -533,7 +533,7 @@ test('答完就退出（Stop → SessionEnd）仍要返回本轮答案，不得�
      `SessionEnd` 自己也推进 epoch，而"答完就退出"是完全正常的一轮 ——
      若用 epoch 判中止，用户明明做完了却会收到「本轮结果不可取，去该终端确认」。
      transcript 路径没变，所以按 path 判就不会误杀。 */
-  const dir = await mkdtemp(path.join(tmpdir(), 'termscape-exit-'))
+  const dir = await mkdtemp(path.join(tmpdir(), 'termspace-exit-'))
   const tp = path.join(dir, 'transcript.jsonl')
   await writeFile(tp, `${JSON.stringify({ type: 'user', message: { content: 'hi' } })}\n`)
 

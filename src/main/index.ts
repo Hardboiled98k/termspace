@@ -488,7 +488,7 @@ function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
     width: 1520,
     height: 940,
-    title: 'Termscape',
+    title: 'Termspace',
     backgroundColor: '#00000000',
     vibrancy: 'under-window', // macOS 毛玻璃材质，画布透明底透出
     visualEffectState: 'active',
@@ -1155,7 +1155,7 @@ ipcMain.handle('context:save', async (e, nodeId: string, text: string) => {
 
 /* F8 L0 路由提示：常驻成本 ~60 token，只讲"何时去查"，不讲工具内容。
    没有它模型不会主动去 tb 查，整个渐进式披露就白设计了。 */
-const TOOL_ROUTING_HINT = `## Termscape 工具中枢
+const TOOL_ROUTING_HINT = `## Termspace 工具中枢
 本终端可用 \`tb\` 命令按需取用共享工具（不要凭记忆猜工具用法）：
 - 遇到需要专门方法的任务（设计/出图/部署/数据/视频/文档等）先跑 \`tb skills <关键词>\`
 - 命中后用 \`tb load <名称>\` 取全文再照做
@@ -1287,7 +1287,7 @@ ipcMain.handle('workspace:export', async (e, data: unknown) => {
   if (!fromMainWin(e) || !mainWin) return { ok: false, error: 'denied' }
   const r = await dialog.showSaveDialog(mainWin, {
     title: '导出工作区',
-    defaultPath: path.join(app.getPath('downloads'), `termscape-${fileStamp()}.json`),
+    defaultPath: path.join(app.getPath('downloads'), `termspace-${fileStamp()}.json`),
     filters: [{ name: 'JSON', extensions: ['json'] }]
   })
   if (r.canceled || !r.filePath) return { ok: false, canceled: true }
@@ -1318,7 +1318,7 @@ ipcMain.handle('workspace:import', async (e) => {
   } catch (err) {
     return { ok: false, error: `读不出来：${String((err as Error)?.message ?? err)}` }
   }
-  if (!ws) return { ok: false, error: '这不是 Termscape 的工作区文件（缺 projects/nodes）' }
+  if (!ws) return { ok: false, error: '这不是 Termspace 的工作区文件（缺 projects/nodes）' }
 
   /* 导入是**整块替换**，且下次启动的 reap 会把不在新画布里的 tmux 会话当孤儿杀掉 ——
      这是不可逆的，必须说清楚再动手。 */
@@ -1702,7 +1702,7 @@ app.whenReady().then(async () => {
           buttons: ['暂不', '允许写入'],
           defaultId: 1,
           cancelId: 0,
-          message: 'Termscape 需要写入 ~/.claude/settings.json',
+          message: 'Termspace 需要写入 ~/.claude/settings.json',
           detail:
             '用于接收 Claude Code 的运行状态（节点发光、谁在等你审批、上下文占用），' +
             '以及把工具调用审批接到画布上。\n\n' +

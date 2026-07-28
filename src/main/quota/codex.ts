@@ -146,7 +146,7 @@ function askRateLimits(
         id: 1,
         method: 'initialize',
         // params 的形状错了服务端会静默退出，别随手改
-        params: { clientInfo: { name: 'termscape', title: null, version: '0.1.0' }, capabilities: null }
+        params: { clientInfo: { name: 'termspace', title: null, version: '0.1.0' }, capabilities: null }
       })}\n`
     )
   })
