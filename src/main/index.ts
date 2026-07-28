@@ -627,7 +627,11 @@ function createWindow(): BrowserWindow {
 
   if (process.env['ELECTRON_RENDERER_URL']) {
     // TERMBOARD_PANEL=general 等：自检截图时直接展开设置面板
-    const q = process.env['TERMBOARD_PANEL'] ? `?panel=${process.env['TERMBOARD_PANEL']}` : ''
+    const qs = new URLSearchParams()
+    if (process.env['TERMBOARD_PANEL']) qs.set('panel', process.env['TERMBOARD_PANEL'])
+    // TERMBOARD_PALETTE=1：自检截图时直接展开 ⌘K 面板（键盘事件在截图模式下模拟不了）
+    if (process.env['TERMBOARD_PALETTE']) qs.set('palette', '1')
+    const q = qs.toString() ? `?${qs}` : ''
     void win.loadURL(process.env['ELECTRON_RENDERER_URL'] + q)
   } else {
     void win.loadFile(path.join(__dirname, '../renderer/index.html'))

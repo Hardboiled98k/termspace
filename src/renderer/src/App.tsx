@@ -42,6 +42,8 @@ import { IdentityContext, TmuxContext, RequestDeleteContext } from './identity-c
 import { SettingsPanel, type SettingsSection } from './SettingsPanel'
 import { shouldShowAccount } from './quota-visibility'
 import { countUsing } from './quota-usage'
+import { CommandPalette } from './CommandPalette'
+import type { PaletteNode } from './palette'
 import { MessageCenter } from './MessageCenter'
 import {
   IconTerminal,
@@ -799,6 +801,11 @@ function Board(): React.JSX.Element {
      前台进程名不可用（实测 claude 报版本号 `2.1.220`、codex 报 `Python`、gemini 报 `node`）。
      额度面板靠它认出"用户手敲起来的 agent"，见 BoardHUD 的 usingCount。 */
   const [liveAgents, setLiveAgents] = useState<Record<string, string>>({})
+  /* `?palette=1` 让自检截图能拍到这块面板 —— 否则 Cmd+K 是唯一一处
+     没有任何回归证据的 UI（键盘事件在截图模式下没法模拟）。 */
+  const [paletteOpen, setPaletteOpen] = useState(
+    new URLSearchParams(location.search).get('palette') === '1'
+  )
   useEffect(() => window.termspace.onApprovals(setApprovals), [])
   const [identities, setIdentities] = useState<IdentityMeta[]>([])
   const [presets, setPresets] = useState<Preset[]>([])
@@ -1858,6 +1865,14 @@ function Board(): React.JSX.Element {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
+      /* ⌘K **在终端里也要能开**：终端里没有比"跳到另一个 agent"更重要的
+         ⌘K 语义，而这个键的价值恰恰在于"手在键盘上就能换地方"。
+         （⌘Z 相反：终端里那是它自己的撤销，所以下面那条要避开。） */
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        setPaletteOpen((v) => !v)
+        return
+      }
       if ((e.metaKey || e.ctrlKey) && e.key === 'z' && !e.shiftKey) {
         // 终端里 ⌘Z 有自己的语义，只在画布上生效
         const t = e.target as HTMLElement | null
@@ -2033,6 +2048,27 @@ function Board(): React.JSX.Element {
               会被绝对定位到同一点上，字直接压在一起 */}
           <Panel position="top-right" className="right-rail">
             <BoardHUD nodes={nodes} ctxMap={ctxMap} liveAgents={liveAgents} onFocus={focusNode} />
+            <CommandPalette
+              open={paletteOpen}
+              nodes={nodes as unknown as PaletteNode[]}
+              projects={projects.map((p) => ({ id: p.id, name: p.name, cwd: p.cwd }))}
+              liveAgents={liveAgents}
+              onClose={() => setPaletteOpen(false)}
+              onPick={(kind, id) => {
+                /* 跨项目跳转：目标节点可能不在当前画布上。先切板再聚焦 ——
+                   focusNode 在别的板上找不到那个 id，会静默什么都不做。 */
+                if (kind === 'project') return switchProject(id)
+                const here = nodesRef.current.some((n) => n.id === id)
+                if (here) return focusNode(id)
+                const owner = Object.entries(boardsRef.current).find(([, b]) =>
+                  b.nodes.some((n) => n.id === id)
+                )?.[0]
+                if (!owner) return
+                switchProject(owner)
+                // 切板会整块换掉 nodes，等一帧再聚焦
+                setTimeout(() => focusNode(id), 0)
+              }}
+            />
             <MessageCenter
               nodes={nodes}
               approvals={approvals}

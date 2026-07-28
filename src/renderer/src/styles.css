@@ -2299,3 +2299,78 @@ body {
   color: #FF9F0A;
   border-color: rgba(255, 159, 10, 0.35);
 }
+
+/* ── Cmd+K 检索面板 ────────────────────────────────────────────────────────
+   浮在画布上方、居中偏上（视线落点在屏幕上三分之一，不是正中）。
+   背板不做重模糊：这个面板要秒开秒关，backdrop-filter 在 16 个终端还在跑时
+   会让开合掉帧 —— 那正是它最该顺滑的时候。 */
+.palette-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 14vh;
+  background: rgba(0, 0, 0, 0.42);
+}
+.palette {
+  width: min(680px, 88vw);
+  max-height: 62vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--tb-panel);
+  border: 0.5px solid var(--tb-hairline-strong);
+  border-radius: 14px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+}
+.palette-input {
+  padding: 14px 16px;
+  font: 400 15px/1.3 var(--tb-font-ui);
+  color: var(--tb-text);
+  background: transparent;
+  border: none;
+  border-bottom: 0.5px solid var(--tb-hairline);
+  outline: none;
+}
+.palette-list {
+  overflow-y: auto;
+  padding: 6px;
+}
+.palette-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.palette-row.sel {
+  background: rgba(255, 255, 255, 0.1);
+}
+.palette-title {
+  font: 500 13px/1 var(--tb-font-ui);
+  color: var(--tb-text);
+  white-space: nowrap;
+}
+.palette-detail {
+  flex: 1;
+  min-width: 0;
+  font: 400 11px/1 var(--tb-font-ui);
+  color: var(--tb-muted);
+  /* 截断在 palette.ts 的 shortPath 里做（JS 截，不用 direction:rtl ——
+     后者在中英混排路径上会重排标点，实测显示成乱序） */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.palette-empty,
+.palette-foot {
+  padding: 10px 14px;
+  font: 400 11px/1 var(--tb-font-ui);
+  color: var(--tb-muted);
+}
+.palette-foot {
+  border-top: 0.5px solid var(--tb-hairline);
+}
