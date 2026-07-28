@@ -24,11 +24,17 @@ CONF="$HOME/.termspace-publish.env"
 [ -f "$CONF" ] || { echo "缺 $CONF —— 见本脚本头部的配置说明" >&2; exit 1; }
 # 权限自查：里面有 R2 的 Secret Access Key，全局可读等于把发布权交出去 ——
 # 而发布目录的控制权就是整条自动更新链路的信任根
+# **硬失败，不是警告**：这个文件下一行就要被 `.` 进来执行。
+# 全局可读 = R2 的 secret 泄漏；组/他人可写 = 别人能在你的权限下跑任意 shell，
+# 进而劫持整条更新链路。警告完照样 source，等于这段检查不存在。
 PERM=$(stat -f '%Lp' "$CONF" 2>/dev/null || stat -c '%a' "$CONF" 2>/dev/null || echo '?')
+OWNER=$(stat -f '%u' "$CONF" 2>/dev/null || stat -c '%u' "$CONF" 2>/dev/null || echo '?')
 case "$PERM" in
   600|400) ;;
-  *) echo "⚠️  $CONF 权限是 ${PERM}，应为 600。修：chmod 600 $CONF" >&2 ;;
+  *) echo "❌ $CONF 权限是 ${PERM}，必须是 600 或 400。修：chmod 600 $CONF" >&2; exit 1 ;;
 esac
+[ "$OWNER" = "$(id -u)" ] || { echo "❌ $CONF 的属主不是你（uid ${OWNER}），拒绝 source" >&2; exit 1; }
+[ -L "$CONF" ] && { echo "❌ $CONF 是符号链接，拒绝 source" >&2; exit 1; }
 # shellcheck disable=SC1090
 . "$CONF"
 : "${PUBLISH_URL:?PUBLISH_URL 必填}"
@@ -122,14 +128,33 @@ done
 YML_VER=$(grep -m1 '^version:' "$YML" | awk '{print $2}')
 [ "$YML_VER" = "$VERSION" ] || { echo "latest-mac.yml 写的是 ${YML_VER}，包是 $VERSION —— 重新打包" >&2; exit 1; }
 
+# **yml 里的 sha512 / size 必须和本地 zip 逐字节对得上。**
+# 原来只查"文件名列了没、文件在不在"—— 于是 zip 在生成 yml 之后被替换、被截断，
+# 或者 yml 来自另一轮构建，所有检查都过，最后是**客户端下载完才失败**，
+# 而那时错误只出现在用户机器上。sha512 是 base64 不是 hex（electron-updater 的格式）。
+b64sha512() { shasum -a 512 "$1" | awk '{print $1}' | xxd -r -p | base64; }
+while read -r name; do
+  case "$name" in *.zip) ;; *) continue ;; esac
+  want_sha=$(awk -v n="$name" '$0 ~ "url: "n"$"{f=1} f&&/sha512:/{print $2; exit}' "$YML")
+  want_size=$(awk -v n="$name" '$0 ~ "url: "n"$"{f=1} f&&/size:/{print $2; exit}' "$YML")
+  got_sha=$(b64sha512 "dist/$name")
+  got_size=$(stat -f '%z' "dist/$name" 2>/dev/null || stat -c '%s' "dist/$name")
+  [ "$want_sha" = "$got_sha" ] || { echo "❌ $name 的 sha512 和 yml 对不上（yml 与包不是同一轮构建？）" >&2; exit 1; }
+  [ "$want_size" = "$got_size" ] || { echo "❌ $name 的 size 和 yml 对不上：yml=${want_size} 实际=${got_size}" >&2; exit 1; }
+  echo "   $name sha512/size ✅"
+done < <(awk '/^  - url: /{print $3}' "$YML")
+
 # ── 2. 签名与公证 ──
 # **未签名的包发出去等于发一个装不上的东西**：Squirrel 要求候选包满足
 # 当前 app 签名导出的 designated requirement，签名不对客户端会静默失败。
 # 两个架构分别验：x64 那份在本机跑不起来，签名却照样要对，
 # 而 x64 用户装到坏包时你这边什么都看不到。
+# **缺一即失败**，不能 continue：原来任一目录不存在就跳过，
+# 于是两个 zip 照传，只是其中一个从没被验过签名 —— 而"没验"在日志里
+# 和"验过了"长得一模一样。
 UNNOTARIZED=""
 for APP in dist/mac-arm64/Termspace.app dist/mac/Termspace.app; do
-  [ -d "$APP" ] || continue
+  [ -d "$APP" ] || { echo "❌ 缺 $APP —— 两个架构都要验签名。先跑 npm run dist:signed" >&2; exit 1; }
   codesign --verify --deep --strict "$APP" || { echo "$APP 签名校验没过，别发" >&2; exit 1; }
   spctl --assess --type execute "$APP" 2>&1 | grep -q "Notarized" || UNNOTARIZED="$UNNOTARIZED $APP"
 done
@@ -168,14 +193,26 @@ diff -q "$YML" "$TMP_YML" >/dev/null || { echo "线上的 yml 和本地不一致
 # yml 到底有没有被缓存住 —— 这是本脚本最该验的一件事。
 # 缓存住的症状是"发了新版没人收到"，而发布者自己往往命中另一个边缘节点、
 # 看到的一切正常，所以必须在发布时当场验，不能等用户报。
+# **这里必须硬失败**。原来只 echo 警告，然后无条件打印"✅ 已发布" ——
+# 注释写着"最该验的一件事"，代码却让它通过，正是"写了验收但不生效"。
+# 确实需要放行时用 ALLOW_CACHED_YML=1 显式豁免。
+CACHE_BAD=""
 if grep -qiE '^cache-control:.*(no-store|no-cache|max-age=0)' "$TMP_HDR"; then
   echo "   yml Cache-Control ✅"
 else
-  echo "⚠️  yml 的 Cache-Control 不是 no-store：$(grep -i '^cache-control:' "$TMP_HDR" || echo '（没有这个头）')" >&2
+  echo "❌ yml 的 Cache-Control 不是 no-store：$(grep -i '^cache-control:' "$TMP_HDR" || echo '（没有这个头）')" >&2
   echo "   检查 Cloudflare 的 Bypass cache 规则，以及对象上传时的 --header-upload" >&2
+  CACHE_BAD=1
 fi
 CFC=$(grep -i '^cf-cache-status:' "$TMP_HDR" | tr -d '\r' || true)
-[ -n "$CFC" ] && echo "   $CFC   （应为 BYPASS 或 DYNAMIC，出现 HIT 就是被缓存了）"
+if [ -n "$CFC" ]; then
+  echo "   $CFC   （应为 BYPASS 或 DYNAMIC，出现 HIT 就是被缓存了）"
+  case "$CFC" in *[Hh][Ii][Tt]*) echo "❌ yml 被 CDN 缓存了（HIT）—— 发了新版用户收不到" >&2; CACHE_BAD=1 ;; esac
+fi
+if [ -n "$CACHE_BAD" ] && [ "${ALLOW_CACHED_YML:-}" != "1" ]; then
+  echo "   明知故犯请加 ALLOW_CACHED_YML=1 重跑" >&2
+  exit 1
+fi
 
 # 两个 zip 都要真取得到 —— 只验一个的话，另一个架构的用户是唯一的发现者
 for z in "$ZIP_ARM" "$ZIP_X64"; do
