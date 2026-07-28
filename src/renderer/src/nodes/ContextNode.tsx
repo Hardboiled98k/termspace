@@ -27,29 +27,51 @@ function ContextNodeImpl({ id, selected }: NodeProps<ContextNodeT>): React.JSX.E
   const [dirty, setDirty] = useState(false)
   const [failed, setFailed] = useState(false)
   const timer = useRef(0)
+  /* 三个 ref 各堵一条**静默丢字**的路：
+     `rev` —— 用户已经敲过字时，迟到的 load 不能把内容盖回去；
+     `latest` —— 卸载/切项目时把最后 800ms 的输入补发出去（老写法只 clearTimeout，
+                 那一段输入连同"保存中…"一起消失，用户完全看不见）；
+     `saved` —— 只有"存下去的就是当前这版"才允许消 dirty，
+                 否则上一次 save 的 resolve 会把仍在编辑的内容标成已保存。 */
+  const rev = useRef(0)
+  const latest = useRef('')
+  const saved = useRef('')
 
   useEffect(() => {
     // alive 守卫：快速删除/重建同 id 时，迟到的 load 不能覆盖新状态
     let alive = true
     void window.termspace.loadContext(id).then((t) => {
       if (!alive) return
-      setText(t)
       setLoaded(true)
+      // 加载回来之前用户就开始敲了 → 以用户的为准，别把他的字冲掉
+      if (rev.current) return
+      setText(t)
+      latest.current = t
+      saved.current = t
     })
     return () => {
       alive = false
-      window.clearTimeout(timer.current) // 卸载时丢弃未触发的防抖保存
+      window.clearTimeout(timer.current)
+      // 未触发的防抖保存要**补发**，不能只是丢掉
+      if (latest.current !== saved.current) {
+        void window.termspace.saveContext(id, latest.current)
+      }
     }
   }, [id])
 
   const onChange = (v: string): void => {
     setText(v)
     setDirty(true)
+    latest.current = v
+    rev.current++
+    const myRev = rev.current
     window.clearTimeout(timer.current)
     timer.current = window.setTimeout(() => {
       void window.termspace.saveContext(id, v).then((r) => {
         setFailed(r?.ok === false)
-        setDirty(false)
+        if (r?.ok !== false) saved.current = v
+        // 存的这版已经不是当前这版了 → 还脏着，别报"已保存"
+        if (rev.current === myRev) setDirty(false)
       })
     }, 800)
   }

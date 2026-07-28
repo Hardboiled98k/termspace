@@ -28,15 +28,18 @@ function GroupNodeImpl({ id, data }: NodeProps<GroupNodeT>): React.JSX.Element {
   const counts = useStore((s) => {
     const c: Record<string, number> = { running: 0, attention: 0, error: 0, idle: 0 }
     let total = 0
+    // 群发只发空闲的**终端**（见 sendBroadcast）—— 浏览器/简报节点不算目标
+    let idleTerms = 0
     for (const n of s.nodes) {
       if (n.parentId !== id) continue
       total++
       const st = String((n.data as { status?: string }).status ?? 'idle')
       if (st in c) c[st]++
+      if (n.type === 'terminal' && st === 'idle') idleTerms++
     }
-    return `${total}|${c.running}|${c.attention}|${c.error}`
+    return `${total}|${c.running}|${c.attention}|${c.error}|${idleTerms}`
   })
-  const [total, running, attention, error] = counts.split('|').map(Number)
+  const [total, running, attention, error, idleCount] = counts.split('|').map(Number)
   const worst = error > 0 ? 'error' : attention > 0 ? 'attention' : running > 0 ? 'running' : 'idle'
 
   const kids = (): Node[] => getNodes().filter((n) => n.parentId === id)
@@ -180,11 +183,45 @@ function GroupNodeImpl({ id, data }: NodeProps<GroupNodeT>): React.JSX.Element {
     setNodes((ns) => ns.map((n) => (n.id === id ? { ...n, zIndex: undefined } : n)))
   }
 
+  /**
+   * 群发。
+   *
+   * **同一串字在 agent prompt、shell、TUI 选择器里是三件完全不同的事** ——
+   * 某个 agent 恰好退出到 shell 时，你想发给模型的那句话就变成了一条 shell 命令。
+   * tmux 的 synchronize-panes 至少还要求你人在那些 pane 前面；这里的节点
+   * 可能正折叠着、可能在画布另一头，出了事根本看不见。
+   *
+   * 所以发送前把目标摊开给用户看，并**默认排除正忙/等审批/状态不明的**：
+   * 这三种状态下写入最容易落到一个没人预期的地方。
+   */
   const sendBroadcast = (): void => {
     const cmd = (bcast ?? '').trim()
     const list = terms()
     if (!cmd || !list.length) return
-    for (const n of list) window.termspace.write(n.id, `${cmd}\r`)
+    const stateOf = (n: Node): string => String((n.data as { status?: string }).status ?? 'idle')
+    const ok = list.filter((n) => stateOf(n) === 'idle')
+    const skipped = list.filter((n) => stateOf(n) !== 'idle')
+    if (!ok.length) {
+      window.alert(
+        `${list.length} 个终端都不在空闲状态（正在跑 / 等审批 / 出错），这一发没有安全的目标。\n` +
+          '等它们停下来，或者单独点开某个终端发。'
+      )
+      return
+    }
+    const label = (n: Node): string =>
+      `· ${String((n.data as { title?: string }).title ?? n.id)}（${stateOf(n)}）`
+    if (
+      !window.confirm(
+        `把这行发到 ${ok.length} 个终端？\n\n${cmd}\n\n${ok.map(label).join('\n')}` +
+          (skipped.length
+            ? `\n\n跳过 ${skipped.length} 个（不在空闲状态）：\n${skipped.map(label).join('\n')}`
+            : '') +
+          '\n\n注意：这串字会原样进终端。目标里若有 agent 已退出到 shell，它就是一条命令。'
+      )
+    ) {
+      return
+    }
+    for (const n of ok) window.termspace.write(n.id, `${cmd}\r`)
     closeBcast()
   }
 
@@ -342,7 +379,9 @@ function GroupNodeImpl({ id, data }: NodeProps<GroupNodeT>): React.JSX.Element {
             spellCheck={false}
           />
           <button className="group-act send" onClick={sendBroadcast} disabled={!bcast.trim()}>
-            发送到 {terms().length} 个终端
+            {/* 数的是**真会收到的那些**。写总数会让人以为全发了，
+                而实际只发给空闲的那几个 —— 差额在确认框里列清楚 */}
+            发送到 {idleCount} 个终端
           </button>
         </div>
       )}

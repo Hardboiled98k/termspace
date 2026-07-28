@@ -310,9 +310,26 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
                 : '切换凭证会重开会话'
             }
             onChange={(e) => {
+              const next = e.currentTarget.value || undefined
+              if (next === data.identityId) return
+              /* **同一件事的两个入口，防护必须一样重**：从画布拉一条凭证连线会弹确认，
+                 从这个下拉切却是立刻 destroy —— 而后果完全相同（结束 tmux 会话和
+                 里面正在跑的 agent，不可撤销）。多账号用户恰恰最常点这个下拉。 */
+              const to = next ? (identities.find((i) => i.id === next)?.name ?? next) : '默认身份'
+              if (
+                !window.confirm(
+                  `把「${data.title}」切到「${to}」？\n\n` +
+                    '会关掉这个终端当前的会话并用新账号重开，正在跑的进程会结束。\n' +
+                    '（凭证只负责隔离登录态，新账号第一次仍需在终端里登录一次）'
+                )
+              ) {
+                // 用户取消：把 select 的显示值拨回去（受控组件，重渲染即恢复）
+                e.currentTarget.value = data.identityId ?? ''
+                return
+              }
               // 换身份 = 新 env → 必须真杀旧会话（否则 tmux -A 会接回旧 env 的会话）
               void window.termspace.destroy(id)
-              updateNodeData(id, { identityId: e.currentTarget.value || undefined })
+              updateNodeData(id, { identityId: next })
             }}
           >
             <option value="">默认身份</option>

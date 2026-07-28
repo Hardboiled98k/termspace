@@ -1262,13 +1262,23 @@ ipcMain.handle('context:load', async (e, nodeId: string) => {
   return ''
 })
 
+/* 按节点串行化写入。防抖保存 + 卸载补发可以同时在路上，
+   而固定 `.tmp` 会让两次写互相踩：后一次的 rename 撞上 ENOENT（前一次已经改名走了），
+   或者两个写者交错把半份内容 rename 成正式文件。settings-store 早就这么做了。 */
+const ctxWriteChain = new Map<string, Promise<unknown>>()
+
 ipcMain.handle('context:save', async (e, nodeId: string, text: string) => {
   if (!fromMainWin(e) || !okId(nodeId)) return { ok: false, error: '非法节点 id' }
-  try {
+  const run = (ctxWriteChain.get(nodeId) ?? Promise.resolve()).then(async () => {
     await mkdir(ctxDir(), { recursive: true })
     const f = ctxFile(nodeId)
-    await writeFile(`${f}.tmp`, String(text))
-    await rename(`${f}.tmp`, f)
+    const tmp = `${f}.${randomUUID().slice(0, 8)}.tmp`
+    await writeFile(tmp, String(text))
+    await rename(tmp, f)
+  })
+  ctxWriteChain.set(nodeId, run.catch(() => undefined)) // 一环失败不能卡死后续写入
+  try {
+    await run
     return { ok: true }
   } catch (err) {
     console.error('context save failed:', err)
