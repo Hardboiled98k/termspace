@@ -1,0 +1,45 @@
+#!/bin/bash
+# codesign 包装：**只**在 Apple 时间戳服务抖动时重试，其余情况原样透传。
+#
+# 为什么需要：签一个 Electron app 要给约 4000 个文件各盖一次时间戳，
+# 而 timestamp.apple.com 偶发返回
+#   "The timestamp service is not available."
+#   "The timestamp transaction is not permitted or supported."
+# 只要 4000 次里有一次撞上，electron-builder 整个构建就失败，
+# 而重来一次是 25 分钟。实测一天内 5 次构建有 2 次死在这上面。
+#
+# 用法：把本目录放到 PATH 最前面再调 electron-builder（它是按名字调 codesign 的）。
+#
+# **不吞掉真实错误**：只有 stderr 里出现时间戳相关字样才重试；
+# 证书不对、entitlements 写错、文件损坏这些必须立刻失败，
+# 否则就成了"把签名问题重试到看起来通过"。
+set -uo pipefail
+
+# CODESIGN_REAL 只为可测性存在（用假的 codesign 桩验证重试分支真的会走）。
+# 默认写死绝对路径 —— 绝不能是 `codesign`，那会递归调到本脚本自己。
+REAL=${CODESIGN_REAL:-/usr/bin/codesign}
+MAX=${CODESIGN_RETRY_MAX:-6}
+
+for ((i = 1; i <= MAX; i++)); do
+  err=$("$REAL" "$@" 2>&1 >/dev/null)
+  rc=$?
+  [ -n "$err" ] && printf '%s\n' "$err" >&2
+  [ $rc -eq 0 ] && exit 0
+
+  # 只认时间戳这一类
+  case "$err" in
+    *"timestamp service is not available"* | \
+    *"timestamp transaction is not permitted"* | \
+    *"Timestamp service is not available"* | \
+    *"timestamped"*"failed"*)
+      if [ $i -lt $MAX ]; then
+        # 退避：2s 4s 8s 16s 32s，给服务端喘息
+        sleep $((2 ** i))
+        echo "codesign-retry: 时间戳失败，第 $((i + 1)) 次尝试" >&2
+        continue
+      fi
+      ;;
+  esac
+  exit $rc
+done
+exit 1
