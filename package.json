@@ -1,6 +1,6 @@
 {
   "name": "termspace",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "无限画布终端管理器 — terminals as nodes on an infinite canvas",
   "main": "./out/main/index.js",
   "private": true,
@@ -10,10 +10,10 @@
     "start": "electron-vite preview",
     "typecheck": "tsc --noEmit",
     "rebuild": "electron-rebuild -f -w node-pty",
-    "dist": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-vite build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --arm64 --x64 --config electron-builder.yml",
+    "dist": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-vite build && CSC_IDENTITY_AUTO_DISCOVERY=false PATH=\"$PWD/scripts/codesign-retry:$PATH\" electron-builder --mac --arm64 --x64 --config electron-builder.yml",
     "test": "node --test --experimental-strip-types test/*.test.ts",
-    "dist:signed": "electron-vite build && electron-builder --mac --arm64 --x64 --config electron-builder.yml",
-    "dist:local": "electron-vite build && electron-builder --mac --arm64 --config electron-builder.yml -c.mac.notarize=false && npm run rebuild",
+    "dist:signed": "electron-vite build && PATH=\"$PWD/scripts/codesign-retry:$PATH\" electron-builder --mac --arm64 --x64 --config electron-builder.yml",
+    "dist:local": "electron-vite build && PATH=\"$PWD/scripts/codesign-retry:$PATH\" electron-builder --mac --arm64 --config electron-builder.yml -c.mac.notarize=false && npm run rebuild",
     "lint": "oxlint src test mobile",
     "check": "npm run lint && npm run typecheck && npm test"
   },
