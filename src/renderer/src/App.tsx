@@ -41,6 +41,7 @@ export type { BoardNode }
 import { IdentityContext, TmuxContext, RequestDeleteContext } from './identity-context'
 import { SettingsPanel, type SettingsSection } from './SettingsPanel'
 import { shouldShowAccount } from './quota-visibility'
+import { countUsing } from './quota-usage'
 import { MessageCenter } from './MessageCenter'
 import {
   IconTerminal,
@@ -350,10 +351,13 @@ function shortModel(model: string): string {
 function BoardHUD({
   nodes,
   ctxMap,
+  liveAgents,
   onFocus
 }: {
   nodes: BoardNode[]
   ctxMap: Record<string, NodeCtx>
+  /** 节点 id → 此刻真的在里面跑着的 agent（由 hook 事件得出，见 onAgentStatus） */
+  liveAgents: Record<string, string>
   onFocus: (id: string) => void
 }): React.JSX.Element | null {
   const [quota, setQuota] = useState<AccountQuota[]>([])
@@ -378,12 +382,14 @@ function BoardHUD({
      那样只要画布上有一个普通 shell，`system:claude` 的 usingCount 就 >0，
      "没人在用就不显示"这条判据对 Claude 恰好永远不成立。
      实测就是这个现象：还没在画布上登录 codex，右上角却已经有额度卡。 */
+  /* 判据抽到 quota-usage.ts —— 它有三个来源（凭证连线 / hook 报的实跑 agent /
+     建节点时的 provider），顺序错了就会把正在烧的账号藏起来。见那边的文件头。 */
   const usingCount = (a: AccountQuota): number =>
-    terms.filter((n) =>
-      n.data.identityId
-        ? n.data.identityId === a.accountId
-        : !!n.data.provider && a.accountId === `system:${n.data.provider}`
-    ).length
+    countUsing(
+      terms.map((n) => ({ id: n.id, identityId: n.data.identityId, provider: n.data.provider })),
+      a.accountId,
+      liveAgents
+    )
 
   // 和 AccountBlock 共用同一个判据（quota-visibility.ts），不再各写一份
   const accounts = quota.filter((a) =>
@@ -789,6 +795,10 @@ function Board(): React.JSX.Element {
   const [notice, setNotice] = useState<string | null>(null)
   /** 挂起中的工具审批（来自 Claude PermissionRequest hook，主进程把请求挂着） */
   const [approvals, setApprovals] = useState<PendingApproval[]>([])
+  /* 节点 id → 此刻真的跑在里面的 agent。**只从 hook 事件得出**：
+     前台进程名不可用（实测 claude 报版本号 `2.1.220`、codex 报 `Python`、gemini 报 `node`）。
+     额度面板靠它认出"用户手敲起来的 agent"，见 BoardHUD 的 usingCount。 */
+  const [liveAgents, setLiveAgents] = useState<Record<string, string>>({})
   useEffect(() => window.termspace.onApprovals(setApprovals), [])
   const [identities, setIdentities] = useState<IdentityMeta[]>([])
   const [presets, setPresets] = useState<Preset[]>([])
@@ -1295,6 +1305,21 @@ function Board(): React.JSX.Element {
 
     const off = window.termspace.onAgentStatus((e) => {
       lastEventAt.set(e.nodeId, Date.now())
+      /* **谁在这个节点里真的跑起来了**。节点的 `provider` 是建节点时定的，
+         而用户经常先开一个普通 zsh、再手敲 `claude` —— 那种节点 provider 是空，
+         额度面板于是把这个正在烧的账号整个藏起来。
+         hook 事件是"真有 agent 在跑"的唯一可靠信号：
+         前台进程名不能用（实测 claude 报的是版本号 `2.1.220`、codex 报 `Python`）。
+         SessionEnd 就摘掉。 */
+      if (e.agentId) {
+        setLiveAgents((m) =>
+          e.event === 'SessionEnd'
+            ? (delete m[e.nodeId], { ...m })
+            : m[e.nodeId] === e.agentId
+              ? m
+              : { ...m, [e.nodeId]: e.agentId as string }
+        )
+      }
       const fresh = e.newTurn || e.event === 'SessionStart' // 新一轮才允许清 error
       if (e.state === 'working') {
         // done-holdoff 3s：并行 hook 晚到的 working 不许复活已结束的 turn
@@ -2007,7 +2032,7 @@ function Board(): React.JSX.Element {
           {/* 右上角单一栏：额度 HUD 与消息中心竖排。两个各自的 top-right Panel
               会被绝对定位到同一点上，字直接压在一起 */}
           <Panel position="top-right" className="right-rail">
-            <BoardHUD nodes={nodes} ctxMap={ctxMap} onFocus={focusNode} />
+            <BoardHUD nodes={nodes} ctxMap={ctxMap} liveAgents={liveAgents} onFocus={focusNode} />
             <MessageCenter
               nodes={nodes}
               approvals={approvals}
