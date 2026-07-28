@@ -101,6 +101,23 @@ while read -r u; do
   esac
 done < <(awk '/^  - url: /{print $3}' "$YML")
 
+# **反方向也要查：两个架构都必须出现在 yml 的 files 里。**
+# 这条是踩出来的：分两次 electron-builder 调用（先 x64 后 arm64）时，
+# **后一次会把 latest-mac.yml 整个重写**，只剩它自己那个架构 ——
+# 两个 zip 都好端端躺在 dist/ 里，上面那条正向检查全过，
+# 而 Intel 用户拿到的 yml 里根本没有他们能用的文件。
+# 只有分架构构建（比如某一架构签名失败后单独补打）才会触发，
+# 一次性双架构构建不会 —— 所以更容易漏。
+for z in "$ZIP_ARM" "$ZIP_X64"; do
+  b=$(basename "$z")
+  grep -q "url: ${b}\$" "$YML" || {
+    echo "❌ $b 不在 latest-mac.yml 的 files 里 —— 那个架构的用户更新会失败" >&2
+    echo "   多半是分了两次 electron-builder 调用，后一次重写了 yml。" >&2
+    echo "   要么一次性 --arm64 --x64 重打，要么跑 scripts/merge-latest-mac.sh 合并。" >&2
+    exit 1
+  }
+done
+
 # yml 里写的版本必须和包一致，否则客户端下下来的和它以为的不是一个东西
 YML_VER=$(grep -m1 '^version:' "$YML" | awk '{print $2}')
 [ "$YML_VER" = "$VERSION" ] || { echo "latest-mac.yml 写的是 ${YML_VER}，包是 $VERSION —— 重新打包" >&2; exit 1; }
