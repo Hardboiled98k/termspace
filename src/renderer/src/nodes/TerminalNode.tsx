@@ -2,6 +2,7 @@ import { memo, useCallback, useContext, useEffect, useRef, useState } from 'reac
 import { IdentityContext, RequestDeleteContext } from '../identity-context'
 import { FarChip, FAR_ZOOM } from './FarChip'
 import { usePinchZoom } from '../usePinchZoom'
+import { fitToNode } from '../fit-to-node'
 import {
   Handle,
   NodeResizer,
@@ -200,7 +201,7 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
            shell 会照着重排一遍输出，用户回来看到的是一屏被揉烂的历史。
            元素被 display:none / 折叠 / 尚未布局时都会走到这里。 */
         if (!el.clientWidth || !el.clientHeight) return
-        fit.fit()
+        fitToNode(term, fit, data.fontSize ?? FONT_DEFAULT)
         window.termspace.resize(id, term.cols, term.rows)
       })
     })
@@ -235,8 +236,8 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
     const term = termRef.current
     const fit = fitRef.current
     if (!term || !fit) return
-    term.options.fontSize = data.fontSize ?? FONT_DEFAULT
-    fit.fit()
+    // 走同一条 fitToNode —— 否则用户设的字号会绕过窄节点的自动缩小
+    fitToNode(term, fit, data.fontSize ?? FONT_DEFAULT)
     window.termspace.resize(id, term.cols, term.rows)
   }, [id, data.fontSize])
 
