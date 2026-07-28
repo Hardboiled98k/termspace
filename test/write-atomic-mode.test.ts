@@ -14,10 +14,11 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, writeFile, chmod, stat, rename } from 'node:fs/promises'
+import { mkdtemp, writeFile, chmod, stat, rename, readFile, readdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { writeAtomic } from '../src/main/write-atomic.ts'
 
 const mode = async (f: string): Promise<number> => (await stat(f)).mode & 0o777
 
@@ -53,4 +54,32 @@ test('可执行的 helper 同理：0700 要在创建时生效', async () => {
   const m = await mode(f)
   assert.equal(m & 0o077, 0, `别的用户不该有任何权限：${m.toString(8)}`)
   assert.ok(m & 0o100, '自己要能执行')
+})
+
+/* 上面三条钉的是**文件系统的性质**（复刻两种写法对比）。下面这条跑的是
+   真正在用的那个函数 —— 它现在被 hooks.ts 和 remote-tokens.ts 共用。
+
+   ⚠️ 说实话：这条测不出"创建那一刻"与"写完再 chmod"的差别，那是个时间窗口，
+   落地结果一模一样。它能钉住的是：调用方给了 mode，落地文件就必须是那个 mode
+   （曾经 remote-tokens 根本没走这个函数），且不留 .tmp 残骸。 */
+test('真的 writeAtomic：给了 mode 就落地成那个 mode，且不留临时文件', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'wa-'))
+  const f = path.join(dir, 'tokens.json')
+  await writeAtomic(f, '{"token":"SECRET"}', 0o600)
+  assert.equal(await mode(f), 0o600)
+  assert.equal(await readFile(f, 'utf8'), '{"token":"SECRET"}')
+  assert.deepEqual(
+    (await readdir(dir)).filter((n) => n.endsWith('.tmp')),
+    [],
+    '临时文件没清干净'
+  )
+})
+
+test('真的 writeAtomic：覆盖已存在的文件也要收紧权限', async () => {
+  // 老文件可能是 0644（升级前写的），覆盖时必须顺手收紧，不能沿用
+  const dir = await mkdtemp(path.join(tmpdir(), 'wa-'))
+  const f = path.join(dir, 'tokens.json')
+  await writeFile(f, 'old', { mode: 0o644 })
+  await writeAtomic(f, 'new', 0o600)
+  assert.equal(await mode(f), 0o600)
 })

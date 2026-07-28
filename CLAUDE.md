@@ -372,6 +372,26 @@ feed URL 做成用户可改的是有代价的（能被诱导改源），现在�
 任何进程都能 `tmux -L termboard send-keys` 直接驱动会话绕过全部检查 —— 所以这是**产品护栏
 不是安全边界**。写文档、写注释、答用户都要这么说，别把它说成安全机制。
 
+## 外部输入的信任边界（2026-07-28，codex 整体评审查出的两条 P0）
+
+- **导入外部工作区必须先净化**（`workspace-import.ts`）。`SavedNode.command` 会在终端
+  第一次起会话时直接进登录 shell —— 不摘掉，"打开别人发来的画布"就等于执行文件里的
+  任意命令，而确认框只说了"替换画布/结束孤儿会话"。**用户选择打开 ≠ 同意执行**。
+  同时摘 `identityId`（别人的画布会静默绑上你的账号并按它计费）、丢掉未知 type
+  （`fromSaved` 的兜底分支是 terminal，未来类型在旧版本里会变成一个真会 spawn 的终端）。
+  本机自己的 `workspace.json` **不走这条路** —— 那是用户自己敲的命令，信任级别不同
+- **`<webview>` 必须一节点一个 partition**。不给 partition 时用 app 默认 session，
+  所有浏览器节点共享 Cookie —— 而授权是**按节点**发的，agent 拿到自己节点的授权后
+  只要导航到你在别的节点登录过的站就白拿登录态。执法点在主进程
+  `will-attach-webview`：形状不对一律落到**一次性** session，绝不退回默认 session。
+  代价：节点间登录态不再互通，删节点留下孤儿 profile（暂不清理）
+- **远程总开关点掉要立刻断服务**（不是"下次重启生效"）：点关通常是在应急撤权。
+  `stopRemote()` 先 dispose 再落盘，并把两个能力 gate 一起压死 ——
+  否则 `remoteAllowInput = next.remoteAllowInput` 会把磁盘里那份 true 原样恢复回来
+- **切/关项目都要先 `snapshot()` 再切板**。`switchProject`/`addProject` 有，
+  `closeProject` 曾漏 —— 落盘是 500ms 防抖的，关标签页会清掉 timer 并把下一次快照
+  写给**新的** active project。症状不是报错：项目认领得回来，但最后几步改动没了
+
 ## 路线图（真实状态见 PRD.md「优先级排序」，那张表已重校）
 
 M1–M6 与 F1–F8 均有可用实现；签名公证、手机端、三家额度采集、崩溃日志、工作区导出导入

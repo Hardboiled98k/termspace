@@ -191,9 +191,17 @@ function BrowserNodeImpl({ id, data, selected }: NodeProps<BrowserNodeT>): React
         ref={setBody}
         style={{ visibility: far ? 'hidden' : 'visible' }}
       >
+        {/* **partition 必须给，而且必须一节点一个**。不给的话所有浏览器节点共用
+            app 默认 session —— Cookie、localStorage、登录态全是一份。而"连线即授权"
+            是**按节点**发的：agent 拿到自己那个节点的授权后，只要导航到你在另一个
+            节点登录过的站，就直接继承了你的登录态，授权边界形同虚设。
+            主进程的 will-attach-webview 会校验这个值的形状，不合规就落到一次性 session
+            （见 index.ts）—— 那边才是真正的执法点，这里只是提供 id。
+            代价：不同节点的登录态不再互通，删掉节点那份 profile 就成孤儿（暂不清理）。 */}
         <Webview
           ref={wvRef}
           src={data.url || 'about:blank'}
+          partition={`persist:tbwv-${id}`}
           style={{ width: '100%', height: '100%' }}
         />
       </div>

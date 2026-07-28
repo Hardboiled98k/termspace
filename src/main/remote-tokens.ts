@@ -12,7 +12,8 @@
  * 单独成文件是为了能被 `node --test` 覆盖 —— 它只依赖 fs，不碰 electron。
  */
 import { randomUUID, timingSafeEqual } from 'node:crypto'
-import { readFile, writeFile, chmod } from 'node:fs/promises'
+import { readFile } from 'node:fs/promises'
+import { writeAtomic } from './write-atomic.ts'
 import { existsSync } from 'node:fs'
 
 export type RemoteRole = 'owner' | 'viewer'
@@ -69,9 +70,12 @@ export async function loadTokens(file: string): Promise<RemoteToken[]> {
   return []
 }
 
+/* **权限必须在创建那一刻就给**，不能"先写完再 chmod"：writeFile 用默认权限
+   （umask 022 → 0644），到 chmod 之前那个文件是全局可读的。这张表里的 owner token
+   能看所有终端、在开关允许时写入和批准 —— 同机另一个用户守着目录事件就能拿走。
+   窗口只有几毫秒，但这条判据在 hooks.ts 那边已经踩过一次，不该在这里重犯。 */
 async function save(file: string, list: RemoteToken[]): Promise<void> {
-  await writeFile(file, JSON.stringify(list, null, 2))
-  await chmod(file, 0o600)
+  await writeAtomic(file, JSON.stringify(list, null, 2), 0o600)
 }
 
 /** 保证至少有一把 owner token（首次启动 / 老文件损坏时） */

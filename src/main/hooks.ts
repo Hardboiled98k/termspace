@@ -18,7 +18,8 @@ import {
 } from './peer'
 import { toPublicApproval, type PendingApproval, type PendingApprovalFull } from './approval-dto'
 import { createHash, randomUUID } from 'node:crypto'
-import { chmod, copyFile, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, readFile, unlink } from 'node:fs/promises'
+import { writeAtomic } from './write-atomic.ts'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
@@ -158,26 +159,6 @@ function summarizeToolInput(toolName: string, input: unknown): string {
   const text = main || JSON.stringify(o)
   const flat = text.replace(/\s+/g, ' ').trim()
   return flat.length > 300 ? `${flat.slice(0, 300)}…` : flat || toolName
-}
-
-/**
- * 原子写。
- *
- * `mode` **必须在创建时就给**，不能"先写完再 chmod" —— `writeFile` 用的是默认权限
- * （umask 022 下就是 0644），rename 之后到 chmod 之前那个文件是**全局可读**的。
- * 而 tb-peer 脚本正文里带着完整的 peer token：那个窗口里别的用户读走它，
- * 就能打本机回环的 /tb/peer 往任意活 agent 里注入任务。
- * 窗口只有几毫秒，但它是可被守候的（监听目录事件即可）。
- */
-async function writeAtomic(file: string, content: string, mode?: number): Promise<void> {
-  // 临时文件名带随机后缀：install 与 uninstall 若撞在一起，固定名会互相覆盖或 rename ENOENT
-  const tmp = `${file}.${randomUUID().slice(0, 8)}.tmp`
-  await writeFile(tmp, content, mode === undefined ? undefined : { mode })
-  /* writeFile 的 mode 会被 umask 掩掉（0700 & ~022 = 0700 没事，但 0600 遇到更严的
-     umask 会更小 —— 那是往收紧方向，可以接受）。反过来若文件**已存在**，
-     writeFile 完全不改它的权限，所以还要显式 chmod 一次兜底。 */
-  if (mode !== undefined) await chmod(tmp, mode)
-  await rename(tmp, file)
 }
 
 interface HookGroup {

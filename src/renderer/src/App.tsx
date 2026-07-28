@@ -1066,6 +1066,11 @@ function Board(): React.JSX.Element {
     (pid: string) => {
       // 只从标签栏移除；画布记录保留（tmux 会话也还活着）。
       // 重新添加**同一个目录**会认领回这个 pid，画布和终端一起回来（reclaimBoardId）。
+      /* **先抓快照再切板**。switchProject / addProject 都这么做，唯独这里漏了 ——
+         而落盘是 500ms 防抖的，关标签页会清掉那个 timer 并把下一次快照写给**新的**
+         active project。症状不是报错：项目确实认领得回来，但最后几步改动没了
+         （移动的节点、刚拉的线、刚调的 viewport）。 */
+      if (pid === activeProject) boardsRef.current[pid] = snapshot()
       setProjects((ps) => {
         if (ps.length <= 1) return ps
         const rest = ps.filter((p) => p.id !== pid)
@@ -1077,7 +1082,7 @@ function Board(): React.JSX.Element {
         return rest
       })
     },
-    [activeProject, applyBoard]
+    [activeProject, applyBoard, snapshot]
   )
 
   const projectCwd = projects.find((p) => p.id === activeProject)?.cwd || undefined

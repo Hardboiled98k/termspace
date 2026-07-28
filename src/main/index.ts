@@ -31,6 +31,7 @@ import {
   createWorktree,
   removeWorktree
 } from './worktree.ts'
+import { sanitizeImportedWorkspace } from './workspace-import'
 import { startRemoteApi, type RemoteApi } from './remote'
 import { startUpdater, type Updater } from './updater'
 import {
@@ -213,6 +214,55 @@ let boardLinks = new Set<string>()
 let boardCtxLinks = new Set<string>()
 /** 完整画布快照（布局 + 状态），远程 API 用；终端内容不在里面 */
 let boardSnapshot: unknown = null
+
+/**
+ * 起远程 API。抽出来是因为**设置里点掉总开关必须立刻断服务**，
+ * 而"关掉再打开"就得能重新起来 —— 原来这段只在 app 启动时跑一次，
+ * 于是取消勾选之后 server 还在监听、token 照样能用，一直到下次重启。
+ *
+ * 安全开关只允许往收紧的方向"延迟"：关是立即的，开可以慢。
+ */
+async function startRemote(bindMode: string, port: number): Promise<void> {
+  remoteError = ''
+  try {
+    const bind = resolveBind(bindMode as 'loopback' | 'tailscale')
+    remoteApi = await startRemoteApi({
+      tokenFile: remoteTokenFile(),
+      port,
+      host: bind.host,
+      // 打包后 mobile/ 在 asar 里（electron-builder.yml 的 files 收了它），fs 能直接读
+      staticDir: path.join(app.getAppPath(), 'mobile'),
+      allowInput: () => remoteAllowInput,
+      allowApprove: () => remoteAllowApprove,
+      getBoard: () => boardSnapshot,
+      listApprovals: () => withVerdict(hookSystem?.listApprovals() ?? []),
+      decideApproval: (id, allow) => hookSystem?.decideApproval(id, allow) ?? false,
+      peek: (nodeId, lines) => peekPane(nodeId, lines),
+      writeInput: (nodeId, text) => {
+        const p = ptys.get(nodeId)
+        if (!p) return false
+        p.write(text)
+        return true
+      }
+    })
+    remoteFellBack = bind.fellBack
+    console.log(`远程 API 已启动：http://${remoteApi.host}:${remoteApi.port}`)
+    if (bind.fellBack) {
+      console.warn('远程绑定退回 127.0.0.1：没找到 Tailscale 地址（没登录/没启动？）')
+    }
+  } catch (err) {
+    remoteError = String((err as { message?: string })?.message ?? err)
+    console.error('远程 API 启动失败:', err)
+  }
+}
+
+/** 立刻断掉远程服务。**先断再落盘** —— 写盘失败不能让服务继续活着 */
+function stopRemote(): void {
+  remoteApi?.dispose()
+  remoteApi = null
+  remoteFellBack = false
+  remoteError = ''
+}
 ipcMain.on(
   'board:agents',
   (
@@ -526,6 +576,17 @@ function createWindow(): BrowserWindow {
     prefs.contextIsolation = true
     const src = String(params.src ?? '')
     if (!/^(https?:\/\/|about:blank)/i.test(src)) params.src = 'about:blank'
+    /* **session 隔离在这里执法**。不给 partition 时 <webview> 用 app 默认 session，
+       于是所有浏览器节点共享 Cookie —— 而授权是按节点发的（App.tsx 的 browserGrants），
+       agent 只要把自己那个节点导航到你在别的节点登录过的站，就白拿了登录态。
+       renderer 负责给 `persist:tbwv-<nodeId>`；形状不对一律落到**一次性** session，
+       绝不退回默认 session（退回去正是要防的那件事）。 */
+    const want = String((params as { partition?: unknown }).partition ?? '')
+    const part = /^persist:tbwv-[A-Za-z0-9_-]{1,40}$/.test(want)
+      ? want
+      : `tbwv-tmp-${randomUUID().slice(0, 8)}`
+    ;(params as { partition?: string }).partition = part
+    prefs.partition = part
   })
 
   /* 主窗口自身不许被导航走。用 origin/规范化路径比对，不能用 startsWith：
@@ -886,9 +947,24 @@ ipcMain.handle('settings:set', async (e, patch: Partial<Settings>) => {
      实际 gate 仍是 true —— 安全开关只允许往安全的方向失败。 */
   if (patch.remoteAllowInput === false) remoteAllowInput = false
   if (patch.remoteAllowApprove === false) remoteAllowApprove = false
+  /* 总开关同理，而且比上面两个更狠：点「关闭」通常是在应急撤权，
+     不能等到下次重启才断。**两个能力 gate 也一起压死** —— 主开关关了
+     还留着"允许远程写入"的内存状态，下次打开就自动带着旧权限回来。 */
+  if (patch.remoteEnabled === false) {
+    remoteAllowInput = false
+    remoteAllowApprove = false
+    stopRemote()
+  }
   const next = await setSettings(patch)
-  remoteAllowInput = next.remoteAllowInput // 立刻生效，不用重启
-  remoteAllowApprove = next.remoteAllowApprove
+  /* **总开关关着时两个能力 gate 恒为 false**。照抄 settings 的话，
+     刚刚 stopRemote 压死的 gate 会被磁盘里那份"允许远程写入=true"原样恢复，
+     等于关了个寂寞。 */
+  remoteAllowInput = next.remoteEnabled && next.remoteAllowInput // 立刻生效，不用重启
+  remoteAllowApprove = next.remoteEnabled && next.remoteAllowApprove
+  // 打开：立刻起。地址/端口变了要重启 app（UI 已写明），这里只管开关本身
+  if (patch.remoteEnabled === true && !remoteApi) {
+    await startRemote(next.remoteBind, next.remotePort)
+  }
   autoUpdateEnabled = next.autoUpdate
   updateFeedUrl = next.updateFeedUrl // 改完地址不用重启，下次检查就用新的
   return next
@@ -1353,8 +1429,19 @@ ipcMain.handle('workspace:import', async (e) => {
   }
   if (!ws) return { ok: false, error: '这不是 Termspace 的工作区文件（缺 projects/nodes）' }
 
+  /* **外部文件一律先净化**（见 workspace-import.ts）：SavedNode 的 `command` 会在
+     终端第一次起会话时直接进登录 shell —— 不摘掉，"打开别人发来的画布"就等于
+     执行文件里写的任意命令，而下面这个确认框一个字都没提执行。 */
+  const clean = sanitizeImportedWorkspace(ws)
+  ws = clean.ws
+
   /* 导入是**整块替换**，且下次启动的 reap 会把不在新画布里的 tmux 会话当孤儿杀掉 ——
      这是不可逆的，必须说清楚再动手。 */
+  const stripped = [
+    clean.commands ? `${clean.commands} 个节点的启动命令` : '',
+    clean.identities ? `${clean.identities} 个节点的凭证绑定` : '',
+    clean.dropped ? `${clean.dropped} 个类型不认识的节点` : ''
+  ].filter(Boolean)
   const { response } = await dialog.showMessageBox(mainWin, {
     type: 'warning',
     buttons: ['取消', '导入并重启'],
@@ -1364,7 +1451,11 @@ ipcMain.handle('workspace:import', async (e) => {
     detail:
       '当前工作区会先存进 workspace-archive/ 备份目录，可手工救回。\n\n' +
       '导入后 app 会重启。当前跑着的终端里，凡是不在新画布中的，' +
-      '其 tmux 会话会在重启时被当成孤儿结束。'
+      '其 tmux 会话会在重启时被当成孤儿结束。' +
+      (stripped.length
+        ? `\n\n已从这份文件里摘掉：${stripped.join('、')}。` +
+          '外部文件里的命令不会被自动执行 —— 节点铺出来，要跑什么你自己敲。'
+        : '')
   })
   if (response !== 1) return { ok: false, canceled: true }
 
@@ -1629,38 +1720,7 @@ app.whenReady().then(async () => {
 
   /* 远程 API（阶段 0）：默认关闭。只绑 127.0.0.1，远程访问请走 Tailscale 这类
      设备级 VPN —— 这个进程能 spawn pty、持有凭证，绝不能自己往公网监听。 */
-  if (st.remoteEnabled) {
-    try {
-      const bind = resolveBind(st.remoteBind)
-      remoteApi = await startRemoteApi({
-        tokenFile: remoteTokenFile(),
-        port: st.remotePort,
-        host: bind.host,
-        // 打包后 mobile/ 在 asar 里（electron-builder.yml 的 files 收了它），fs 能直接读
-        staticDir: path.join(app.getAppPath(), 'mobile'),
-        allowInput: () => remoteAllowInput,
-        allowApprove: () => remoteAllowApprove,
-        getBoard: () => boardSnapshot,
-        listApprovals: () => withVerdict(hookSystem?.listApprovals() ?? []),
-        decideApproval: (id, allow) => hookSystem?.decideApproval(id, allow) ?? false,
-        peek: (nodeId, lines) => peekPane(nodeId, lines),
-        writeInput: (nodeId, text) => {
-          const p = ptys.get(nodeId)
-          if (!p) return false
-          p.write(text)
-          return true
-        }
-      })
-      remoteFellBack = bind.fellBack
-      console.log(`远程 API 已启动：http://${remoteApi.host}:${remoteApi.port}`)
-      if (bind.fellBack) {
-        console.warn('远程绑定退回 127.0.0.1：没找到 Tailscale 地址（没登录/没启动？）')
-      }
-    } catch (err) {
-      remoteError = String((err as { message?: string })?.message ?? err)
-      console.error('远程 API 启动失败:', err)
-    }
-  }
+  if (st.remoteEnabled) await startRemote(st.remoteBind, st.remotePort)
 
   /* 额度 HUD：**按账号**采集（见 docs/QUOTA.md）。
      以前是读一个本机快照文件、只有 Claude、还分不清账号 ——
