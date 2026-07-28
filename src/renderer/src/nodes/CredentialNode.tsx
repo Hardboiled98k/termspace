@@ -29,7 +29,7 @@ const STATE_TEXT: Record<string, string> = {
   unknown: '登录态未知'
 }
 
-export function CredentialNode({ id, data, selected }: NodeProps<CredentialNodeType>): React.JSX.Element {
+export function CredentialNode({ data, selected }: NodeProps<CredentialNodeType>): React.JSX.Element {
   const identities = useContext(IdentityContext)
   const zoom = useZoom()
   const me = identities.find((i) => i.id === data.identityId)
@@ -64,7 +64,10 @@ export function CredentialNode({ id, data, selected }: NodeProps<CredentialNodeT
           title={name}
           state={STATE_TEXT[state]}
         />
-        <Handle type="source" position={Position.Right} />
+        {/* 和近景分支保持完全一致（含"不带 id"这一点）：
+            两个分支的 handle 不一致时，跨过 LOD 阈值边就会找不到 handle。 */}
+        <Handle type="target" position={Position.Left} className="tb-handle in" />
+        <Handle type="source" position={Position.Right} className="tb-handle out" />
       </>
     )
   }
@@ -102,8 +105,17 @@ export function CredentialNode({ id, data, selected }: NodeProps<CredentialNodeT
         </div>
       )}
       {!data.identityId && <div className="cred-hint">右键选一个凭证</div>}
-      {/* 只出不进：凭证是被终端用的，不接受任何入边 */}
-      <Handle type="source" position={Position.Right} id={`${id}-out`} />
+      {/* 边的**语义方向恒为「凭证 → 终端」**（凭证是被终端用的）。
+          但左侧仍然要有 target handle —— 用户从终端那头开始拉是完全合理的手势，
+          onConnect 里那段 swap 会把它 normalize 回正确方向。
+          以前没有这个 handle，那段 swap 永远执行不到：React Flow 产生不了
+          以凭证为 target 的 connection，用户从终端拉过来什么都不会发生。
+
+          **handle 不带 id**，和其他所有节点一致：SavedEdge 压根不存 handle，
+          重载时一律置 null，带 id 的 handle 跨不过一次重启。而且 onConnect
+          里那段 swap 只换 source/target、不换 handle id —— 全 null 才无害。 */}
+      <Handle type="target" position={Position.Left} className="tb-handle in" />
+      <Handle type="source" position={Position.Right} className="tb-handle out" />
     </div>
   )
 }

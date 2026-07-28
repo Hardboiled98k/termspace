@@ -148,6 +148,10 @@ function BrowserNodeImpl({ id, data, selected }: NodeProps<BrowserNodeT>): React
         lineStyle={{ opacity: 0, borderWidth: 8 }}
       />
       <Handle type="target" position={Position.Left} className="tb-handle in" />
+      {/* 边的语义方向恒为「终端 → 浏览器」（终端驱动浏览器）。右侧的 source
+          是给反向拖拽用的 —— onConnect 里那段 swap 会 normalize 回来。
+          以前没有它，那段 swap 同样永远执行不到。 */}
+      <Handle type="source" position={Position.Right} className="tb-handle out" />
       {/* 用 visibility 而不是 display:none —— 后者会改变 webview 高度，
           跨 LOD 阈值时触发页面 reflow */}
       <div className="browser-bar" style={{ visibility: far ? 'hidden' : 'visible' }}>

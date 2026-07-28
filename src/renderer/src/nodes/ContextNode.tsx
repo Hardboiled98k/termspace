@@ -94,6 +94,11 @@ function ContextNodeImpl({ id, selected }: NodeProps<ContextNodeT>): React.JSX.E
         </button>
       </div>
       {/* 拉线到终端 = 把这份简报注入那个 agent（可连多个 = 并联） */}
+      {/* **两侧都要有 handle**。边的语义方向恒为「上下文 → 终端」，但用户从哪头
+          开始拉是他的自由 —— onConnect 里那段 swap 会把反向拖拽normalize 回来。
+          以前只有右侧 source，于是那段 swap **永远执行不到**：React Flow 压根
+          产生不了以本节点为 target 的 connection，用户从终端拉过来什么都不会发生。 */}
+      <Handle type="target" position={Position.Left} className="tb-handle ctx" />
       <Handle type="source" position={Position.Right} className="tb-handle ctx" />
       <textarea
         className="context-node-body nodrag nowheel"
