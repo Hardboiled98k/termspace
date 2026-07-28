@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme, session, shell } from 'electron'
-import { readFile, writeFile, rename, mkdir, unlink, readdir } from 'node:fs/promises'
+import { readFile, writeFile, rename, mkdir, unlink, readdir, stat } from 'node:fs/promises'
 import { existsSync, appendFileSync, statSync } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
@@ -69,7 +69,7 @@ import {
   capturePane,
   paneCommand
 } from './tmux'
-import { isSecretEnvKey, shellQuote, tmuxClientEnv } from './tmux-args'
+import { identityValueIsSecret, shellQuote, tmuxClientEnv } from './tmux-args'
 import { applyIdentityEnv, billingKind, type ResolvedEnv } from './identity-env'
 
 // dev 下 app 名默认是 "Electron"，userData 会指向共享目录 → 显式隔离
@@ -716,13 +716,23 @@ ipcMain.handle(
     }
 
     /* codex 的状态灯：把托管 hook 装进这个节点实际使用的 CODEX_HOME。
-       每个订阅账号一个目录，所以只能在 spawn 时按需装，不能像 Claude 那样一次装全局。
+       每个订阅账号一个目录，所以只能在 spawn 时按需装。
        ⚠️ 装了不等于会跑 —— codex 对 hook 有授信机制，未授信时**静默跳过**。
        体检里有一条探针专门验这个，别在这里假设成功。 */
     if (opts?.provider === 'codex' && hookSystem && settings.claudeHooks === 'on') {
       const codexHome = env['CODEX_HOME'] || path.join(os.homedir(), '.codex')
       await hookSystem.enableCodexHooks(codexHome).catch((err) => {
         console.warn('codex hook 安装失败:', err)
+      })
+    }
+    /* Claude 同理 —— **原来以为它"一次装全局"就够了，那是错的**：
+       `CLAUDE_CONFIG_DIR` 会整个覆盖默认目录（settings / hooks / 会话历史 / 插件），
+       隔离账号根本不读 `~/.claude/settings.json`。不按目录装的话，
+       用户看到凭证切换成功、登录也成功，但那个节点的状态灯和 `tb ask` 接单
+       **静默失效** —— 而多账号正是这个产品的目标用户。 */
+    if (hookSystem && settings.claudeHooks === 'on' && env['CLAUDE_CONFIG_DIR']) {
+      await hookSystem.enableClaudeHooksIn(env['CLAUDE_CONFIG_DIR']).catch((err) => {
+        console.warn('claude hook 安装失败:', err)
       })
     }
 
@@ -763,8 +773,12 @@ ipcMain.handle(
      路径类变量（CODEX_HOME / CLAUDE_CONFIG_DIR）不是秘密，照常走 `-e` ——
      这样用户在会话里手开 window 也还是同一个账号。 */
   let secretFile: string | undefined
-  const secrets = Object.entries(idEnv?.set ?? {}).filter(([k]) => isSecretEnvKey(k))
-  if (tmux && secrets.length) {
+  const secrets = Object.entries(idEnv?.set ?? {}).filter(([k]) => identityValueIsSecret(k))
+  /* **只有 fresh 才落这份文件**。接回已存在的会话时，`new-session -A` 根本不执行
+     那条"source 完就 rm"的 shell 命令 —— 文件于是永久留在 userData 里，
+     而每次 remount / 折叠展开 / 切项目都会再留一个。凭证明文躺满一目录，
+     设置面板还写着"明文不落盘"。值在会话里本来就已经有了，重发一次没有意义。 */
+  if (tmux && fresh && secrets.length) {
     secretFile = path.join(app.getPath('userData'), `env-${randomUUID()}.sh`)
     const body = secrets.map(([k, v]) => `export ${k}=${shellQuote(v)}`).join('\n')
     await writeFile(secretFile, `${body}\n`, { mode: 0o600 })
@@ -1502,6 +1516,20 @@ ipcMain.handle('app:revealUserData', (e) => {
 app.whenReady().then(async () => {
   // 设计系统 dark-first：vibrancy 跟随系统会在浅色模式下透白，先锁深色
   nativeTheme.themeSource = 'dark'
+
+  /* 回收遗留的密钥文件。正常路径是"shell source 完当场 rm"，但 spawn 失败、
+     app 被杀、以及历史版本在 attach 时也建文件的那条路，都会留下凭证明文。
+     只删够老的（>5 分钟）——刚建出来还没被 source 的那份不能碰。 */
+  void (async () => {
+    const dir = app.getPath('userData')
+    const now = Date.now()
+    for (const f of await readdir(dir).catch(() => [] as string[])) {
+      if (!/^env-.*\.sh$/.test(f)) continue
+      const p = path.join(dir, f)
+      const st = await stat(p).catch(() => null)
+      if (st && now - st.mtimeMs > 5 * 60_000) await unlink(p).catch(() => undefined)
+    }
+  })()
 
   /* 渲染进程/GPU 进程崩了主进程收不到 uncaughtException —— 单独接。
      白屏比闪退更迷惑人，日志里必须留下痕迹。 */

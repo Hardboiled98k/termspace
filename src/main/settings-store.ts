@@ -48,14 +48,24 @@ export interface Settings {
    */
   autoUpdate: boolean
   /**
-   * 更新源。空 = 没配，更新功能整个不工作（设置里会如实说）。
+   * 更新源。默认就是官方源（见 `OFFICIAL_FEED`）。
    *
-   * 放在设置里而不是焊进打包配置：换发布源不用重新打包，
-   * 也不用把某个域名固定在二进制里。指向一个存着
-   * `latest-mac.yml` + `*.zip` 的 HTTPS 目录即可。
+   * 仍然放在设置里而不是焊进打包配置：换发布源不用重新打包。
+   * 但**默认值不能是空串** —— 发布者机器上配过不代表新用户机器上有，
+   * 设置是不随安装包走的。空默认意味着 fresh install 永远查不到更新，
+   * 而第一版里最需要更新的恰恰是新用户。
    */
   updateFeedUrl: string
 }
+
+/**
+ * 官方更新源。指向一个存着 `latest-mac.yml` + `*.zip` 的 HTTPS 目录。
+ *
+ * ⚠️ 信任根是**这个目录的控制权**，代码签名是最后一道而不是第一道
+ * （见 CLAUDE.md「自动更新」那张表）。所以它虽然可改，UI 上要显著显示
+ * 当前生效的域名 —— 被诱导改源等于换掉了信任根。
+ */
+export const OFFICIAL_FEED = 'https://updates.termspace.app/'
 
 export const DEFAULTS: Settings = {
   defaultFontSize: 13,
@@ -72,7 +82,7 @@ export const DEFAULTS: Settings = {
   peers: [],
   peerDelegate: false,
   autoUpdate: true,
-  updateFeedUrl: ''
+  updateFeedUrl: OFFICIAL_FEED
 }
 
 const file = (): string => path.join(app.getPath('userData'), 'settings.json')
@@ -114,8 +124,11 @@ function sanitize(s: Settings): Settings {
     peerDelegate: bool(s.peerDelegate),
     // 这个默认**开**，所以不能用 `=== true`（缺字段时会变成关）
     autoUpdate: s.autoUpdate !== false,
-    // 只收 https + 补结尾斜杠，判据和理由见 update-url.ts
-    updateFeedUrl: sanitizeFeedUrl(s.updateFeedUrl),
+    /* 只收 https + 补结尾斜杠，判据和理由见 update-url.ts。
+       **空/不合法一律回落官方源**：老用户存的是空串（那时还没有官方源），
+       浅合并不会把它换成新默认值，于是他们永远查不到更新。
+       想彻底不更新请关 autoUpdate —— 那是这件事的正经开关。 */
+    updateFeedUrl: sanitizeFeedUrl(s.updateFeedUrl) || OFFICIAL_FEED,
     /* alias 会进 ssh 的 argv，**读盘这一步就要把脏的滤掉**：
        手改 settings.json 塞一个 `-oProxyCommand=...` 进去，等于让任何能派活的
        agent 在本机执行任意命令。判据直接用 peer.ts 的，不另写一份正则。 */

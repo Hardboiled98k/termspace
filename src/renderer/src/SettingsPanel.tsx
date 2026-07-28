@@ -331,7 +331,12 @@ export function SettingsPanel({
               <p className="settings-note">
                 画布布局、简报、预设、凭证密文均在
                 <code> ~/Library/Application Support/termboard/</code>。
-                凭证经系统 Keychain 加密，明文不落盘。
+                {/* **别再写"明文不落盘"**：那句话不准。密钥确实是 Keychain 加密存的，
+                    但终端起会话时它会以 0600 文件短暂物化（shell source 完当场删），
+                    而且最终是以环境变量进程内可见 —— 那个终端里的 agent 读得到。
+                    界面上把能力边界说清楚，比说一句好听的更有用。 */}
+                凭证由系统 Keychain 加密保存。终端启动时会短暂物化成一个 0600
+                文件（读完即删），并以环境变量注入 —— 该终端里的 agent 读得到它。
               </p>
             </>
           )}

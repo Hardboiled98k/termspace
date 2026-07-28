@@ -62,6 +62,22 @@ const shq = shellQuote
 
 export const isSecretEnvKey = (k: string): boolean => /(KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)/i.test(k)
 
+/**
+ * identity **显式声明**的值是不是密钥。
+ *
+ * 和上面那条的区别是**默认方向反过来**：identity 里的值是用户为了让某个账号生效
+ * 而填进来的，默认按密钥处理，只有下面这几个路径类的键例外。
+ *
+ * 按名字正则猜会漏一大片 —— `DATABASE_URL`、`AUTH_HEADER`、`COOKIE`、
+ * 带签名的下载 URL 都不匹配 `(KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)`，
+ * 漏掉的那些会原样写进 tmux 客户端 argv，而客户端进程和终端同寿。
+ *
+ * 例外的这几个是**路径**：指向哪个账号目录不是秘密，而且它们必须走 `-e` ——
+ * 那样用户在会话里手开一个 window 才还是同一个账号。
+ */
+const IDENTITY_PUBLIC_KEYS = new Set(['CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GEMINI_CONFIG_DIR'])
+export const identityValueIsSecret = (k: string): boolean => !IDENTITY_PUBLIC_KEYS.has(k)
+
 export function assembleSpawnArgs(
   tmux: string | null,
   session: string,
@@ -97,8 +113,12 @@ export function assembleSpawnArgs(
   const providerPrefix = /^(ANTHROPIC_|CLAUDE_|CODEX_|GEMINI_|OPENAI_)/
   for (const [k, v] of Object.entries(env)) {
     if (k.startsWith('TERMBOARD_') || k === 'TERM' || k === 'COLORTERM') continue // TERM 由 tmux 管
-    // 密钥不进 argv（见 isSecretEnvKey）；有落盘文件时它们走那条路
-    if (secretFile && isSecretEnvKey(k)) continue
+    /* 密钥**永远不进 argv**，不管这次有没有落盘文件。
+       以前条件是 `secretFile && …` —— 而接回已存在的会话时不会新建文件
+       （值早就在会话环境里了），于是那一次密钥就原样进了 argv。
+       identity 显式声明的值按 identityValueIsSecret 判（默认即密钥），
+       继承来的环境按名字正则判。 */
+    if (explicit.has(k) ? identityValueIsSecret(k) : isSecretEnvKey(k)) continue
     if (explicit.has(k) || providerPrefix.test(k)) args.push('-e', `${k}=${v}`)
   }
   for (const [k, v] of Object.entries(env)) {

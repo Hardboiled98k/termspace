@@ -18,8 +18,9 @@ import {
 } from './peer'
 import { toPublicApproval, type PendingApproval, type PendingApprovalFull } from './approval-dto'
 import { createHash, randomUUID } from 'node:crypto'
-import { copyFile, mkdir, readFile, unlink } from 'node:fs/promises'
+import { copyFile, mkdir, readFile, stat, unlink } from 'node:fs/promises'
 import { writeAtomic } from './write-atomic.ts'
+import { isOurs, stripOurHandlers, type HookGroup } from './hook-merge.ts'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
@@ -72,7 +73,6 @@ const CODEX_EVENTS = [
   'PermissionRequest'
 ] as const
 
-const MARKER = 'termboard' // settings.json 里识别我方 hook 条目的标记（含于脚本路径）
 const BODY_LIMIT = 1024 * 1024
 
 function normalizeClaude(event: string, payload: unknown): AgentState | null {
@@ -161,12 +161,27 @@ function summarizeToolInput(toolName: string, input: unknown): string {
   return flat.length > 300 ? `${flat.slice(0, 300)}…` : flat || toolName
 }
 
-interface HookGroup {
-  matcher?: string
-  hooks?: { type?: string; command?: string }[]
-}
+/**
+ * Claude 的 settings.json。
+ *
+ * **参数是配置目录，不是写死的 `~/.claude`** —— `CLAUDE_CONFIG_DIR` 会整个覆盖
+ * 默认目录（settings / hooks / 会话历史 / 插件全在里面），而多账号隔离正是靠它。
+ * 写死的话：用户切到隔离账号，凭证生效了、登录也成功了，
+ * 但那个节点的状态灯和 `tb ask` 接单能力**静默失效** —— 因为 hook 装在另一个目录里。
+ */
+const claudeConfigDir = (dir?: string): string => dir || path.join(os.homedir(), '.claude')
+const claudeSettingsPath = (dir?: string): string =>
+  path.join(claudeConfigDir(dir), 'settings.json')
 
-const claudeSettingsPath = (): string => path.join(os.homedir(), '.claude', 'settings.json')
+/** 覆写别人的配置文件时**沿用它原来的权限**。settings.json 里可能有 env/API 配置，
+    默认 0644 覆盖一个 0600 的文件 = 悄悄放宽权限 */
+async function keepMode(file: string): Promise<number | undefined> {
+  try {
+    return (await stat(file)).mode & 0o777
+  } catch {
+    return undefined
+  }
+}
 
 /**
  * transcript 是"agent 说了什么"的真相源，payload 由 hook 脚本发来、同 UID 可构造，
@@ -189,15 +204,14 @@ function isSafeTranscript(p: string): boolean {
   )
 }
 
-const isOurs = (cmd: unknown): boolean => typeof cmd === 'string' && cmd.includes(MARKER)
 
 /**
  * 托管 hook 是否**完整**装在用户 settings.json 里（体检要报实情）。
  * 用「全部事件都在」而不是「有一个就算」：少装几个事件时状态系统是残的，
  * 报「正常」比不报更误导人。
  */
-export async function claudeHooksPresent(): Promise<boolean> {
-  const p = claudeSettingsPath()
+export async function claudeHooksPresent(configDir?: string): Promise<boolean> {
+  const p = claudeSettingsPath(configDir)
   if (!existsSync(p)) return false
   try {
     const settings = JSON.parse(await readFile(p, 'utf8')) as {
@@ -213,8 +227,8 @@ export async function claudeHooksPresent(): Promise<boolean> {
 }
 
 /** 把托管 hook 从用户 settings.json 里摘掉（设置面板「卸载」用），返回是否有改动 */
-export async function uninstallClaudeHooks(): Promise<boolean> {
-  const p = claudeSettingsPath()
+export async function uninstallClaudeHooks(configDir?: string): Promise<boolean> {
+  const p = claudeSettingsPath(configDir)
   if (!existsSync(p)) return false
   let settings: Record<string, unknown>
   try {
@@ -244,13 +258,13 @@ export async function uninstallClaudeHooks(): Promise<boolean> {
     if (kept.length) hooks[ev] = kept
     else delete hooks[ev]
   }
-  if (changed) await writeAtomic(p, JSON.stringify(settings, null, 2) + '\n')
+  if (changed) await writeAtomic(p, JSON.stringify(settings, null, 2) + '\n', await keepMode(p))
   return changed
 }
 
 /** 把托管 hook 合并进 ~/.claude/settings.json（幂等，marker 识别，保留用户条目，首次备份） */
-async function installClaudeHooks(scriptPath: string): Promise<void> {
-  const settingsPath = claudeSettingsPath()
+async function installClaudeHooks(scriptPath: string, configDir?: string): Promise<void> {
+  const settingsPath = claudeSettingsPath(configDir)
   let settings: Record<string, unknown> = {}
   if (existsSync(settingsPath)) {
     try {
@@ -260,6 +274,9 @@ async function installClaudeHooks(scriptPath: string): Promise<void> {
     }
     const backup = `${settingsPath}.termboard-backup`
     if (!existsSync(backup)) await copyFile(settingsPath, backup)
+  } else {
+    // 隔离账号的目录可能还不存在（用户刚建凭证、还没跑过 claude）
+    await mkdir(path.dirname(settingsPath), { recursive: true })
   }
 
   const hooks = (settings['hooks'] ??= {}) as Record<string, HookGroup[]>
@@ -267,10 +284,8 @@ async function installClaudeHooks(scriptPath: string): Promise<void> {
   for (const ev of CLAUDE_EVENTS) {
     const cmd = `sh "${scriptPath}" ${ev}`
     const arr = Array.isArray(hooks[ev]) ? hooks[ev] : []
-    // 去掉旧版本我方条目（路径变更时），保留用户条目
-    const kept = arr.filter(
-      (g) => !g.hooks?.some((h) => typeof h.command === 'string' && h.command.includes(MARKER))
-    )
+    // 去掉旧版本我方条目（路径变更时），**逐 handler 摘**，保留同组里用户自己的
+    const kept = stripOurHandlers(arr)
     const already =
       arr.length === kept.length + 1 &&
       arr.some((g) => g.hooks?.some((h) => h.command === cmd))
@@ -281,7 +296,11 @@ async function installClaudeHooks(scriptPath: string): Promise<void> {
     }
   }
   if (changed) {
-    await writeAtomic(settingsPath, JSON.stringify(settings, null, 2) + '\n')
+    await writeAtomic(
+      settingsPath,
+      JSON.stringify(settings, null, 2) + '\n',
+      await keepMode(settingsPath)
+    )
   }
 }
 
@@ -330,7 +349,7 @@ async function installCodexHooks(scriptPath: string, codexHome: string): Promise
   for (const ev of CODEX_EVENTS) {
     const cmd = `sh "${scriptPath}" ${ev}`
     const arr = Array.isArray(hooks[ev]) ? hooks[ev] : []
-    const kept = arr.filter((g) => !g.hooks?.some((h) => isOurs(h.command)))
+    const kept = stripOurHandlers(arr)
     const already = arr.length === kept.length + 1 && arr.some((g) => g.hooks?.some((h) => h.command === cmd))
     if (already) continue
     // matcher 必填（空串 = 全匹配），codex 与 Claude 在这点上一致
@@ -338,7 +357,7 @@ async function installCodexHooks(scriptPath: string, codexHome: string): Promise
     hooks[ev] = kept
     changed = true
   }
-  if (changed) await writeAtomic(p, JSON.stringify(doc, null, 2) + '\n')
+  if (changed) await writeAtomic(p, JSON.stringify(doc, null, 2) + '\n', await keepMode(p))
 }
 
 export interface HookSystem {
@@ -362,6 +381,9 @@ export interface HookSystem {
   enableHooks: () => Promise<void>
   /** 把托管 hook 装进某个 CODEX_HOME（每个 codex 订阅账号一个目录，spawn 时按需装） */
   enableCodexHooks: (codexHome: string) => Promise<void>
+  /** 同理，装进某个 CLAUDE_CONFIG_DIR。隔离账号不会读 ~/.claude/settings.json ——
+      不按目录装，那个节点的状态灯和 tb ask 接单能力就**静默失效** */
+  enableClaudeHooksIn: (configDir: string) => Promise<void>
   dispose: () => void
 }
 
@@ -835,6 +857,7 @@ export async function startHookSystem(
     getApprovalFull: (id) => pending.get(id)?.rec,
     enableHooks: () => installClaudeHooks(scriptPath),
     enableCodexHooks: (codexHome) => installCodexHooks(scriptPath, codexHome),
+    enableClaudeHooksIn: (configDir) => installClaudeHooks(scriptPath, configDir),
     dropApprovals: (nodeId) => {
       for (const [id, h] of [...pending]) {
         if (h.rec.nodeId === nodeId) settle(id, '') // 空 = 不决策，Claude 回落原生提示

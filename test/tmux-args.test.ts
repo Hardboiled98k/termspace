@@ -6,12 +6,21 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { assembleSpawnArgs, shellQuote, tmuxClientEnv } from '../src/main/tmux-args.ts'
+import {
+  assembleSpawnArgs,
+  identityValueIsSecret,
+  shellQuote,
+  tmuxClientEnv
+} from '../src/main/tmux-args.ts'
 
 const TMUX = '/opt/homebrew/bin/tmux'
 const base = { session: 'tb-t1', conf: '/u/tmux.conf', shell: '/bin/zsh', cwd: '/proj' }
-const build = (env: Record<string, string>, identity?: { keys: string[]; unset: string[] }) =>
-  assembleSpawnArgs(TMUX, base.session, base.conf, base.shell, base.cwd, env, identity)
+const build = (
+  env: Record<string, string>,
+  identity?: { keys: string[]; unset: string[] },
+  secretFile?: string
+) =>
+  assembleSpawnArgs(TMUX, base.session, base.conf, base.shell, base.cwd, env, identity, secretFile)
 
 const pairs = (args: string[]): string[] =>
   args.filter((_, i) => args[i - 1] === '-e')
@@ -24,14 +33,30 @@ test('CODEX_HOME 传得进会话 —— 两个订阅号靠它区分', () => {
 })
 
 /* 曾经的静默失败：转发靠前缀白名单猜，OPENAI_* 不在表里，
-   于是 identity 里写 OPENAI_API_KEY 在开着 tmux 时根本没传进去。 */
+   于是 identity 里写 OPENAI_API_KEY 在开着 tmux 时根本没传进去。
+
+   现在这类键走的是**密钥文件**那条路（值不进 argv），所以这条用例验的是
+   两件事的分工：路径类走 -e，其余走文件；没声明的一个都不许跟出去。 */
 test('identity 显式声明的键一律转发，不靠前缀猜', () => {
   const r = build(
-    { WEIRD_VENDOR_TOKEN: 'v1', UNRELATED: 'x' },
-    { keys: ['WEIRD_VENDOR_TOKEN'], unset: [] }
+    { WEIRD_VENDOR_TOKEN: 'v1', CODEX_HOME: '/x', UNRELATED: 'x' },
+    { keys: ['WEIRD_VENDOR_TOKEN', 'CODEX_HOME'], unset: [] },
+    '/tmp/env-x.sh'
   )
-  assert.ok(pairs(r.args).includes('WEIRD_VENDOR_TOKEN=v1'))
+  assert.ok(pairs(r.args).includes('CODEX_HOME=/x'), '路径类走 -e')
+  assert.ok(!r.args.join(' ').includes('v1'), '密钥走文件，值不该出现在 argv')
+  assert.ok(r.args.join(' ').includes('/tmp/env-x.sh'), '密钥文件路径要传给 shell 去 source')
   assert.ok(!pairs(r.args).some((p) => p.startsWith('UNRELATED=')), '没声明的不该跟着漏出去')
+})
+
+test('落文件的那批和跳过 argv 的那批必须是同一批（判据只能有一个）', () => {
+  /* index.ts 决定"哪些键写进密钥文件"、assembleSpawnArgs 决定"哪些键跳过 -e"，
+     两处用**同一个** identityValueIsSecret。各写一份的话，判据一漂移就有键
+     两边都不在 —— 症状是那个凭证静默不生效，而不是报错。 */
+  assert.equal(identityValueIsSecret('OPENAI_API_KEY'), true)
+  assert.equal(identityValueIsSecret('DATABASE_URL'), true)
+  assert.equal(identityValueIsSecret('CODEX_HOME'), false)
+  assert.equal(identityValueIsSecret('CLAUDE_CONFIG_DIR'), false)
 })
 
 test('unset 用 env -u 真删，而不是 -e KEY=（那只是空串）', () => {
@@ -110,17 +135,48 @@ test('有密钥文件时，密钥不出现在 tmux 参数里', () => {
   assert.ok(flat.includes('/tmp/env-x.sh'), '密钥文件路径要传给 shell 去 source')
 })
 
-test('没有密钥文件时退回原行为（不能因为这条改动让老路径失效）', () => {
+test('没有密钥文件时密钥**照样**不进 argv（接回已存在会话走的就是这条路）', () => {
+  /* 这条用例原来断言的是相反的事 —— "没有 secretFile 就把密钥塞进 -e"。
+     那正是漏洞：接回已存在的会话时不会新建密钥文件（值早就在会话环境里了），
+     于是那一次 `ps -Ao args` 里就有完整的 key，而 tmux 客户端进程和终端同寿。
+     `-e` 对已存在的会话本来也是被忽略的，塞进去纯粹是白泄漏。 */
   const { args } = assembleSpawnArgs(
     '/usr/bin/tmux',
     'tb-t1',
     '/c.conf',
     '/bin/zsh',
     '/tmp',
-    { OPENAI_API_KEY: 'sk-X' },
-    { keys: ['OPENAI_API_KEY'], unset: [] }
+    { OPENAI_API_KEY: 'sk-X', CODEX_HOME: '/home/a' },
+    { keys: ['OPENAI_API_KEY', 'CODEX_HOME'], unset: [] }
   )
-  assert.ok(args.join(' ').includes('OPENAI_API_KEY=sk-X'))
+  const flat = args.join(' ')
+  assert.ok(!flat.includes('sk-X'), `密钥泄漏进 argv：${flat}`)
+  assert.ok(flat.includes('CODEX_HOME=/home/a'), '路径类照常下发')
+})
+
+test('identity 里名字不像密钥的值也当密钥（正则猜不到 DATABASE_URL 这类）', () => {
+  /* 老判据是 `/(KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)/i` —— 按名字猜。
+     DATABASE_URL / AUTH_HEADER / COOKIE / 带签名的下载 URL 一个都不匹配，
+     于是它们原样进 argv。identity 里的值默认就该按密钥处理，
+     只有路径类（CODEX_HOME / CLAUDE_CONFIG_DIR）例外。 */
+  const { args } = assembleSpawnArgs(
+    '/usr/bin/tmux',
+    'tb-t1',
+    '/c.conf',
+    '/bin/zsh',
+    '/tmp',
+    {
+      DATABASE_URL: 'postgres://u:PGPASS@h/db',
+      AUTH_HEADER: 'Bearer BEARERLEAK',
+      CLAUDE_CONFIG_DIR: '/home/b'
+    },
+    { keys: ['DATABASE_URL', 'AUTH_HEADER', 'CLAUDE_CONFIG_DIR'], unset: [] },
+    '/tmp/env-x.sh'
+  )
+  const flat = args.join(' ')
+  assert.ok(!flat.includes('PGPASS'), `DATABASE_URL 泄漏进 argv：${flat}`)
+  assert.ok(!flat.includes('BEARERLEAK'), `AUTH_HEADER 泄漏进 argv：${flat}`)
+  assert.ok(flat.includes('CLAUDE_CONFIG_DIR=/home/b'), '路径类照常下发')
 })
 
 test('shellQuote 挡得住带引号的值', () => {
