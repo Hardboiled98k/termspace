@@ -36,7 +36,10 @@ for must in "Termspace-${VERSION}-arm64-mac.zip" "Termspace-${VERSION}-mac.zip";
   [ -f "dist/$must" ] || { echo "缺 dist/$must —— 先把那个架构打出来" >&2; exit 1; }
 done
 
-TMP=$(mktemp)
+# 临时文件建在 dist/ 里而不是系统临时目录：mv 要**同一个文件系统**才是原子替换，
+# 跨盘的 mv 是"复制+删除"，中途被杀就留下半份 yml。trap 兜住失败路径的残留。
+TMP=$(mktemp "dist/.latest-mac.yml.XXXXXX")
+trap 'rm -f "$TMP"' EXIT
 {
   echo "version: ${VERSION}"
   echo "files:"
@@ -52,6 +55,7 @@ TMP=$(mktemp)
   echo "releaseDate: '$(date -u +%Y-%m-%dT%H:%M:%S.000Z)'"
 } > "$TMP"
 mv "$TMP" "$YML"
+trap - EXIT
 
 # ── 复核：每条 sha512/size 都要和磁盘上的文件重新对一遍 ──
 # 生成完就信自己是这类脚本最容易犯的错
