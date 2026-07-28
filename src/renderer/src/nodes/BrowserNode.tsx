@@ -63,6 +63,9 @@ function BrowserNodeImpl({ id, data, selected }: NodeProps<BrowserNodeT>): React
      参照宽度取 1280（主流桌面断点），节点越宽缩放越接近 1。
      下限 0.4：再小字就没法读了，那时候本来也该放大节点或用 LOD 远景。 */
   const REF_WIDTH = 1280
+  /* dom-ready 之后仍然失败 = 真出问题了，**不能继续当成"还没准备好"吞掉** ——
+     那样用户只会看到一个恒定 100% 的页面，没有任何线索说明自适应没生效。 */
+  const wvReady = useRef(false)
   const applyZoom = useCallback((w: number): void => {
     const wv = wvRef.current
     if (!wv || w <= 0) return
@@ -71,9 +74,14 @@ function BrowserNodeImpl({ id, data, selected }: NodeProps<BrowserNodeT>): React
        下面 dom-ready 事件里会补一次 —— 这是 <webview> 的老毛病，
        不兜住的话首次加载的页面永远是 100%。 */
     try {
-      wv.setZoomFactor?.(z)
-    } catch {
-      /* 还没 ready，等 dom-ready 补 */
+      if (typeof wv.setZoomFactor !== 'function') {
+        if (wvReady.current) console.warn(`[BrowserNode] webview 没有 setZoomFactor，缩放自适应失效`)
+        return
+      }
+      wv.setZoomFactor(z)
+    } catch (err) {
+      if (wvReady.current) console.warn(`[BrowserNode] setZoomFactor 失败：`, err)
+      // dom-ready 之前抛是预期的，那时 wvReady 还是 false —— 静默等 onReady 补
     }
   }, [])
 
@@ -90,7 +98,10 @@ function BrowserNodeImpl({ id, data, selected }: NodeProps<BrowserNodeT>): React
     }
     /* dom-ready 之前 setZoomFactor 会抛，所以这里补一次 ——
        否则首次加载出来的页面永远是 100%，只有手动 resize 一下才对。 */
-    const onReady = (): void => applyZoom(bodyRef.current?.clientWidth ?? 0)
+    const onReady = (): void => {
+      wvReady.current = true
+      applyZoom(bodyRef.current?.clientWidth ?? 0)
+    }
     wv.addEventListener('did-start-loading', onStart)
     wv.addEventListener('did-stop-loading', onStop)
     wv.addEventListener('dom-ready', onReady)

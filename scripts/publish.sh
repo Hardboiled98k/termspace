@@ -166,6 +166,22 @@ if [ -n "$UNNOTARIZED" ]; then
 fi
 
 # ── 3. 上传 ──
+# **不许把 feed 退回旧版本**。zip 文件名带版本号所以互不覆盖，但
+# `latest-mac.yml` 是共享可变对象：两个发布进程并发时，旧版本那个若更晚完成，
+# 就把线上 feed 从新版退回旧版 —— 而两边的"线上 yml == 本地"验收都能通过。
+# 这里读一次线上版本做单调性检查；确实要降级（撤回一个坏版本）时用
+# ALLOW_DOWNGRADE=1 显式声明。
+ONLINE_VER=$(curl -sS -m 15 "${PUBLISH_URL}latest-mac.yml" 2>/dev/null | awk '/^version:/{print $2; exit}' || true)
+if [ -n "$ONLINE_VER" ] && [ "$ONLINE_VER" != "$VERSION" ]; then
+  # 用 sort -V 比版本；线上更高就是降级
+  newest=$(printf '%s\n%s\n' "$ONLINE_VER" "$VERSION" | sort -V | tail -1)
+  if [ "$newest" = "$ONLINE_VER" ]; then
+    echo "❌ 线上已经是 ${ONLINE_VER}，你要发的是 ${VERSION} —— 这会把所有客户端退回旧版" >&2
+    [ "${ALLOW_DOWNGRADE:-}" = "1" ] || { echo "   确实要降级请加 ALLOW_DOWNGRADE=1" >&2; exit 1; }
+    echo "   ALLOW_DOWNGRADE=1，继续。" >&2
+  fi
+fi
+
 # **先传 zip 再传 yml**：反过来的话，客户端在这两次传输之间检查更新，
 # 会读到新版本的 yml 却下载到一个还不存在的 zip。
 echo "→ 上传（先 zip 后 yml）"

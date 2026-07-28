@@ -49,11 +49,22 @@ async function load(): Promise<Preset[]> {
   return cache
 }
 
-async function persist(list: Preset[]): Promise<void> {
-  const tmp = `${file()}.tmp`
-  await writeFile(tmp, JSON.stringify(list, null, 2))
-  await rename(tmp, file())
-  cache = list
+/* 写盘串行化 + 随机 tmp。设置面板里两次点击可以并发进 IPC，而共用一个固定
+   `.tmp` 时后一次 rename 会撞上 ENOENT（前一次已经改名走了），或者两个写者
+   交错把半份内容 rename 成正式文件。identity/settings 早就这么做了，
+   这里一直低一档 —— 这类问题只在慢盘或手快的用户身上出现，测试撞不到。 */
+let writeChain: Promise<unknown> = Promise.resolve()
+
+function persist(list: Preset[]): Promise<void> {
+  const run = writeChain.then(async () => {
+    const tmp = `${file()}.${randomUUID().slice(0, 8)}.tmp`
+    await writeFile(tmp, JSON.stringify(list, null, 2))
+    await rename(tmp, file())
+    // **落盘成功才更新缓存**：写失败时内存和磁盘不能分叉
+    cache = list
+  })
+  writeChain = run.catch(() => undefined) // 一环失败不卡死后续写入
+  return run
 }
 
 export async function listPresets(): Promise<Preset[]> {
@@ -61,16 +72,19 @@ export async function listPresets(): Promise<Preset[]> {
 }
 
 export async function upsertPreset(input: Omit<Preset, 'id'> & { id?: string }): Promise<Preset[]> {
-  const list = await load()
-  const existing = input.id ? list.find((p) => p.id === input.id) : undefined
+  const cur = await load()
   const clean = {
     name: input.name.trim().slice(0, 40) || '未命名',
     provider: input.provider,
     command: input.command.trim().slice(0, 500),
     identityId: input.identityId || undefined
   }
-  if (existing) Object.assign(existing, clean)
-  else list.push({ id: randomUUID(), ...clean })
+  /* **在副本上改**，不原地 Object.assign 那个 cache 里的对象 ——
+     落盘失败时内存里已经是新值了，而磁盘还是旧的，两边就此分叉 */
+  const hit = input.id ? cur.some((p) => p.id === input.id) : false
+  const list = hit
+    ? cur.map((p) => (p.id === input.id ? { ...p, ...clean } : p))
+    : [...cur, { id: randomUUID(), ...clean }]
   await persist(list)
   return list
 }
