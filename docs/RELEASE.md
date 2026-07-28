@@ -127,6 +127,40 @@ zip 反过来是 `max-age=31536000, immutable` —— 文件名带版本号，�
 
 所以：**发布目录的写权限要当成签名私钥一样管**。
 
+## x64 的 Electron 下不动（全局代理下必现）
+
+症状：日志走到 `packaging arch=x64` → `downloaded label=electron progress=100%`
+之后直接 `⨯ The server aborted pending request`。**看起来像偶发网络错误，其实是必现的** ——
+重试两次都停在同一行。
+
+实测原因：`github.com` 的 release 下载在这台机的代理下只有 **~1 KB/s**，
+而 x64 的 Electron 是 118 MB。arm64 一直没事只是因为它早就在缓存里了。
+
+修法：从镜像下，但**用 GitHub 官方的 `SHASUMS256.txt` 校验**（那个文件几 KB，
+1 KB/s 也拉得动）。镜像只负责搬字节，信任仍然锚在官方校验和上 ——
+这个 zip 会被打进你分发给别人的 app，不能只因为"下得快"就信它。
+
+```bash
+V=43.2.0; F=electron-v$V-darwin-x64.zip
+SP=/tmp   # 随便找个地方
+curl -sSL -C - -o "$SP/$F" "https://registry.npmmirror.com/-/binary/electron/v$V/$F"
+unzip -tq "$SP/$F"    # 先确认 zip 完整（断点续传可能留半截）
+curl -sSL -o "$SP/SHASUMS256.txt" "https://github.com/electron/electron/releases/download/v$V/SHASUMS256.txt"
+[ "$(grep -F "$F" "$SP/SHASUMS256.txt" | awk '{print $1}')" = "$(shasum -a 256 "$SP/$F" | awk '{print $1}')" ] \
+  && echo OK || echo "校验不过，别用"
+
+# 缓存目录 = sha256(下载 URL 去掉文件名的部分)，见 @electron/get 的 Cache.js。
+# arm64 和 x64 共用同一个目录。
+DIR=$(node -e 'const c=require("crypto"),p=require("path");
+const u=new URL("https://github.com/electron/electron/releases/download/'"$V"'/x");
+u.pathname=p.posix.dirname(u.pathname);
+console.log(c.createHash("sha256").update(u.toString()).digest("hex"))')
+cp "$SP/$F" ~/Library/Caches/electron/$DIR/
+```
+
+**别改成设 `ELECTRON_MIRROR`**：那样连 `SHASUMS256.txt` 也从镜像取，
+校验和与文件同源 = 校验形同虚设。
+
 ## 公证会卡
 
 Apple 的公证队列说慢就慢，实测排过 40 分钟还是 `In Progress`，
