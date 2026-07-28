@@ -314,6 +314,35 @@ interface TermspaceApi {
     branch: string
   ) => Promise<{ ok: boolean; path?: string; error?: string }>
   /** 绝不 --force：脏树删不掉是特性，error 里带 git 的原话 */
+  exportLayout: (payload: {
+    name: string
+    description?: string
+    root: string
+    nodes: unknown[]
+    edges: unknown[]
+  }) => Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }>
+  importLayout: () => Promise<{
+    ok: boolean
+    error?: string
+    canceled?: boolean
+    name?: string
+    nodes?: {
+      ref: string
+      type: 'terminal' | 'browser' | 'context' | 'group'
+      title: string
+      absCwd?: string
+      suggestedCommand?: string
+      provider?: string
+      url?: string
+      parent?: string
+      x: number
+      y: number
+      width?: number
+      height?: number
+    }[]
+    edges?: { from: string; to: string; kind: string }[]
+    withCommands?: number
+  }>
   gitDiffSummary: (path: string) => Promise<{
     files: { path: string; added: number; removed: number; untracked?: boolean }[]
     added: number

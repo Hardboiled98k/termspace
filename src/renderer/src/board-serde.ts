@@ -156,6 +156,9 @@ export interface SavedNode {
   parentId?: string
   identityId?: string
   command?: string
+  /** 布局模板带来的建议命令。**存它是安全的** —— 它永远不会被 spawn 自动执行，
+      只有用户点了节点上那个「▶ 待运行」才会变成 command（见 TerminalNode） */
+  suggestedCommand?: string
   provider?: string
   fontSize?: number
   cwd?: string
@@ -222,6 +225,7 @@ export function fromSaved(s: SavedNode): BoardNode {
       status: 'idle',
       identityId: s.identityId,
       command: s.command,
+      suggestedCommand: s.suggestedCommand,
       provider: s.provider,
       fontSize: s.fontSize,
       cwd: s.cwd
@@ -256,6 +260,7 @@ export function toSaved(n: Exclude<BoardNode, WorkerNodeT>): SavedNode {
     parentId: n.parentId,
     identityId: n.data.identityId,
     command: n.data.command,
+    suggestedCommand: n.data.suggestedCommand,
     provider: n.data.provider,
     fontSize: n.data.fontSize,
     cwd: n.data.cwd

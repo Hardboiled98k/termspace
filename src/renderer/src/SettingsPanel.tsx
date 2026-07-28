@@ -59,12 +59,17 @@ export function SettingsPanel({
   onClose,
   renderPresets,
   renderIdentities,
+  onExportLayout,
+  onImportLayout,
   getWorkspace
 }: {
   initial: Section
   onClose: () => void
   renderPresets: () => React.JSX.Element
   renderIdentities: () => React.JSX.Element
+  /** 导出/导入任务布局（可分享的骨架，见 main/layout-template.ts） */
+  onExportLayout: () => Promise<void>
+  onImportLayout: () => Promise<void>
   /** 取内存里的实时画布用于导出 */
   getWorkspace: () => unknown
 }): React.JSX.Element {
@@ -187,6 +192,10 @@ export function SettingsPanel({
               <p className="settings-note">
                 app 已经在本机留了两层退路（<code>.bak</code> + 每小时一份、保留 24
                 份的存档），但都在同一块盘上。换机、重装、误删要靠导出的文件。
+                <br />
+                <b>任务布局</b>是另一件事：它是能发给同事的骨架 ——
+                不含任何凭证、目录是相对的、里面的命令<b>不会自动执行</b>
+                （铺出来后你自己点）。想分享工作流用它，别直接发工作区文件。
               </p>
               <div className="settings-actions">
                 <button
@@ -200,6 +209,15 @@ export function SettingsPanel({
                   }}
                 >
                   导出工作区…
+                </button>
+                {/* **布局模板和工作区是两件事**：工作区是本机全量状态（含凭证绑定、
+                    会随 command 自动执行）；模板是能发给别人的骨架 —— 无凭证、
+                    相对路径、命令默认暂停。两个按钮放一起，文案要把差别说清楚。 */}
+                <button className="settings-btn" onClick={() => void onExportLayout()}>
+                  导出任务布局…
+                </button>
+                <button className="settings-btn" onClick={() => void onImportLayout()}>
+                  导入任务布局…
                 </button>
                 <button
                   className="settings-btn"

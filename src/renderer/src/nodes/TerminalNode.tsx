@@ -31,6 +31,12 @@ export type TermNode = Node<
     restartTick?: number
     /** 凭证由画布上的连线决定（此时锁掉下拉，避免同一件事两个入口互相打架）；不持久化 */
     credBound?: boolean
+    /**
+     * 布局模板带来的**建议**命令。**和 `command` 是两个字段，这是有意的** ——
+     * `command` 会被 spawn 自动执行，而模板来自外部文件，绝不能自动跑。
+     * 用户点节点上那个按钮，才把它变成 command 并重开会话。
+     */
+    suggestedCommand?: string
   },
   'terminal'
 >
@@ -368,6 +374,27 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
         {/* 连线改了但会话里的 system prompt 还是旧的。**必须显式说出来** ——
             以前的做法是让 effect 重跑一轮假装重新注入了，而 tmux 接回已存在会话
             时启动命令根本不会再执行。点它才真重开（会结束正在跑的那一轮）。 */}
+        {/* 模板铺出来的建议命令：**显示但不执行**。点了才变成真的启动命令。
+            外部文件里的命令自动执行是今天刚修的那个 P0，这里不能重蹈。 */}
+        {data.suggestedCommand && !data.command && (
+          <button
+            className="status-chip attention nodrag"
+            title={`建议命令（来自布局模板，尚未执行）：\n${data.suggestedCommand}\n\n点击后会以它重开这个终端`}
+            onClick={(e) => {
+              e.stopPropagation()
+              const cmd = data.suggestedCommand ?? ''
+              if (!window.confirm(`在这个终端里执行？\n\n${cmd}`)) return
+              void window.termspace.destroy(id)
+              updateNodeData(id, {
+                command: cmd,
+                suggestedCommand: undefined,
+                restartTick: ((data as { restartTick?: number }).restartTick ?? 0) + 1
+              })
+            }}
+          >
+            ▶ 待运行
+          </button>
+        )}
         {ctxStale && (
           <button
             className="status-chip attention nodrag"

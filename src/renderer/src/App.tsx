@@ -1090,6 +1090,81 @@ function Board(): React.JSX.Element {
     applyBoard(boardsRef.current[pid])
   }, [activeProject, snapshot, applyBoard, projects])
 
+  /**
+   * 把一个布局模板铺到当前画布上。
+   *
+   * **建议命令只填进节点，绝不自动跑** —— 这是整条设计的落点：
+   * 节点上会显示那条命令，用户点「启动」才执行。今天刚修过的那个 P0
+   * （外部 workspace 里的 command 自动进登录 shell）就是反面教材。
+   *
+   * 局部 ref → 新 id 的映射一次算好：连线也要跟着重指，
+   * 直接沿用模板里的 ref 会和画布上已有节点撞 id。
+   */
+  const applyLayout = useCallback(async () => {
+    const r = await window.termspace.importLayout()
+    if (!r.ok || !r.nodes) {
+      if (r.error) window.alert(`导入失败：${r.error}`)
+      return
+    }
+    const idOf = new Map<string, string>()
+    setNodes((ns) => {
+      const taken = [
+        ...ns.map((n) => n.id),
+        ...Object.values(boardsRef.current).flatMap((b) => b.nodes.map((n) => n.id))
+      ]
+      const made: BoardNode[] = []
+      for (const t of r.nodes ?? []) {
+        const prefix = t.type === 'browser' ? 'b' : t.type === 'group' ? 'g' : t.type === 'context' ? 'ctx' : 't'
+        const id = newNodeId(prefix, [...taken, ...made.map((m) => m.id)])
+        idOf.set(t.ref, id)
+        made.push({
+          id,
+          type: t.type,
+          position: { x: t.x, y: t.y },
+          width: t.width ?? DEFAULT_SIZE.width,
+          height: t.height ?? DEFAULT_SIZE.height,
+          data: {
+            title: t.title,
+            status: 'idle',
+            ...(t.absCwd ? { cwd: t.absCwd } : {}),
+            ...(t.provider ? { provider: t.provider } : {}),
+            ...(t.url ? { url: t.url } : {}),
+            /* **suggestedCommand，不是 command** —— 后者会被 spawn 自动执行。
+               两个字段名不同是有意的：忘了处理时的默认结果是"不跑"。 */
+            ...(t.suggestedCommand ? { suggestedCommand: t.suggestedCommand } : {})
+          }
+        } as BoardNode)
+      }
+      // 父子关系要在 id 映射完成之后补
+      for (const t of r.nodes ?? []) {
+        if (!t.parent) continue
+        const me = made.find((m) => m.id === idOf.get(t.ref))
+        const pid = idOf.get(t.parent)
+        if (me && pid) {
+          me.parentId = pid
+          me.extent = 'parent'
+        }
+      }
+      return [...ns, ...made]
+    })
+    setEdges((es) => [
+      ...es,
+      ...(r.edges ?? [])
+        .map((e) => {
+          const src = idOf.get(e.from)
+          const tgt = idOf.get(e.to)
+          if (!src || !tgt) return null
+          return {
+            id: `${src}-${tgt}`,
+            source: src,
+            target: tgt,
+            ...edgeStyle(e.kind as EdgeKind)
+          }
+        })
+        .filter(Boolean) as Edge[]
+    ])
+  }, [])
+
   const closeProject = useCallback(
     (pid: string) => {
       // 只从标签栏移除；画布记录保留（tmux 会话也还活着）。
@@ -1910,6 +1985,21 @@ function Board(): React.JSX.Element {
             renderPresets={() => (
               <PresetPanel presets={presets} identities={identities} onChanged={setPresets} />
             )}
+            onExportLayout={async () => {
+              const root = projects.find((p) => p.id === activeProject)?.cwd
+              if (!root) return window.alert('这个项目没有目录，没法算相对路径。先给它选一个目录。')
+              const name = window.prompt('给这个布局起个名字', '我的工作流')
+              if (!name) return
+              const r = await window.termspace.exportLayout({
+                name,
+                root,
+                nodes: nodesRef.current,
+                edges: edgesRef.current
+              })
+              if (r.ok) window.alert(`已导出到 ${r.path}`)
+              else if (!r.canceled) window.alert(`导出失败：${r.error}`)
+            }}
+            onImportLayout={applyLayout}
             renderIdentities={() => (
               <IdentityPanel
                 identities={identities}

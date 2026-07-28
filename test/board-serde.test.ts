@@ -26,7 +26,14 @@ const SAMPLES: Record<string, BoardNode> = {
     id: 't1',
     type: 'terminal',
     ...pos,
-    data: { title: 'zsh', status: 'idle', identityId: 'i1', provider: 'codex', cwd: '/tmp' }
+    data: {
+      title: 'zsh',
+      status: 'idle',
+      identityId: 'i1',
+      provider: 'codex',
+      cwd: '/tmp',
+      suggestedCommand: 'npm test'
+    }
   } as BoardNode,
   /* group 样本**必须带 worktree**：这个字段决定组内终端落在哪棵树上，
      漏了它往返测试就抓不到"存了没读回来"——而症状是重启后隔离静默失效，
@@ -83,6 +90,15 @@ test('终端的 identityId / provider / cwd 都要活着回来', () => {
   assert.equal(d.identityId, 'i1')
   assert.equal(d.provider, 'codex')
   assert.equal(d.cwd, '/tmp')
+})
+
+test('建议命令要活着回来，且**不能变成 command**', () => {
+  /* 布局模板铺出来的节点停在"待运行"，重启后必须还停在那儿：
+     丢了 = 用户不知道本该跑什么；变成 command = 重启后自动执行，
+     那正是外部文件导入那个 P0 的形状。 */
+  const d = fromSaved(toSaved(SAMPLES.terminal as never)).data as Record<string, unknown>
+  assert.equal(d.suggestedCommand, 'npm test')
+  assert.equal(d.command, undefined, '建议命令绝不能落到 command 上')
 })
 
 test('组绑定的 worktree 要整个活着回来（丢了 = 隔离静默失效）', () => {

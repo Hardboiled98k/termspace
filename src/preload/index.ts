@@ -198,6 +198,9 @@ const api = {
     ipcRenderer.invoke('git:worktreeStatus', path),
   gitCreateWorktree: (repoRoot: string, branch: string): Promise<unknown> =>
     ipcRenderer.invoke('git:createWorktree', repoRoot, branch),
+  exportLayout: (payload: unknown): Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }> =>
+    ipcRenderer.invoke('layout:export', payload),
+  importLayout: (): Promise<unknown> => ipcRenderer.invoke('layout:import'),
   gitDiffSummary: (path: string): Promise<unknown> => ipcRenderer.invoke('git:diffSummary', path),
   /** 在编辑器打开。编辑器名在主进程走白名单，这里传什么都不会变成命令 */
   openInEditor: (target: string, editor: string): Promise<{ ok: boolean; via?: string; error?: string }> =>

@@ -33,6 +33,7 @@ import {
   diffSummary
 } from './worktree.ts'
 import { openInEditor, editorNames } from './open-in-editor'
+import { toTemplate, fromTemplate, type LayoutTemplate } from './layout-template'
 import { sanitizeImportedWorkspace } from './workspace-import'
 import { createLedger, sortForReview, type Ledger } from './task-ledger'
 import { startRemoteApi, type RemoteApi } from './remote'
@@ -1549,6 +1550,82 @@ ipcMain.handle('workspace:export', async (e, data: unknown) => {
   } catch (err) {
     return { ok: false, error: String((err as Error)?.message ?? err) }
   }
+})
+
+/**
+ * 导出任务布局模板。**和导出工作区是两件事**：
+ * 模板要能发给别人，所以不含凭证、cwd 相对化、命令改名成"建议命令"。
+ */
+ipcMain.handle('layout:export', async (e, payload: unknown) => {
+  if (!fromMainWin(e) || !mainWin) return { ok: false, error: 'denied' }
+  const p = payload as {
+    name?: string
+    description?: string
+    root?: string
+    nodes?: Parameters<typeof toTemplate>[1]
+    edges?: Parameters<typeof toTemplate>[2]
+  } | null
+  if (!p?.root || !Array.isArray(p.nodes)) return { ok: false, error: '参数不合法' }
+  const tpl = toTemplate(p.name ?? '布局', p.nodes, p.edges ?? [], p.root, p.description)
+  const r = await dialog.showSaveDialog(mainWin, {
+    title: '导出任务布局',
+    defaultPath: path.join(app.getPath('downloads'), `${tpl.name}-layout.json`),
+    filters: [{ name: 'JSON', extensions: ['json'] }]
+  })
+  if (r.canceled || !r.filePath) return { ok: false, canceled: true }
+  try {
+    await writeFile(r.filePath, JSON.stringify(tpl, null, 2))
+    return { ok: true, path: r.filePath }
+  } catch (err) {
+    return { ok: false, error: String((err as Error)?.message ?? err) }
+  }
+})
+
+/**
+ * 导入布局模板：**只铺节点，一条命令都不跑**。
+ *
+ * 先让用户选一个根目录（模板里的 cwd 是相对它的），再确认。
+ * 确认框里必须说清楚"带建议命令的节点有几个、它们不会自动执行" ——
+ * 这正是外部 workspace 导入那个 P0 的教训。
+ */
+ipcMain.handle('layout:import', async (e) => {
+  if (!fromMainWin(e) || !mainWin) return { ok: false, error: 'denied' }
+  const pick = await dialog.showOpenDialog(mainWin, {
+    title: '导入任务布局',
+    properties: ['openFile'],
+    filters: [{ name: 'JSON', extensions: ['json'] }]
+  })
+  if (pick.canceled || !pick.filePaths[0]) return { ok: false, canceled: true }
+  let raw: LayoutTemplate
+  try {
+    raw = JSON.parse(await readFile(pick.filePaths[0], 'utf8')) as LayoutTemplate
+  } catch (err) {
+    return { ok: false, error: `读不出来：${String((err as Error)?.message ?? err)}` }
+  }
+  const rootPick = await dialog.showOpenDialog(mainWin, {
+    title: '这个布局铺在哪个目录下？',
+    properties: ['openDirectory', 'createDirectory']
+  })
+  if (rootPick.canceled || !rootPick.filePaths[0]) return { ok: false, canceled: true }
+  const root = rootPick.filePaths[0]
+
+  const parsed = fromTemplate(raw, root)
+  if (!parsed.ok) return parsed
+  const { response } = await dialog.showMessageBox(mainWin, {
+    type: 'question',
+    buttons: ['取消', '铺到画布'],
+    defaultId: 0,
+    cancelId: 0,
+    message: `导入布局「${parsed.name}」`,
+    detail:
+      `会在当前画布上新增 ${parsed.nodes?.length ?? 0} 个节点，根目录 ${root}。\n\n` +
+      (parsed.withCommands
+        ? `其中 ${parsed.withCommands} 个带着建议命令 —— **不会自动执行**，` +
+          '节点铺出来后你自己决定跑不跑。'
+        : '模板里没有建议命令。')
+  })
+  if (response !== 1) return { ok: false, canceled: true }
+  return parsed
 })
 
 ipcMain.handle('workspace:import', async (e) => {
