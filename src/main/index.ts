@@ -36,6 +36,7 @@ import { openInEditor, editorNames } from './open-in-editor'
 import { toTemplate, fromTemplate, type LayoutTemplate } from './layout-template'
 import { brokerRun } from './broker'
 import { getBrokerTarget, setBrokerTarget, deleteBrokerTarget } from './broker-store'
+import { handleBroker } from './broker-handler'
 import { sanitizeImportedWorkspace } from './workspace-import'
 import { createLedger, sortForReview, type Ledger } from './task-ledger'
 import { startRemoteApi, type RemoteApi } from './remote'
@@ -229,13 +230,25 @@ let boardSnapshot: unknown = null
 let ledger: Ledger | null = null
 
 /**
- * 包一层记账。**分类判据用 delegate 自己的 classifyDelegateResult** ——
+ * 包一层记账。**默认分类判据用 delegate 自己的 classifyDelegateResult** ——
  * 那些话术是它产生的，调用方各猜一份就会改一处漏三处。
  *
- * 记账失败绝不能影响派活本身：账本是观测，派活是正事。
+ * 但 `classifyDelegateResult` 认的是 `派活被拒` / `派活失败` 这几个**前缀**，
+ * 只有 delegate 会产出它们。别的链路（代理连接说「执行失败：」、「已拒绝：」）
+ * 一个都匹配不上，于是**全部落到 `done`** —— 账本"失败优先排序"对它们直接失效，
+ * 而且不会报错、只会安静地把出错的调用显示成成功。所以非 delegate 的调用方
+ * 必须自带 `classify`。
+ *
+ * 记账失败绝不能影响正事：账本是观测。
  */
 async function withLedger(
-  meta: { source: string; target: string; task: string; branch?: string },
+  meta: {
+    source: string
+    target: string
+    task: string
+    branch?: string
+    classify?: (text: string) => 'done' | 'failed' | 'timeout' | 'rejected'
+  },
   run: () => Promise<string>
 ): Promise<string> {
   const id = await ledger
@@ -247,7 +260,7 @@ async function withLedger(
     return text
   } finally {
     if (id) {
-      const state = classifyDelegateResult(text)
+      const state = (meta.classify ?? classifyDelegateResult)(text)
       void ledger
         ?.finish(id, {
           state,
@@ -446,13 +459,16 @@ async function authorizeLink(
   const key = `${source}>${target}`
   if (boardLinks.has(key) || grants.has(key)) return true
   if (!mainWin || mainWin.isDestroyed()) return false
+  const grantHint = target.startsWith('broker:')
+    ? '代理连接不是画布节点；可仅允许本次，或勾选在本次运行内记住。'
+    : '画布上这两个节点之间没有连线。拉一条线过去即可长期授权。'
   const { response, checkboxChecked } = await dialog.showMessageBox(mainWin, {
     type: 'question',
     buttons: ['拒绝', '允许本次'],
     defaultId: 0,
     cancelId: 0,
     message: `允许 ${source} ${what} ${target}？`,
-    detail: `${detail}\n\n画布上这两个节点之间没有连线。拉一条线过去即可长期授权。`,
+    detail: `${detail}\n\n${grantHint}`,
     checkboxLabel: '本次运行内不再询问这一对节点',
     checkboxChecked: false
   })
@@ -1920,22 +1936,20 @@ app.whenReady().then(async () => {
          * "用得到、拿不到"的地方（见 broker.ts 的文件头）。
          */
         broker: async (source, kind, name, payload) => {
-          const cfg = await getSettings()
-          const prof = cfg.brokers.find((b) => b.name === name && b.kind === kind)
-          if (!prof) {
-            const avail = cfg.brokers.filter((b) => b.kind === kind).map((b) => b.name)
-            return `没有名为「${name}」的${kind}连接。${avail.length ? `可用：${avail.join('、')}` : '去设置 → 代理连接里加一个。'}`
-          }
-          const target = await getBrokerTarget(prof.id)
-          if (!target) return `连接「${name}」还没配连接串（设置 → 代理连接）`
-          const r = await brokerRun({ ...prof, kind: prof.kind, target }, payload)
-          /* **错误原文要回给 agent**（它要据此改 SQL），
-             但错误里可能带连接串 —— psql 的报错会打印 host/dbname。
-             这里做一次兜底剥离：连接串本身绝不出现在返回里。 */
-          const scrub = (t: string): string => (target ? t.split(target).join('«已隐去»') : t)
-          if (!r.ok) return `执行失败：${scrub(r.error ?? '未知错误')}`
-          void source // 调用方节点 id：将来记进账本用
-          return r.output || '（无输出）'
+          return handleBroker(
+            {
+              getSettings,
+              getBrokerTarget,
+              authorize: authorizeLink,
+              run: brokerRun,
+              withLedger,
+              branchOfNode
+            },
+            source,
+            kind,
+            name,
+            payload
+          )
         },
         peerAsk: async (source, target, task) => {
           if (!(await getSettings()).peerDelegate) {
@@ -2212,6 +2226,47 @@ app.whenReady().then(async () => {
           } finally {
             boardCtxLinks.delete(`${cid}>${tid}`)
             await unlink(ctxFile(cid)).catch(() => undefined)
+          }
+        }
+
+        /* TERMBOARD_FITPROBE=1：底行被裁到底裁了几像素、裁在谁身上。
+           用户实测报「终端底部内容被切」，而两种机制会得出相反的修法：
+           ① FitAddon 算多了 rows → canvas 比可用区高，被 body 的 overflow:hidden 裁掉
+           ② FitAddon 算对了，是别的元素（xterm-screen / viewport）多出来
+           **纯读 DOM 矩形，不改任何东西** —— 直接量 canvas 底边超出 body 内容区多少。 */
+        if (process.env['TERMBOARD_FITPROBE']) {
+          const rows = await win.webContents.executeJavaScript(
+            `[...document.querySelectorAll('.term-node-body')].map((body) => {
+              const cs = getComputedStyle(body)
+              const xt = body.querySelector('.xterm')
+              const scr = body.querySelector('.xterm-screen')
+              const cv = body.querySelector('canvas')
+              const r = (el) => el ? (({top,bottom,left,right,height,width}) =>
+                ({top:+top.toFixed(1),bottom:+bottom.toFixed(1),left:+left.toFixed(1),
+                  right:+right.toFixed(1),h:+height.toFixed(1),w:+width.toFixed(1)}))(el.getBoundingClientRect()) : null
+              const b = r(body)
+              // body 的**内容盒**（padding 之内）—— canvas 该待的地方
+              const pad = {t:parseFloat(cs.paddingTop),b:parseFloat(cs.paddingBottom),
+                           l:parseFloat(cs.paddingLeft),r:parseFloat(cs.paddingRight)}
+              return {
+                bodyRect: b,
+                bodyPad: pad,
+                bodyComputedH: cs.height, bodyComputedW: cs.width,
+                bodyClientH: body.clientHeight, bodyClientW: body.clientWidth,
+                contentBottom: b ? +(b.bottom - pad.b).toFixed(1) : null,
+                contentRight: b ? +(b.right - pad.r).toFixed(1) : null,
+                xtermRect: r(xt), xtermPad: xt ? getComputedStyle(xt).padding : null,
+                screenRect: r(scr), canvasRect: r(cv),
+                rows: scr ? scr.querySelectorAll('div').length : null
+              }
+            })`
+          )
+          for (const [i, m] of (rows as Record<string, unknown>[]).entries()) {
+            const mm = m as { contentBottom: number; contentRight: number; canvasRect?: { bottom: number; right: number } | null }
+            const overV = mm.canvasRect ? +(mm.canvasRect.bottom - mm.contentBottom).toFixed(1) : null
+            const overH = mm.canvasRect ? +(mm.canvasRect.right - mm.contentRight).toFixed(1) : null
+            console.log(`[fit-probe #${i}] 竖向超出内容区 ${overV}px、横向 ${overH}px（正数=被裁）`)
+            console.log(`[fit-probe #${i}] ${JSON.stringify(m)}`)
           }
         }
 
