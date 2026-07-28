@@ -1,20 +1,80 @@
 #!/bin/bash
-# 把打好的包发到自建更新源。
+# 把打好的包发到自建更新源。支持两种后端，按 ~/.termspace-publish.env 里填了什么自动选。
 #
-# 配置放在 ~/.termspace-publish.env（**不进仓库**），一次填好：
+# 【A】Cloudflare R2（当前用的）—— S3 兼容，出站免费，没有 Pages 那个 25 MiB 单文件上限
+#      （我们的 zip 是 124 MB，Pages 根本传不上去）：
 #
-#   PUBLISH_HOST=user@your-vps            # ssh 目标
-#   PUBLISH_PATH=/var/www/updates/termspace/   # 服务器上的目录（结尾带斜杠）
-#   PUBLISH_URL=https://updates.你的域名/termspace/  # 对应的公开地址，用来验收
+#   R2_ENDPOINT=https://<账号ID>.r2.cloudflarestorage.com
+#   R2_BUCKET=termspace-updates
+#   R2_ACCESS_KEY_ID=...
+#   R2_SECRET_ACCESS_KEY=...
+#   PUBLISH_URL=https://updates.termspace.app/
 #
+# 【B】自己的服务器（ssh + rsync）：
+#
+#   PUBLISH_HOST=user@your-vps
+#   PUBLISH_PATH=/var/www/updates/termspace/
+#   PUBLISH_URL=https://updates.你的域名/termspace/
+#
+# 这个文件**不进仓库**，建好后 chmod 600。
 # 用法：先 npm run dist:signed，再跑这个脚本。
 set -euo pipefail
 
 CONF="$HOME/.termspace-publish.env"
-[ -f "$CONF" ] || { echo "缺 $CONF —— 见本脚本头部的三个变量" >&2; exit 1; }
+[ -f "$CONF" ] || { echo "缺 $CONF —— 见本脚本头部的配置说明" >&2; exit 1; }
+# 权限自查：里面有 R2 的 Secret Access Key，全局可读等于把发布权交出去 ——
+# 而发布目录的控制权就是整条自动更新链路的信任根
+PERM=$(stat -f '%Lp' "$CONF" 2>/dev/null || stat -c '%a' "$CONF" 2>/dev/null || echo '?')
+case "$PERM" in
+  600|400) ;;
+  *) echo "⚠️  $CONF 权限是 ${PERM}，应为 600。修：chmod 600 $CONF" >&2 ;;
+esac
 # shellcheck disable=SC1090
 . "$CONF"
-: "${PUBLISH_HOST:?}" "${PUBLISH_PATH:?}" "${PUBLISH_URL:?}"
+: "${PUBLISH_URL:?PUBLISH_URL 必填}"
+# **必须走 https 且以斜杠结尾**。https：这个地址会被写进 app 的更新源，
+# 明文意味着路上任何人都能换掉那个要替换整个 app 的包。
+# 斜杠：后面全靠 "${PUBLISH_URL}latest-mac.yml" 拼接。
+# 两条都在上传**之前**查 —— 否则传完 250 MB 才发现地址不对。
+case "$PUBLISH_URL" in
+  https://*/) ;;
+  https://*) echo "PUBLISH_URL 结尾要带斜杠：${PUBLISH_URL}/" >&2; exit 1 ;;
+  *) echo "PUBLISH_URL 必须是 https" >&2; exit 1 ;;
+esac
+
+# 选后端
+if [ -n "${R2_BUCKET:-}" ]; then
+  BACKEND=r2
+  : "${R2_ENDPOINT:?}" "${R2_ACCESS_KEY_ID:?}" "${R2_SECRET_ACCESS_KEY:?}"
+  command -v rclone >/dev/null || { echo "缺 rclone：brew install rclone" >&2; exit 1; }
+  # **凭证走环境变量，绝不进 argv** —— ps 对同机所有用户可见。
+  # rclone 的 :s3: 即用即弃后端会读这些 RCLONE_S3_* 变量。
+  export RCLONE_S3_PROVIDER=Cloudflare
+  export RCLONE_S3_ACCESS_KEY_ID="$R2_ACCESS_KEY_ID"
+  export RCLONE_S3_SECRET_ACCESS_KEY="$R2_SECRET_ACCESS_KEY"
+  export RCLONE_S3_ENDPOINT="$R2_ENDPOINT"
+  # R2 不支持 S3 的分块校验头，不关掉会传一半报错
+  export RCLONE_S3_NO_CHECK_BUCKET=true
+elif [ -n "${PUBLISH_HOST:-}" ]; then
+  BACKEND=ssh
+  : "${PUBLISH_PATH:?}"
+else
+  echo "配置里既没有 R2_BUCKET 也没有 PUBLISH_HOST —— 见本脚本头部" >&2; exit 1
+fi
+echo "后端：$BACKEND"
+
+# 上传一个文件。第三个参数是可选的 Cache-Control。
+put() {
+  local src="$1" name="$2" cc="${3:-}"
+  case "$BACKEND" in
+    r2)
+      local args=(copyto "$src" ":s3:${R2_BUCKET}/${name}")
+      [ -n "$cc" ] && args+=(--header-upload "Cache-Control: $cc")
+      rclone "${args[@]}" --progress ;;
+    ssh)
+      rsync -avP "$src" "$PUBLISH_HOST:$PUBLISH_PATH" ;;
+  esac
+}
 
 cd "$(dirname "$0")/.."
 VERSION=$(node -p "require('./package.json').version")
@@ -43,7 +103,7 @@ done < <(awk '/^  - url: /{print $3}' "$YML")
 
 # yml 里写的版本必须和包一致，否则客户端下下来的和它以为的不是一个东西
 YML_VER=$(grep -m1 '^version:' "$YML" | awk '{print $2}')
-[ "$YML_VER" = "$VERSION" ] || { echo "latest-mac.yml 写的是 $YML_VER，包是 $VERSION —— 重新打包" >&2; exit 1; }
+[ "$YML_VER" = "$VERSION" ] || { echo "latest-mac.yml 写的是 ${YML_VER}，包是 $VERSION —— 重新打包" >&2; exit 1; }
 
 # ── 2. 签名与公证 ──
 # **未签名的包发出去等于发一个装不上的东西**：Squirrel 要求候选包满足
@@ -66,25 +126,45 @@ fi
 # ── 3. 上传 ──
 # **先传 zip 再传 yml**：反过来的话，客户端在这两次传输之间检查更新，
 # 会读到新版本的 yml 却下载到一个还不存在的 zip。
-echo "→ $PUBLISH_HOST:$PUBLISH_PATH"
+echo "→ 上传（先 zip 后 yml）"
 for z in "$ZIP_ARM" "$ZIP_X64"; do
-  rsync -avP "$z" "$PUBLISH_HOST:$PUBLISH_PATH"
-  [ -f "${z}.blockmap" ] && rsync -avP "${z}.blockmap" "$PUBLISH_HOST:$PUBLISH_PATH"
+  # zip 文件名带版本号，内容永不改变 → 可以长缓存
+  put "$z" "$(basename "$z")" "public, max-age=31536000, immutable"
+  [ -f "${z}.blockmap" ] && put "${z}.blockmap" "$(basename "${z}").blockmap" "public, max-age=31536000, immutable"
 done
-rsync -avP "$YML" "$PUBLISH_HOST:$PUBLISH_PATH"
+# **yml 绝不能被缓存**：它是"有没有新版本"的唯一判据。缓存住了你发了新版
+# 客户端也发现不了，而你自己那台机很可能命中另一个边缘节点、显示一切正常。
+# Cloudflare 那条 Bypass cache 规则是第二道；对象自带的头是第一道，
+# 换 CDN、直连 R2 端点时也照样成立。
+put "$YML" "latest-mac.yml" "no-store, max-age=0"
 
 # ── 4. 验收 ──
-# 传上去不等于取得到：目录权限、nginx 配置、MIME 类型都可能挡住。
+# 传上去不等于取得到：桶的公开访问、自定义域、CDN 规则、MIME 类型都可能挡住。
 echo "→ 验收 $PUBLISH_URL"
-code=$(curl -sS -o /tmp/pub-check.yml -w '%{http_code}' "${PUBLISH_URL}latest-mac.yml")
-[ "$code" = "200" ] || { echo "取不到 latest-mac.yml（HTTP $code）" >&2; exit 1; }
-diff -q "$YML" /tmp/pub-check.yml >/dev/null || { echo "线上的 yml 和本地不一致" >&2; exit 1; }
+
+TMP_YML=$(mktemp); TMP_HDR=$(mktemp)
+trap 'rm -f "$TMP_YML" "$TMP_HDR"' EXIT
+code=$(curl -sS -D "$TMP_HDR" -o "$TMP_YML" -w '%{http_code}' "${PUBLISH_URL}latest-mac.yml")
+[ "$code" = "200" ] || { echo "取不到 latest-mac.yml（HTTP ${code}）" >&2; exit 1; }
+diff -q "$YML" "$TMP_YML" >/dev/null || { echo "线上的 yml 和本地不一致" >&2; exit 1; }
+
+# yml 到底有没有被缓存住 —— 这是本脚本最该验的一件事。
+# 缓存住的症状是"发了新版没人收到"，而发布者自己往往命中另一个边缘节点、
+# 看到的一切正常，所以必须在发布时当场验，不能等用户报。
+if grep -qiE '^cache-control:.*(no-store|no-cache|max-age=0)' "$TMP_HDR"; then
+  echo "   yml Cache-Control ✅"
+else
+  echo "⚠️  yml 的 Cache-Control 不是 no-store：$(grep -i '^cache-control:' "$TMP_HDR" || echo '（没有这个头）')" >&2
+  echo "   检查 Cloudflare 的 Bypass cache 规则，以及对象上传时的 --header-upload" >&2
+fi
+CFC=$(grep -i '^cf-cache-status:' "$TMP_HDR" | tr -d '\r' || true)
+[ -n "$CFC" ] && echo "   $CFC   （应为 BYPASS 或 DYNAMIC，出现 HIT 就是被缓存了）"
 
 # 两个 zip 都要真取得到 —— 只验一个的话，另一个架构的用户是唯一的发现者
 for z in "$ZIP_ARM" "$ZIP_X64"; do
   b=$(basename "$z")
   zcode=$(curl -sS -o /dev/null -w '%{http_code}' -r 0-1 "${PUBLISH_URL}${b}")
-  [ "$zcode" = "200" ] || [ "$zcode" = "206" ] || { echo "取不到 $b（HTTP $zcode）" >&2; exit 1; }
+  [ "$zcode" = "200" ] || [ "$zcode" = "206" ] || { echo "取不到 ${b}（HTTP ${zcode}）" >&2; exit 1; }
 done
 
 echo "✅ $VERSION 已发布。客户端 6 小时内会自己发现，或在设置 → 更新里点「立即检查」。"
