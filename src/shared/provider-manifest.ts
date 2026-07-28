@@ -13,6 +13,8 @@ export interface ProviderManifestEntry {
   fields: { id: string; label: string; envKey: string; secret: boolean; optional?: boolean }[]
   envOperations: { key: string; action: 'set' | 'unset'; value?: string }[]
   conflictVariables: string[]
+  /** 隔离登录空间靠哪个变量。`isolationCapability === 'directory'` 时必须有 */
+  homeEnvKey?: string
   isolationCapability: 'directory' | 'system-shared' | 'token-only'
   quotaCapability: 'supported' | 'officially_unavailable' | 'web_only'
   /**
@@ -38,7 +40,11 @@ export const PROVIDERS: ProviderManifestEntry[] = [
     authModes: ['system', 'isolated-subscription', 'api-key'],
     fields: [{ id: 'apiKey', label: 'OpenAI API key', envKey: 'OPENAI_API_KEY', secret: true }],
     envOperations: [{ key: 'OPENAI_API_KEY', action: 'unset' }],
-    conflictVariables: ['OPENAI_API_KEY'],
+    /* **建隔离账号时这些会被全部 unset**。少删一个的后果是：
+       新登录空间表面建成功了，CLI 却继续走继承来的 key —— 不报错，只是账单不吭声。
+       宁可多列（`env -u` 删一个本来就不存在的变量是 no-op），也不能少列。 */
+    conflictVariables: ['OPENAI_API_KEY', 'CODEX_API_KEY', 'OPENAI_BASE_URL'],
+    homeEnvKey: 'CODEX_HOME',
     isolationCapability: 'directory',
     quotaCapability: 'supported',
     loginHint: 'codex login'
@@ -50,10 +56,16 @@ export const PROVIDERS: ProviderManifestEntry[] = [
     authModes: ['system', 'isolated-subscription', 'api-key'],
     fields: [{ id: 'apiKey', label: 'Anthropic API key', envKey: 'ANTHROPIC_API_KEY', secret: true }],
     envOperations: [{ key: 'ANTHROPIC_API_KEY', action: 'unset' }],
-    conflictVariables: ['ANTHROPIC_API_KEY'],
+    conflictVariables: [
+      'ANTHROPIC_API_KEY',
+      'ANTHROPIC_AUTH_TOKEN',
+      'CLAUDE_CODE_OAUTH_TOKEN',
+      'ANTHROPIC_BASE_URL'
+    ],
+    homeEnvKey: 'CLAUDE_CONFIG_DIR',
     isolationCapability: 'directory',
     quotaCapability: 'supported',
-    loginHint: '先运行 claude，在里面输入 /login（不是 shell 命令）'
+    loginHint: 'claude auth login（老版本没有这个子命令，就先运行 claude 再输 /login）'
   },
   {
     id: 'gemini',
@@ -62,7 +74,8 @@ export const PROVIDERS: ProviderManifestEntry[] = [
     authModes: ['system', 'isolated-subscription', 'api-key'],
     fields: [{ id: 'apiKey', label: 'Gemini API key', envKey: 'GEMINI_API_KEY', secret: true }],
     envOperations: [{ key: 'GEMINI_API_KEY', action: 'unset' }],
-    conflictVariables: ['GEMINI_API_KEY', 'GOOGLE_API_KEY'],
+    conflictVariables: ['GEMINI_API_KEY', 'GOOGLE_API_KEY', 'GOOGLE_APPLICATION_CREDENTIALS'],
+    homeEnvKey: 'GEMINI_CLI_HOME',
     isolationCapability: 'directory',
     quotaCapability: 'officially_unavailable',
     loginHint: '直接运行 gemini —— 没有 login 子命令，首次启动会自己走 OAuth'

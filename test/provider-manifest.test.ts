@@ -34,10 +34,15 @@ test('**有 login 子命令的三家，提示里就得是那条命令**', () => 
   assert.match(byId('copilot').loginHint, /copilot login/)
 })
 
-test('**claude 的登录是 TUI 内的斜杠命令**，写成 `claude login` 就是错的', () => {
+test('**claude 的登录命令是 `claude auth login`**，不是 `claude login`', () => {
+  /* 这条用例的**上一版是错的**：它断言"claude 没有 login 子命令、只能进 TUI 输 /login"，
+     把我的错误认识固化成了断言 —— 本机 claude 2.1.220 实测
+     `claude auth --help` 明确列出 `login`。codex 对手方审查逮到。
+     教训：**manifest 测试只能验自洽，验不了外部 CLI 的真实形状** ——
+     所以这里同时保留 `/login` 的老版本退路，且下面那条用例改成真去问 CLI。 */
   const h = byId('claude').loginHint
-  assert.match(h, /\/login/, '要指明是 /login')
-  assert.ok(!/claude login/.test(h), `claude 没有 login 子命令，别写成 shell 命令：${h}`)
+  assert.match(h, /claude auth login/)
+  assert.ok(!/(?<!auth )claude login/.test(h), `claude 没有裸 login 子命令：${h}`)
 })
 
 test('**gemini / antigravity 没有 login 子命令**，不能凭样式套一条出来', () => {
@@ -78,6 +83,39 @@ test('声称 api-key 认证的，必须给得出要填哪个变量', () => {
   }
 })
 
+test('声称能目录隔离的，必须写了靠哪个变量隔离', () => {
+  /* 少了它，`identity:createSubscription` 就只能在主进程里再硬编码一份映射 ——
+     而那份硬编码正是 P0-4 的来源（三元表达式只取一个冲突变量）。 */
+  for (const p of PROVIDERS) {
+    if (p.isolationCapability === 'directory') {
+      assert.ok(p.homeEnvKey, `${p.id} 说能按目录隔离却没写 homeEnvKey`)
+      assert.match(p.homeEnvKey!, /^[A-Z][A-Z0-9_]*$/)
+      assert.ok(p.conflictVariables.length > 0, `${p.id} 建隔离账号时不清任何冲突变量`)
+    }
+  }
+})
+
 test('清单有版本号（将来加字段要靠它做迁移）', () => {
   assert.ok(Number.isInteger(PROVIDER_MANIFEST_VERSION) && PROVIDER_MANIFEST_VERSION >= 1)
+})
+
+// ── 真去问 CLI：manifest 只能自洽，外部命令变了它不会知道 ──
+test('**真跑 --help 核对登录子命令**（本机没装就跳过）', async () => {
+  const { execFile } = await import('node:child_process')
+  const has = (bin: string, sub: string): Promise<boolean | null> =>
+    new Promise((resolve) => {
+      execFile(bin, [...sub.split(' ').slice(0, -1), '--help'], { timeout: 10_000 }, (e, out, errOut) => {
+        if (e && !out && !errOut) return resolve(null) // 没装
+        resolve(new RegExp(`\\b${sub.split(' ').at(-1)}\\b`).test(`${out}${errOut}`))
+      })
+    })
+  for (const [bin, sub] of [
+    ['codex', 'login'],
+    ['claude', 'auth login'],
+    ['cursor-agent', 'login']
+  ] as const) {
+    const r = await has(bin, sub)
+    if (r === null) continue // 本机没装
+    assert.equal(r, true, `${bin} 的 --help 里找不到 ${sub} —— manifest 的 loginHint 该更新了`)
+  }
 })

@@ -94,3 +94,61 @@ test('干净的文件不该报"摘掉了东西"（否则确认框天天喊狼来
   assert.equal(r.identities, 0)
   assert.equal(r.dropped, 0)
 })
+
+/* ── 连线净化（codex 对手方审查逮到的 P0-2）─────────────────────────────
+   连线在这个产品里**就是授权**：`authorizeLink` 首先查 `boardLinks`，
+   而 `boardLinks` 是从渲染层上报的边建的。原来只净化 nodes、edges 原样加载 ——
+   于是别人发来的画布里塞一条悬空边 `term-1 → broker:postgres:prod`，
+   导入之后那条 `tb db` 就是**永久授权**，一次弹窗都不会有。
+   这直接打脸了我"broker 不是画布节点、key 永远匹配不上连线"的设计断言。 */
+
+test('**伪造的 broker 授权边必须被丢掉**（端点不在节点集里）', () => {
+  const r = sanitizeImportedWorkspace({
+    nodes: [{ id: 't-1', type: 'terminal' }],
+    edges: [
+      { id: 'e1', source: 't-1', target: 'broker:postgres:prod' },
+      { id: 'e2', source: 't-1', target: 't-1' }
+    ]
+  })
+  const edges = (r.ws as { edges: { target: string }[] }).edges
+  assert.ok(
+    !edges.some((e) => e.target.startsWith('broker:')),
+    '伪造的 broker 边还在，导入即等于永久授权'
+  )
+  assert.equal(edges.length, 1, '合法的边要留着')
+  assert.equal(r.edges, 1, '要把摘掉的条数报给确认框')
+})
+
+test('指向被丢弃节点的边也要跟着丢（否则悬空边照样进授权图）', () => {
+  const r = sanitizeImportedWorkspace({
+    nodes: [
+      { id: 't-1', type: 'terminal' },
+      { id: 'x-1', type: '未来类型' }
+    ],
+    edges: [{ id: 'e1', source: 't-1', target: 'x-1' }]
+  })
+  assert.equal(r.dropped, 1)
+  assert.equal((r.ws as { edges: unknown[] }).edges.length, 0)
+  assert.equal(r.edges, 1)
+})
+
+test('v2 结构里每块画布各自按自己的节点集过滤边', () => {
+  const r = sanitizeImportedWorkspace({
+    boards: {
+      p1: { nodes: [{ id: 't-1', type: 'terminal' }], edges: [{ id: 'e', source: 't-1', target: 't-9' }] },
+      p2: { nodes: [{ id: 't-9', type: 'terminal' }], edges: [{ id: 'e', source: 't-9', target: 't-9' }] }
+    }
+  })
+  const boards = (r.ws as { boards: Record<string, { edges: unknown[] }> }).boards
+  assert.equal(boards['p1']?.edges.length, 0, 't-9 在**另一块**画布上，不算存在')
+  assert.equal(boards['p2']?.edges.length, 1)
+})
+
+test('形状不对的边直接丢，不能让它进授权图', () => {
+  const r = sanitizeImportedWorkspace({
+    nodes: [{ id: 't-1', type: 'terminal' }],
+    edges: [null, 'x', { source: 't-1' }, { id: 'ok', source: 't-1', target: 't-1' }]
+  })
+  assert.equal((r.ws as { edges: unknown[] }).edges.length, 1)
+  assert.equal(r.edges, 3)
+})

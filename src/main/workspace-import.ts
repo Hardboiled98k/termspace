@@ -25,6 +25,46 @@ export interface SanitizeResult {
   identities: number
   /** 类型不认识、被整个丢掉的节点数 */
   dropped: number
+  /** 端点不在本画布节点集里、被丢掉的连线数 */
+  edges: number
+}
+
+/**
+ * **连线也必须净化，而且原因和节点不是一回事。**
+ *
+ * 连线在这个产品里**就是授权**（`authorizeLink` 首先查 `boardLinks`）。
+ * 原来只净化 nodes、edges 原样加载 —— 于是别人发来的画布里塞一条悬空边
+ * `term-1 → broker:postgres:prod`，导入之后那条 `tb db` 就是**永久授权**，
+ * 一次弹窗都不会有。（codex 对手方审查逮到，直接打脸我"broker 不是画布节点、
+ * key 永远匹配不上连线"的设计断言。）
+ *
+ * 判据：**两端都必须是这张画布上真实存活的节点 id**。
+ * 主进程侧还有第二道（`broker:` 目标一律不认 boardLinks），两道都要留着 ——
+ * 这一道保的是"授权图不含幽灵"，那一道保的是"就算含了也不生效"。
+ */
+function sanitizeEdges(raw: unknown, ids: Set<string>, r: SanitizeResult): unknown {
+  if (!Array.isArray(raw)) return raw
+  return raw.filter((e) => {
+    if (!e || typeof e !== 'object' || Array.isArray(e)) {
+      r.edges++
+      return false
+    }
+    const { source, target } = e as { source?: unknown; target?: unknown }
+    const ok = typeof source === 'string' && typeof target === 'string' && ids.has(source) && ids.has(target)
+    if (!ok) r.edges++
+    return ok
+  })
+}
+
+/** 净化后**存活**的节点 id（连线要按它过滤） */
+function idsOf(nodes: unknown): Set<string> {
+  const s = new Set<string>()
+  if (!Array.isArray(nodes)) return s
+  for (const n of nodes) {
+    const id = (n as { id?: unknown })?.id
+    if (typeof id === 'string' && id) s.add(id)
+  }
+  return s
 }
 
 function sanitizeNodes(raw: unknown, r: SanitizeResult): unknown {
@@ -67,11 +107,15 @@ function sanitizeNodes(raw: unknown, r: SanitizeResult): unknown {
  * 净化要尽量小，越少改越不容易在下一次格式演进时悄悄漏掉某条路径。
  */
 export function sanitizeImportedWorkspace(input: Record<string, unknown>): SanitizeResult {
-  const r: SanitizeResult = { ws: {}, commands: 0, identities: 0, dropped: 0 }
+  const r: SanitizeResult = { ws: {}, commands: 0, identities: 0, dropped: 0, edges: 0 }
   const ws: Record<string, unknown> = { ...input }
 
   // v1：顶层就是一块画布
-  if (Array.isArray(ws.nodes)) ws.nodes = sanitizeNodes(ws.nodes, r)
+  if (Array.isArray(ws.nodes)) {
+    ws.nodes = sanitizeNodes(ws.nodes, r)
+    // 顺序不能反：edges 要按**净化之后**存活的节点过滤
+    ws.edges = sanitizeEdges(ws.edges, idsOf(ws.nodes), r)
+  }
 
   // v2：projects + boards[pid].nodes
   if (ws.boards && typeof ws.boards === 'object' && !Array.isArray(ws.boards)) {
@@ -79,7 +123,10 @@ export function sanitizeImportedWorkspace(input: Record<string, unknown>): Sanit
     for (const [pid, b] of Object.entries(ws.boards as Record<string, unknown>)) {
       if (!b || typeof b !== 'object' || Array.isArray(b)) continue
       const board = { ...(b as Record<string, unknown>) }
-      if (Array.isArray(board.nodes)) board.nodes = sanitizeNodes(board.nodes, r)
+      if (Array.isArray(board.nodes)) {
+        board.nodes = sanitizeNodes(board.nodes, r)
+        board.edges = sanitizeEdges(board.edges, idsOf(board.nodes), r)
+      }
       boards[pid] = board
     }
     ws.boards = boards

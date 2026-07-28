@@ -16,6 +16,7 @@
  */
 import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
+import { pgConnFromTarget, scrubSecrets } from './pg-conninfo.ts'
 
 export type BrokerKind = 'ssh' | 'postgres'
 
@@ -155,6 +156,19 @@ export async function brokerRun(
   }
   const bin = find('psql')
   if (!bin) return { ok: false, output: '', error: '本机没找到 psql' }
+  /* **连接串必须解析成逐字段的 PG* 变量**，绝不能整条塞进 `PGDATABASE`。
+     实测（psql 17.5）：那样会连到本机 socket、把整条 URI 当数据库名，
+     也就是**从来连不上用户配的服务器**；而且报错里带着连接串、
+     还会被截断到 63 字节 —— 截断后仍含完整密码，"整串精确替换"的脱敏匹配不上。
+     详见 pg-conninfo.ts 的文件头。 */
+  const conn = pgConnFromTarget(profile.target)
+  if (!conn) {
+    return {
+      ok: false,
+      output: '',
+      error: '连接串解析不了。支持 postgres://user:pw@host:port/db、key=value 形式，或光一个数据库名。'
+    }
+  }
   /* **连接串走环境变量，绝不进 argv** —— `ps -Ao args` 对同机所有用户可见，
      而连接串里通常带密码。SQL 走 stdin，同理（也避免超长 argv）。 */
   return new Promise((resolve) => {
@@ -174,22 +188,24 @@ export async function brokerRun(
         env: {
           ...process.env,
           PGCONNECT_TIMEOUT: '10',
-          /* **连接串走 `PGDATABASE`**（libpq 的 dbname 参数默认值）：
-             dbname 含 `=` 或以 URI 前缀开头时，libpq 会把它当整条 conninfo 展开。
-             这样密码不进 argv —— `ps -Ao args` 对同机所有用户可见。
-             ⚠️ 我写第一版时用的是 `DATABASE_URL`，**那不是 libpq 读的变量**，
-             连都连不上。改这里之前先确认变量名。 */
-          PGDATABASE: profile.target,
+          // 逐字段（含 PGPASSWORD）。密码走 env 不走 argv —— `ps -Ao args` 同机所有用户可见
+          ...conn.env,
           /* 只读**在服务端也再保一道**：上面的语句判据只是提前给个好错误，
              真正的保证是这个 —— 它让整个会话进只读事务。 */
           ...(profile.readOnly ? { PGOPTIONS: '-c default_transaction_read_only=on' } : {})
         }
       },
       (err, stdout, stderr) =>
+        /* **结构化脱敏在这一层做**：psql 的报错会把密码以各种变形吐出来
+           （截断的"数据库名"、`://user:pw@` 片段），上层那个"整串精确替换"挡不住。 */
         resolve(
           err
-            ? { ok: false, output: stdout ?? '', error: (stderr || err.message || '').slice(0, 2000) }
-            : { ok: true, output: (stdout ?? '').slice(0, 100_000) }
+            ? {
+                ok: false,
+                output: scrubSecrets(stdout ?? '', conn.secrets),
+                error: scrubSecrets((stderr || err.message || '').slice(0, 2000), conn.secrets)
+              }
+            : { ok: true, output: scrubSecrets((stdout ?? '').slice(0, 100_000), conn.secrets) }
         )
     )
     child.stdin?.end(`${payload}\n`)

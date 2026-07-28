@@ -81,16 +81,19 @@ test('ssh 目标形状不合法就拒（alias 会进 argv）', async () => {
   assert.match(r.error ?? '', /目标不合法/)
 })
 
-test('**连接串走 PGDATABASE，且绝不出现在 argv 里**', async () => {
-  /* 用一个假的 psql 把 argv 和 env 都记下来。这条钉两件事：
-     - 变量名必须是 libpq 真读的那个（第一版写 DATABASE_URL，连都连不上）
-     - 带密码的连接串不能进 argv（ps -Ao args 同机所有用户可见） */
+test('**连接串拆成逐字段的 PG* 变量，且绝不出现在 argv 里**', async () => {
+  /* 用一个假的 psql 把 argv 和 env 都记下来。
+     ⚠️ 这条用例的**上一版是错的**：它断言 `PGDATABASE=<整条连接串>`，
+     把"libpq 会展开 dbname 里的 conninfo"这个**不成立的信念**固化成了断言。
+     真 psql 实测（见 test/pg-conninfo.test.ts）：那样会连本机 socket、
+     把整条 URI 当库名，`tb db` 从来连不上用户配的服务器，而且报错回显密码。
+     假 psql 只能验形状 —— 验行为必须用真的。 */
   const dir = await mkdtemp(path.join(tmpdir(), 'broker-'))
   const fake = path.join(dir, 'psql')
   const out = path.join(dir, 'capture.txt')
   await writeFile(
     fake,
-    `#!/bin/sh\ncat > /dev/null\n{ echo "ARGV=$*"; echo "PGDATABASE=$PGDATABASE"; echo "PGOPTIONS=$PGOPTIONS"; } > ${JSON.stringify(out)}\n`
+    `#!/bin/sh\ncat > /dev/null\n{ echo "ARGV=$*"; echo "PGHOST=$PGHOST"; echo "PGUSER=$PGUSER"; echo "PGPASSWORD=$PGPASSWORD"; echo "PGDATABASE=$PGDATABASE"; echo "PGOPTIONS=$PGOPTIONS"; } > ${JSON.stringify(out)}\n`
   )
   await chmod(fake, 0o755)
 
@@ -102,9 +105,22 @@ test('**连接串走 PGDATABASE，且绝不出现在 argv 里**', async () => {
   )
   assert.ok(r.ok, r.error)
   const cap = await readFile(out, 'utf8')
-  assert.match(cap, /PGDATABASE=postgres:\/\/u:SUPERSECRET@h\/db/, '连接串没走 PGDATABASE')
+  assert.match(cap, /PGHOST=h/, '主机没拆出来 → 会连本机 socket')
+  assert.match(cap, /PGUSER=u/)
+  assert.match(cap, /PGPASSWORD=SUPERSECRET/, '密码要走 env（不是 argv）')
+  assert.match(cap, /PGDATABASE=db$/m, '**PGDATABASE 里只能是库名**，不能是整条连接串')
   assert.ok(!/ARGV=.*SUPERSECRET/.test(cap), `连接串进了 argv：${cap}`)
   assert.match(cap, /PGOPTIONS=.*default_transaction_read_only=on/, '只读要在服务端也保一道')
+})
+
+test('连接串解析不了就拒绝，**不退回"当成库名试一下"**', async () => {
+  const r = await brokerRun(
+    { id: 'a', name: 'bad', kind: 'postgres', target: 'postgres://[', readOnly: true },
+    'select 1',
+    { findBin: () => '/usr/bin/true' }
+  )
+  assert.equal(r.ok, false)
+  assert.match(r.error ?? '', /解析/)
 })
 
 test('SQL 走 stdin，不进 argv', async () => {

@@ -461,9 +461,17 @@ async function authorizeLink(
 ): Promise<boolean> {
   if (!source || !target) return false
   const key = `${source}>${target}`
-  if (boardLinks.has(key) || grants.has(key)) return true
+  /* **`broker:` 目标绝不认画布连线**（codex 对手方审查逮到的绕过）。
+     我原本的设计断言是"broker 不是画布上的节点，所以这个 key 永远不会出现在
+     `boardLinks` 里，必然走弹窗" —— 而 `boardLinks` 是从**渲染层上报的边**建的，
+     导入外部工作区时 `sanitizeImportedWorkspace` 只净化了 nodes、**edges 原样加载**。
+     于是一条伪造的 `term-1 → broker:postgres:prod` 悬空边就等于永久授权，
+     一次弹窗都不会有。判据只能是显式的会话内 grant。
+     （edges 那一侧也补了净化，两道都要，别只留一道。） */
+  const isBroker = target.startsWith('broker:')
+  if (grants.has(key) || (!isBroker && boardLinks.has(key))) return true
   if (!mainWin || mainWin.isDestroyed()) return false
-  const grantHint = target.startsWith('broker:')
+  const grantHint = isBroker
     ? '代理连接不是画布节点；可仅允许本次，或勾选在本次运行内记住。'
     : '画布上这两个节点之间没有连线。拉一条线过去即可长期授权。'
   const { response, checkboxChecked } = await dialog.showMessageBox(mainWin, {
@@ -1391,25 +1399,21 @@ ipcMain.handle(
     const id = randomUUID()
     const dir = path.join(app.getPath('home'), '.termspace', 'accounts', provider, id)
     await mkdir(dir, { recursive: true, mode: 0o700 })
-    const homeKey =
-      provider === 'codex'
-        ? 'CODEX_HOME'
-        : provider === 'claude'
-          ? 'CLAUDE_CONFIG_DIR'
-          : 'GEMINI_CLI_HOME'
-    const conflictKey =
-      provider === 'codex'
-        ? 'OPENAI_API_KEY'
-        : provider === 'claude'
-          ? 'ANTHROPIC_API_KEY'
-          : 'GEMINI_API_KEY'
+    /* **两个都从 manifest 派生，绝不在这里再硬编码一份。**
+       原来 `conflictKey` 是三元表达式只取一个变量，而 manifest 里 gemini 声明的是
+       `GEMINI_API_KEY` + `GOOGLE_API_KEY` 两个 —— 少删的那个会让新隔离空间
+       **表面建成功、实际继续用继承来的 key**，不报错，只是账单不吭声。
+       （codex 对手方审查逮到。判据：清单声明了什么，就必须清干净什么。） */
+    const homeKey = spec.homeEnvKey
+    if (!homeKey) throw new Error(`${provider} 的清单没写 homeEnvKey，无法建独立登录空间`)
+    const conflictKeys = spec.conflictVariables
     const list = await upsertIdentity({
       id,
       name: String(input?.name ?? ''),
       provider: provider as Parameters<typeof upsertIdentity>[0]['provider'],
       envOps: [
         { key: homeKey, action: 'set', value: dir },
-        { key: conflictKey, action: 'unset' }
+        ...conflictKeys.map((key) => ({ key, action: 'unset' as const }))
       ]
     })
     return { id, list: afterIdentityChange(list) }
@@ -1788,7 +1792,9 @@ ipcMain.handle('workspace:import', async (e) => {
   const stripped = [
     clean.commands ? `${clean.commands} 个节点的启动命令` : '',
     clean.identities ? `${clean.identities} 个节点的凭证绑定` : '',
-    clean.dropped ? `${clean.dropped} 个类型不认识的节点` : ''
+    clean.dropped ? `${clean.dropped} 个类型不认识的节点` : '',
+    // 连线就是授权，摘掉了多少条必须说出来（悬空边曾能白拿 tb db 的永久授权）
+    clean.edges ? `${clean.edges} 条端点不存在的连线（连线=授权）` : ''
   ].filter(Boolean)
   const { response } = await dialog.showMessageBox(mainWin, {
     type: 'warning',

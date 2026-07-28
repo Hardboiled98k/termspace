@@ -780,7 +780,7 @@ function IdentityPanel({
                 <input placeholder="给账号起个名字（可选）" value={name} onChange={(e) => setName(e.currentTarget.value)} />
               </div>
               <div className="identity-safe-copy">✓ 使用独立登录空间（目录由 Termspace 自动生成）</div>
-              <div className="identity-safe-copy">✓ 防止意外按 API 计费 —— 此账号会移除终端继承的 {selectedSpec?.conflictVariables[0]}</div>
+              <div className="identity-safe-copy">✓ 防止意外按 API 计费 —— 此账号会移除终端继承的 {selectedSpec?.conflictVariables.join('、')}</div>
               {presentVars.length > 0 && <div className="identity-warning">⚠ 检测到父环境含 {presentVars.join('、')}。这里只显示存在性，不读取值。</div>}
               {/* **必须写出具体命令**。只说"运行该 CLI 的 login"等于把认知成本
                   全留给用户，而各家形状根本不一样、猜不到：
