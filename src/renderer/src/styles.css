@@ -461,16 +461,38 @@ body {
   height: 18px;
 }
 
+/* ── 内边距必须长在 `.xterm` 上，不能长在它的父元素上 ────────────────
+ *
+ * FitAddon 的测量合同是：
+ *   available = getComputedStyle(.xterm.parentElement).height − .xterm 自己的 padding
+ *
+ * 而 Tailwind preflight 给全局上了 `box-sizing: border-box`，
+ * **Chromium 在 border-box 下的 `getComputedStyle().height` 返回的是 border box**
+ * （不是 content box —— 我照 CSSOM 想当然地判成 content box，实测打脸）。
+ * 于是 padding 放在父元素上时：父高度里**含着** padding，而 addon 只会去扣
+ * `.xterm` 的 padding（那是 0）→ 可用高度虚高 20px。
+ *
+ * 实测（`TERMBOARD_FITPROBE=1 npm run dev`，改之前）：
+ *   bodyComputedH 340.5 / 真实内容区 320.5 / canvas 画到 333.1
+ *   → 竖向溢出 12.6px ≈ 0.76 行，被 `overflow:hidden` 切掉半行；横向同理多 18px
+ * 这正是用户截图里"底部内容被切"的来源，**不是 lineHeight、不是 DPR、不是画布缩放**。
+ *
+ * 挪到 `.xterm` 上之后两边都对：父高度不再含 padding，addon 又会主动扣掉它。
+ * xterm 的鼠标命中代码（`getCoordsRelativeToElement`）同样显式扣 `.xterm` padding，
+ * 所以这是它官方认的合同 —— 视觉完全一致，只是测量对象换对了。
+ * 改这里之前先跑一次探针，溢出必须是 0。 */
 .term-node-body {
   flex: 1;
   min-height: 0;
   background: var(--tb-terminal);
-  padding: 10px 6px 10px 12px;
   border-radius: 0 0 calc(var(--tb-radius) - 0.5px) calc(var(--tb-radius) - 0.5px);
   overflow: hidden;
 }
 .term-node-body .xterm {
+  box-sizing: border-box;
+  width: 100%;
   height: 100%;
+  padding: 10px 6px 10px 12px;
 }
 
 /* ── 极远缩放：节点退化成状态色块 + 恒定尺寸标签 ─────── */
