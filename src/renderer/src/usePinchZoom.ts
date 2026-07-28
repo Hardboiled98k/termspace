@@ -12,12 +12,22 @@ const MAX = 1.5
  * 合成事件里的 preventDefault() 是空操作，挡不住 Chromium 自己的 ctrl+wheel 缩放。
  *
  * 返回一个 ref 回调，挂到内容区元素上即可（元素换掉/卸载时自动重挂、解绑）。
- * onOther 收非 pinch 的滚轮事件，交给调用方决定（比如 ⌥+滚轮 调字号、普通滚轮留给终端回滚）。
+ * onOther 收非 pinch 的滚轮事件，交给调用方决定（比如 ⌥+滚轮 调字号）。
+ *
+ * **指针在节点内容上时，普通滚轮永远归内容，绝不平移画布。**
+ * 曾经这里做过"滚动链"：终端还能回滚就归终端，滚到头了交给画布平移 ——
+ * 听起来合理，实际是每天都在烦人的一个设计错误：新开的 shell 没有回滚历史，
+ * `canUp`/`canDown` 立刻都是 false，于是**每一次滚动都在平移画布**，
+ * 用户想滚的是终端里的内容。浏览器节点更彻底（压根没传 onOther），
+ * 任何滚轮都在平移画布。
+ *
+ * 现在的判据简单到无需记忆：**指针在哪就滚哪**。
+ * 要平移画布就把指针移到空白处 —— 那里本来就没有别的语义在竞争。
  */
 export function usePinchZoom(
   /**
-   * 非 pinch 的滚轮交给调用方。返回 true = 已消费（比如终端还能回滚）；
-   * 返回 false/undefined = 没人要，就用它平移画布 —— 这样鼠标停在节点上也能滑动画布。
+   * 非 pinch 的滚轮交给调用方。返回 true = 已消费并已自行 preventDefault；
+   * 返回 false/undefined = 不管它，**让事件继续往下走给内容**（xterm / webview 等）。
    */
   onOther?: (e: WheelEvent) => boolean | void
 ): (el: HTMLElement | null) => void {
@@ -47,11 +57,11 @@ export function usePinchZoom(
           setViewport({ x: e.clientX - fx * next, y: e.clientY - fy * next, zoom: next })
           return
         }
-        if (otherRef.current?.(e)) return // 调用方消费了（终端回滚等）
-        // 没人要 → 平移画布。节点内容区挂了 nowheel，React Flow 不会自己动，这里补上
-        e.preventDefault()
-        const vp = getViewport()
-        setViewport({ x: vp.x - e.deltaX, y: vp.y - e.deltaY, zoom: vp.zoom })
+        /* 调用方消费了就到此为止；没消费就**什么都不做** ——
+           不 preventDefault、不 stopPropagation，让事件自然落到内容上
+           （xterm 监听在子元素 .xterm 上，webview 由 guest 进程自己处理）。
+           内容滚不动时就是没反应，这和原生应用一致，也比"突然整个画布飞走"好。 */
+        otherRef.current?.(e)
       }
 
       el.addEventListener('wheel', onWheel, { passive: false, capture: true })

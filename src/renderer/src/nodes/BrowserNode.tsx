@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import {
   Handle,
   NodeResizer,
@@ -44,15 +44,38 @@ type WebviewEl = HTMLElement & {
   reload: () => void
   getURL: () => string
   getTitle: () => string
+  setZoomFactor?: (n: number) => void
 }
 
 function BrowserNodeImpl({ id, data, selected }: NodeProps<BrowserNodeT>): React.JSX.Element {
   const { deleteElements, updateNodeData } = useReactFlow()
   const zoom = useZoom()
   const wvRef = useRef<WebviewEl | null>(null)
+  const bodyRef = useRef<HTMLDivElement | null>(null)
+  const roRef = useRef<ResizeObserver | null>(null)
   const pinchZoom = usePinchZoom()
   const [addr, setAddr] = useState(data.url || 'about:blank')
   const [loading, setLoading] = useState(false)
+
+  /* 按节点宽度把页面缩到"像一个缩小的浏览器窗口"。
+     不做这件事的话 webview 恒定 100% 渲染 —— 节点只有 800px 宽，
+     桌面站按 1280 设计，结果就是**字巨大且只看得到左上角一块**。
+     参照宽度取 1280（主流桌面断点），节点越宽缩放越接近 1。
+     下限 0.4：再小字就没法读了，那时候本来也该放大节点或用 LOD 远景。 */
+  const REF_WIDTH = 1280
+  const applyZoom = useCallback((w: number): void => {
+    const wv = wvRef.current
+    if (!wv || w <= 0) return
+    const z = Math.min(1, Math.max(0.4, w / REF_WIDTH))
+    /* setZoomFactor 在 dom-ready 之前调会抛。webview 还没准备好就跳过，
+       下面 dom-ready 事件里会补一次 —— 这是 <webview> 的老毛病，
+       不兜住的话首次加载的页面永远是 100%。 */
+    try {
+      wv.setZoomFactor?.(z)
+    } catch {
+      /* 还没 ready，等 dom-ready 补 */
+    }
+  }, [])
 
   useEffect(() => {
     const wv = wvRef.current
@@ -65,14 +88,42 @@ function BrowserNodeImpl({ id, data, selected }: NodeProps<BrowserNodeT>): React
       setAddr(u)
       if (u !== data.url) updateNodeData(id, { url: u, title: wv.getTitle() })
     }
+    /* dom-ready 之前 setZoomFactor 会抛，所以这里补一次 ——
+       否则首次加载出来的页面永远是 100%，只有手动 resize 一下才对。 */
+    const onReady = (): void => applyZoom(bodyRef.current?.clientWidth ?? 0)
     wv.addEventListener('did-start-loading', onStart)
     wv.addEventListener('did-stop-loading', onStop)
+    wv.addEventListener('dom-ready', onReady)
     return () => {
       browserViews.delete(id)
       wv.removeEventListener('did-start-loading', onStart)
       wv.removeEventListener('did-stop-loading', onStop)
+      wv.removeEventListener('dom-ready', onReady)
     }
-  }, [id, data.url, updateNodeData])
+  }, [id, data.url, updateNodeData, applyZoom])
+
+  /* 节点尺寸变化就重算。用 ResizeObserver 而不是 NodeProps 的 width ——
+     后者在拖拽 resize 过程中不一定每帧都更新，而 webview 缩放要跟手。 */
+  const setBody = useCallback(
+    (el: HTMLDivElement | null): void => {
+      pinchZoom(el)
+      bodyRef.current = el
+      roRef.current?.disconnect()
+      roRef.current = null
+      if (!el) return
+      applyZoom(el.clientWidth)
+      const ro = new ResizeObserver((entries) => {
+        const w = entries[0]?.contentRect.width ?? 0
+        /* 宽度为 0 时不要缩放：元素折叠/未布局时算出来是下限 0.4，
+           等它重新展开就停在一个莫名其妙的缩放上（和 TerminalNode 里
+           "尺寸为 0 时不能 fit" 是同一类坑）。 */
+        if (w > 0) applyZoom(w)
+      })
+      ro.observe(el)
+      roRef.current = ro
+    },
+    [pinchZoom, applyZoom]
+  )
 
   const go = (raw: string): void => {
     const u = normalizeUrl(raw)
@@ -133,7 +184,7 @@ function BrowserNodeImpl({ id, data, selected }: NodeProps<BrowserNodeT>): React
       </div>
       <div
         className="browser-body nodrag nowheel"
-        ref={pinchZoom}
+        ref={setBody}
         style={{ visibility: far ? 'hidden' : 'visible' }}
       >
         <Webview

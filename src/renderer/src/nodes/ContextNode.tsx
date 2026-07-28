@@ -18,14 +18,10 @@ export type ContextNodeT = Node<{ title: string }, 'context'>
 function ContextNodeImpl({ id, selected }: NodeProps<ContextNodeT>): React.JSX.Element {
   const { deleteElements } = useReactFlow()
   const zoom = useZoom()
-  // 同终端的滚动链：编辑区还能滚就归它，滚到头交给画布平移
-  const pinchZoom = usePinchZoom((e) => {
-    const el = e.currentTarget as HTMLTextAreaElement | null
-    if (!el) return false
-    const canUp = el.scrollTop > 0
-    const canDown = el.scrollTop + el.clientHeight < el.scrollHeight - 1
-    return (e.deltaY < 0 && canUp) || (e.deltaY > 0 && canDown)
-  })
+  /* 只接管 pinch 缩放。普通滚轮不碰 —— textarea 自己会滚。
+     以前这里算过"还能不能滚，滚到头就交给画布平移"，那套滚动链已经废弃
+     （见 usePinchZoom 的注释：指针在哪就滚哪）。 */
+  const pinchZoom = usePinchZoom()
   const [text, setText] = useState('')
   const [loaded, setLoaded] = useState(false)
   const [dirty, setDirty] = useState(false)
