@@ -1327,6 +1327,11 @@ function Board(): React.JSX.Element {
   const addTerminal = useCallback(
     (preset?: Preset) => {
       setShowAgentMenu(false)
+      /* 选中了一个绑了 worktree 的组 → 新终端直接进这个组、落在那棵树上。
+         没选组就照旧落在项目目录 —— 不改变原有习惯，只是多一条路。 */
+      const selGroup = nodesRef.current.find((n) => n.type === 'group' && n.selected)
+      const groupId = selGroup?.id
+      const groupWt = (selGroup?.data as { worktree?: { path: string } } | undefined)?.worktree?.path
       setNodes((ns) => {
         // id 必须全工作区唯一：它就是 tmux 会话名，跨项目撞名会串会话
         const allIds = [
@@ -1348,7 +1353,11 @@ function Board(): React.JSX.Element {
               identityId: preset?.identityId || defaultIdentity || undefined,
               command: preset?.command || undefined,
               provider: preset?.provider,
-              cwd: projectCwd, // 新终端落在当前项目目录
+              /* cwd 解析顺序：**选中的组若绑了 worktree 就落在那棵树上**，
+                 否则回到项目目录。这就是隔离本身 —— 组 = 一棵树，
+                 组内的 agent 和别处物理分开，不靠提示词约束。 */
+              cwd: groupWt ?? projectCwd,
+              ...(groupId ? { parentId: groupId, extent: 'parent' as const } : {}),
               fontSize: defaultFontSize // 设置里的默认字号（此前存了但没人读，改了不生效）
             }
           }

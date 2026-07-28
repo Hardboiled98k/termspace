@@ -2274,3 +2274,19 @@ body {
   white-space: nowrap;
   margin-top: -2px;
 }
+
+/* 组绑定的 git worktree：一眼看出这组 agent 被隔离在哪个分支上。
+   脏了变琥珀色 —— 和 attention 同色系，意思是"这里有东西等你处理" */
+.group-wt {
+  font-size: 11px;
+  color: var(--txt-dim, #8E8E93);
+  padding: 1px 6px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 5px;
+  white-space: nowrap;
+  margin-left: 6px;
+}
+.group-wt.dirty {
+  color: #FF9F0A;
+  border-color: rgba(255, 159, 10, 0.35);
+}

@@ -28,7 +28,19 @@ const SAMPLES: Record<string, BoardNode> = {
     ...pos,
     data: { title: 'zsh', status: 'idle', identityId: 'i1', provider: 'codex', cwd: '/tmp' }
   } as BoardNode,
-  group: { id: 'g1', type: 'group', ...pos, data: { title: '组', collapsed: true } } as BoardNode,
+  /* group 样本**必须带 worktree**：这个字段决定组内终端落在哪棵树上，
+     漏了它往返测试就抓不到"存了没读回来"——而症状是重启后隔离静默失效，
+     两个 agent 又回到同一个工作区里打架。同「凭证样本故意投毒」是一个道理。 */
+  group: {
+    id: 'g1',
+    type: 'group',
+    ...pos,
+    data: {
+      title: '组',
+      collapsed: true,
+      worktree: { repo: '/r', branch: 'feat/x', path: '/r.worktrees/feat-x-ab12cd' }
+    }
+  } as BoardNode,
   context: { id: 'ctx1', type: 'context', ...pos, data: { title: '共享上下文' } } as BoardNode,
   browser: {
     id: 'b1',
@@ -71,6 +83,20 @@ test('终端的 identityId / provider / cwd 都要活着回来', () => {
   assert.equal(d.identityId, 'i1')
   assert.equal(d.provider, 'codex')
   assert.equal(d.cwd, '/tmp')
+})
+
+test('组绑定的 worktree 要整个活着回来（丢了 = 隔离静默失效）', () => {
+  /* **这条是补出来的**：光在 SAMPLES 里加 worktree 字段没用 ——
+     上面那个 for 循环只断言 type/id/position，字段级断言在这个文件里是逐条单写的。
+     加了样本却没加断言，去掉 toSaved 里的 worktree 测试照样全绿（实测过）。
+     而症状是重启后组的隔离没了，两个 agent 又回到同一个工作区里打架，
+     没有任何报错 —— 正是这个文件开头说的那类"静默且危险"。 */
+  const d = fromSaved(toSaved(SAMPLES.group as never)).data as Record<string, unknown>
+  assert.deepEqual(d.worktree, {
+    repo: '/r',
+    branch: 'feat/x',
+    path: '/r.worktrees/feat-x-ab12cd'
+  })
 })
 
 test('组的折叠态要持久化（不然重开组身缩着、子终端全冒出来）', () => {

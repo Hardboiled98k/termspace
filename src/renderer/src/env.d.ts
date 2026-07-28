@@ -277,6 +277,20 @@ interface TermspaceApi {
     detail: string
     home?: string
   }>
+  /** 这个目录是不是 git 仓库。**null = 不是**，UI 据此完全隐藏 worktree 功能 */
+  gitProbe: (cwd: string) => Promise<{
+    repoRoot: string
+    branch: string | null
+    worktrees: { path: string; head: string; branch: string | null }[]
+  } | null>
+  /** 一棵树的分支与脏文件数。路径不存在（被外部删了）返回 null */
+  gitWorktreeStatus: (path: string) => Promise<{ branch: string | null; dirty: number } | null>
+  gitCreateWorktree: (
+    repoRoot: string,
+    branch: string
+  ) => Promise<{ ok: boolean; path?: string; error?: string }>
+  /** 绝不 --force：脏树删不掉是特性，error 里带 git 的原话 */
+  gitRemoveWorktree: (path: string) => Promise<{ ok: boolean; error?: string }>
 }
 
 declare interface Window {

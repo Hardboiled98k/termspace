@@ -1,8 +1,18 @@
-import { memo, useContext, useState } from 'react'
+import { memo, useContext, useEffect, useState } from 'react'
 import { useReactFlow, useStore, type Node, type NodeProps } from '@xyflow/react'
 import { TmuxContext, RequestDeleteContext } from '../identity-context'
 
-export type GroupNodeT = Node<{ title: string; collapsed?: boolean }, 'group'>
+/** 组绑定的 git worktree。绑了之后组内新建的终端 cwd 落在 path 上 —— 这就是隔离本身 */
+export interface GroupWorktree {
+  /** 主仓库根目录（删树时要从这儿执行 git worktree remove） */
+  repo: string
+  branch: string
+  path: string
+}
+export type GroupNodeT = Node<
+  { title: string; collapsed?: boolean; worktree?: GroupWorktree },
+  'group'
+>
 
 /* 组状态取组内最高优先级 error > attention > running > idle
    —— 缩到全景时一个色块就要说清"这组里最糟的情况是什么" */
@@ -31,6 +41,89 @@ function GroupNodeImpl({ id, data }: NodeProps<GroupNodeT>): React.JSX.Element {
 
   const kids = (): Node[] => getNodes().filter((n) => n.parentId === id)
   const terms = (): Node[] => kids().filter((n) => n.type === 'terminal')
+
+  /* worktree：组 = 一棵树。**只在组内终端的 cwd 确实是 git 仓库时才出现** ——
+     用户的项目目录大多不是仓库（实测他 4 个标签页一个都不是），
+     对非仓库显示一个禁用按钮只是噪音。 */
+  const [repo, setRepo] = useState<{ repoRoot: string } | null>(null)
+  const [wtStat, setWtStat] = useState<{ branch: string | null; dirty: number } | null>(null)
+  const wt = data.worktree
+
+  useEffect(() => {
+    const cwd = terms()
+      .map((n) => (n.data as { cwd?: string }).cwd)
+      .find(Boolean)
+    if (!cwd) {
+      setRepo(null)
+      return
+    }
+    let alive = true
+    void window.termspace.gitProbe(cwd).then((r) => {
+      if (alive) setRepo(r ? { repoRoot: r.repoRoot } : null)
+    })
+    return () => {
+      alive = false
+    }
+    // total 变了说明组员变了，重探一次
+  }, [total])
+
+  useEffect(() => {
+    if (!wt) {
+      setWtStat(null)
+      return
+    }
+    let alive = true
+    const pull = (): void => {
+      void window.termspace.gitWorktreeStatus(wt.path).then((s) => {
+        if (alive) setWtStat(s)
+      })
+    }
+    pull()
+    // 脏不脏是随时在变的，但没必要太密 —— 5s 一拍，git status 在大仓库上也就几十毫秒
+    const t = setInterval(pull, 5000)
+    return () => {
+      alive = false
+      clearInterval(t)
+    }
+  }, [wt?.path])
+
+  const bindWorktree = async (): Promise<void> => {
+    if (!repo) return
+    const branch = window.prompt(
+      `在「${data.title}」上开一棵 worktree\n\n` +
+        `仓库：${repo.repoRoot}\n` +
+        '输入分支名（不存在会新建）。目录落在 <仓库名>.worktrees/ 下。',
+      ''
+    )
+    if (!branch) return
+    const r = await window.termspace.gitCreateWorktree(repo.repoRoot, branch)
+    if (!r.ok || !r.path) {
+      window.alert(`建不了：${r.error ?? '未知错误'}`)
+      return
+    }
+    setNodes((ns) =>
+      ns.map((n) =>
+        n.id === id
+          ? { ...n, data: { ...n.data, worktree: { repo: repo.repoRoot, branch, path: r.path as string } } }
+          : n
+      )
+    )
+  }
+
+  const unbindWorktree = (): void => {
+    /* **解绑不删树**。和 closeProject 保留画布同一哲学：
+       磁盘上那棵树可能有 agent 干了一半的活，删除必须是另一个显式动作。 */
+    if (
+      !window.confirm(
+        `解除「${data.title}」和 worktree 的绑定？\n\n` +
+          `磁盘上的 ${wt?.path} **不会**被删除，里面的改动都还在。\n` +
+          '组内已有的终端不受影响（它们的 cwd 已经定了），只是之后新建的终端不再落在那棵树上。'
+      )
+    ) {
+      return
+    }
+    setNodes((ns) => ns.map((n) => (n.id === id ? { ...n, data: { ...n.data, worktree: undefined } } : n)))
+  }
 
   const ungroup = (): void => {
     setNodes((ns) => {
@@ -144,6 +237,15 @@ function GroupNodeImpl({ id, data }: NodeProps<GroupNodeT>): React.JSX.Element {
           {data.collapsed ? '▸' : '▾'}
         </button>
         <span className="group-node-title">{data.title}</span>
+        {wt && (
+          <span
+            className={`group-wt${wtStat && wtStat.dirty > 0 ? ' dirty' : ''}`}
+            title={`worktree：${wt.path}${wtStat ? `\n${wtStat.dirty} 个未提交改动` : ''}`}
+          >
+            ⎇ {wt.branch}
+            {wtStat && wtStat.dirty > 0 && ` ·${wtStat.dirty}`}
+          </span>
+        )}
         <span className="group-node-counts">
           {total} 终端{running > 0 && ` · ${running} 运行`}
           {attention > 0 && ` · ${attention} 需要你`}
@@ -168,6 +270,31 @@ function GroupNodeImpl({ id, data }: NodeProps<GroupNodeT>): React.JSX.Element {
             >
               群发
             </button>
+            {/* 非 git 仓库时整个不出现 —— 显示一个点不了的按钮只是噪音 */}
+            {repo && !wt && (
+              <button
+                className="group-act nodrag"
+                title="给这个组开一棵 git worktree，让组内 agent 和别处物理隔离"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  void bindWorktree()
+                }}
+              >
+                ⎇ 隔离
+              </button>
+            )}
+            {wt && (
+              <button
+                className="group-act nodrag"
+                title="解除绑定（不删除磁盘上的 worktree）"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  unbindWorktree()
+                }}
+              >
+                解绑
+              </button>
+            )}
             <button
               className="group-act nodrag"
               title="结束并重开组内所有会话（保留身份/目录/启动命令）"

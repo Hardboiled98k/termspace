@@ -178,6 +178,16 @@ const api = {
     ipcRenderer.invoke('identity:rename', id, name),
   identityLoginStatus: (id: string): Promise<unknown> =>
     ipcRenderer.invoke('identity:loginStatus', id),
+  /* git worktree —— 画布上一个组 = 一棵树，让并行 agent 物理隔离。
+     probe 返回 null = 这个目录不是 git 仓库，UI 据此把整个功能藏起来
+     （用户的项目目录大多不是仓库，不能变成噪音）。 */
+  gitProbe: (cwd: string): Promise<unknown> => ipcRenderer.invoke('git:probe', cwd),
+  gitWorktreeStatus: (path: string): Promise<unknown> =>
+    ipcRenderer.invoke('git:worktreeStatus', path),
+  gitCreateWorktree: (repoRoot: string, branch: string): Promise<unknown> =>
+    ipcRenderer.invoke('git:createWorktree', repoRoot, branch),
+  gitRemoveWorktree: (path: string): Promise<unknown> =>
+    ipcRenderer.invoke('git:removeWorktree', path),
   /* 类型直接从主进程的模型引进来。以前这里还写着早已换掉的单账号 Claude payload
      （five_hour/seven_day），而主进程发的是 AccountQuota[] —— 两套声明各自自洽，
      typecheck 全绿，实际字段一个都对不上。IPC 两端必须共用同一个类型。 */

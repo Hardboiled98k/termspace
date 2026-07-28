@@ -25,6 +25,12 @@ import {
 import { listPresets, upsertPreset, deletePreset } from './preset-store'
 import { startWorkerWatch, workerAction, type WorkerWatch } from './worker-watch'
 import { execFile } from 'node:child_process'
+import {
+  probeRepo,
+  worktreeStatus,
+  createWorktree,
+  removeWorktree
+} from './worktree.ts'
 import { startRemoteApi, type RemoteApi } from './remote'
 import { startUpdater, type Updater } from './updater'
 import {
@@ -889,6 +895,33 @@ ipcMain.handle('settings:set', async (e, patch: Partial<Settings>) => {
 })
 
 /** 远程访问状态（设置面板显示地址与配对 token） */
+/* ── git worktree ──
+   画布上一个组 = 一棵树，并行 agent 物理隔离（见 src/main/worktree.ts）。
+   四个都查 fromMainWin：createWorktree / removeWorktree 会真的动文件系统，
+   而 webview guest 也是一个 webContents —— 不查就等于把它们暴露给任意页面。 */
+ipcMain.handle('git:probe', async (e, cwd: unknown) => {
+  if (!fromMainWin(e)) return null
+  if (typeof cwd !== 'string') return null
+  return probeRepo(cwd)
+})
+ipcMain.handle('git:worktreeStatus', async (e, p: unknown) => {
+  if (!fromMainWin(e)) return null
+  if (typeof p !== 'string') return null
+  return worktreeStatus(p)
+})
+ipcMain.handle('git:createWorktree', async (e, repoRoot: unknown, branch: unknown) => {
+  if (!fromMainWin(e)) return { ok: false, error: 'denied' }
+  if (typeof repoRoot !== 'string' || typeof branch !== 'string') {
+    return { ok: false, error: '参数不合法' }
+  }
+  return createWorktree(repoRoot, branch)
+})
+ipcMain.handle('git:removeWorktree', async (e, p: unknown) => {
+  if (!fromMainWin(e)) return { ok: false, error: 'denied' }
+  if (typeof p !== 'string') return { ok: false, error: '参数不合法' }
+  return removeWorktree(p)
+})
+
 ipcMain.handle('remote:status', async (e) => {
   if (!fromMainWin(e)) return null
   const s = await getSettings()

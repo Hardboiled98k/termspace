@@ -161,6 +161,8 @@ export interface SavedNode {
   cwd?: string
   url?: string
   collapsed?: boolean
+  /** group 专用：绑定的 git worktree（见 GroupNode 的 GroupWorktree） */
+  worktree?: { repo: string; branch: string; path: string }
 }
 
 export function fromSaved(s: SavedNode): BoardNode {
@@ -191,7 +193,7 @@ export function fromSaved(s: SavedNode): BoardNode {
       position: { x: s.x, y: s.y },
       width: s.width,
       height: s.height,
-      data: { title: s.title, collapsed: s.collapsed }
+      data: { title: s.title, collapsed: s.collapsed, worktree: s.worktree }
     }
   }
   /* 凭证节点。**漏了这个分支的后果不是"少一个节点"**：它会掉进下面的 terminal
@@ -244,7 +246,8 @@ export function toSaved(n: Exclude<BoardNode, WorkerNodeT>): SavedNode {
   }
   if (n.type === 'browser') return { ...base, url: n.data.url }
   // 折叠态要持久化：不然重开后组身还是缩着、子终端却全冒出来
-  if (n.type === 'group') return { ...base, collapsed: n.data.collapsed }
+  if (n.type === 'group')
+    return { ...base, collapsed: n.data.collapsed, worktree: n.data.worktree }
   if (n.type === 'context') return base
   // 凭证节点只存"指向哪个凭证"；env 值一直在主进程加密着，画布文件里绝不出现
   if (n.type === 'credential') return { ...base, identityId: n.data.identityId }
