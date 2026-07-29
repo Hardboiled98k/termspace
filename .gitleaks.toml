@@ -1,39 +1,32 @@
 # gitleaks 配置。
 #
-# 这里的每一条豁免都**必须写清为什么它不是密钥** —— 一条没有理由的豁免
+# **不要重写内置规则的 regex。** 试过一次：想「精确化」generic-api-key，
+# 结果它的灵敏度变了 —— 原来命中的三条不再命中，却冒出另外两条。
+# 一条自定义规则同时改变了「查什么」和「不查什么」，而后者不可见。
+# 只用 allowlist 逐条豁免：豁免是加法，条目可数、每条能写出理由。
+#
+# 这里的每一条都**必须写清为什么它不是密钥** —— 一条没有理由的豁免
 # 等于把扫描器关掉，而下一个人只会看到"扫描是绿的"。
 #
-# 跑法（发布/转公开前）：
+# 跑法（发布 / 转公开前）：
 #   gitleaks git --log-opts=--all --redact
 # 配套的形状扫描（gitleaks 查不到的个人信息：家目录、真实 MAC、客户名）：
 #   scripts/verify-clean.sh <仓库路径>
+# 两个都跑才算过：gitleaks 只认凭证熵值，verify-clean.sh 只认个人信息形状。
 
 [extend]
 useDefault = true
 
-[[rules]]
-# 覆盖默认 generic-api-key 太宽的匹配需要整条重写，代价大且容易连真的一起放过。
-# 改成在 allowlist 里逐条豁免 —— 条目少、每条有出处。
-id = "generic-api-key"
-description = "Generic API Key"
-regex = '''(?i)(?:key|api|token|secret|client|passwd|password|auth|access)(?:[0-9a-z\-_\t .]{0,20})(?:[\s|']|[\s|"]){0,3}(?:=|>|:{1,3}=|\|\||:|<=|=>|:=|\?=|,)(?:'|\"|\s|=|\x60){0,5}([0-9a-z\-_.=]{10,150})(?:['|\"|\n|\r|\s|\x60|;|\\]|$)'''
-keywords = ["key", "api", "token", "secret", "client", "passwd", "password", "auth", "access"]
-
-  [rules.allowlist]
-  regexTarget = "match"
-  regexes = [
-    # localStorage 的键名，不是密钥。值是 'tb.hud.prefs.v1'
-    '''KEY = ['"]tb\.hud\.prefs''',
-    # 跨机派活用例里的合成 token，用来断言 helper 原样转发了 header
-    '''TOK-123456789012''',
-    # 远程 token 表用例的占位值（32 位 a-f0-9，明显不是随机产物）
-    '''abcdef0123456789abcdef0123456789''',
-  ]
-
 [allowlist]
 description = "刻意保留的合成夹具与公开标识符"
 regexes = [
-  # 用来断言脱敏真的生效 —— 它出现在用例里恰恰是这个功能在被测试
+  # localStorage 的键名（值是 tb.hud.prefs.v1），不是密钥
+  '''tb\.hud\.prefs\.v1''',
+  # 跨机派活用例里的合成 token —— 用来断言 helper 原样转发了 header
+  '''TOK-123456789012''',
+  # 远程 token 表用例的占位值：32 位 a-f0-9 顺序排列，明显不是随机产物
+  '''abcdef0123456789abcdef0123456789''',
+  # 用来断言脱敏真的生效 —— 它出现在用例里恰恰说明这个功能在被测试
   '''sk-SECRET-DO-NOT-LEAK''',
   # Apple Developer Team ID：随 Developer ID 证书主体公开，本来就印在
   # 每个签名二进制里。删它不能撤销签名能力，也不能隐藏签名主体
