@@ -18,14 +18,18 @@ export interface HudPrefs {
 }
 
 /**
- * 默认值。
+ * 默认值。**两条都是用户实测后明确要求的，不是我拍的。**
  *
- * `board: true` —— 保持原有行为，用户没要求改默认，只要求"能折叠"。
- * `accounts: []` —— **默认精简是用户明确要求的**：
- * 邮箱、「已验证登录」这类是**查证信息**，不是日常要看的；
- * 每张卡省两行，四个账号就是八行。进度条留着，那才是这个面板的看点。
+ * `board: false` —— 终端详情默认折叠。这一段在有六七个终端时能占掉半屏，
+ * 而**折叠态的标题里仍然带着「N 终端 · N 运行 · N 需要你」** ——
+ * 也就是"有没有 agent 在等我"这个唯一要紧的信息一直在，
+ * 展开只是为了点进某一个。所以默认折叠不丢东西。
+ *
+ * `accounts: []` —— 账号卡默认精简：邮箱、「已验证登录」这类是**查证信息**，
+ * 不是日常要看的；每张卡省两行，四个账号就是八行。
+ * 进度条留着，那才是这个面板的看点。
  */
-const DEFAULTS: HudPrefs = { board: true, accounts: [] }
+const DEFAULTS: HudPrefs = { board: false, accounts: [] }
 
 export function loadHudPrefs(store: Pick<Storage, 'getItem'> = localStorage): HudPrefs {
   try {

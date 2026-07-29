@@ -28,16 +28,19 @@ const store = (init?: string): Pick<Storage, 'getItem' | 'setItem'> & { v?: stri
   return o
 }
 
-test('没存过 → 画布展开、账号全部精简', () => {
+test('没存过 → **终端详情和账号卡都默认收起**（两条都是用户明确要求的）', () => {
+  /* 折叠态的标题里仍然带着「N 终端 · N 运行 · N 需要你」，
+     "有没有 agent 在等我"这个唯一要紧的信息一直在 —— 所以默认折叠不丢东西。
+     改这两个默认值时这条会红，逼你重新想一遍。 */
   const p = loadHudPrefs(store())
-  assert.equal(p.board, true, '不改既有行为：画布区块默认还是展开的')
-  assert.deepEqual(p.accounts, [], '**账号默认精简** —— 这是用户明确要求的')
+  assert.equal(p.board, false, '终端详情默认折叠')
+  assert.deepEqual(p.accounts, [], '账号卡默认精简')
 })
 
 test('存过就按存的来（重启后折叠状态必须还在）', () => {
-  const s = store(JSON.stringify({ board: false, accounts: ['system:codex'] }))
+  const s = store(JSON.stringify({ board: true, accounts: ['system:codex'] }))
   const p = loadHudPrefs(s)
-  assert.equal(p.board, false)
+  assert.equal(p.board, true, '存过展开就得是展开，不能被默认值盖回去')
   assert.deepEqual(p.accounts, ['system:codex'])
 })
 
