@@ -202,8 +202,7 @@ test('**任何未映射的键一律拒绝** —— 拼错一个字符就绕过�
      判据因此收紧成白名单：能用 PG* 表达的才收，其余一律 null。 */
   for (const bad of [
     'host=127.0.0.1 port=1 dbname=d servic=nope', // 拼错 service
-    'host=h dbname=d replication=database', // 真实参数但 PG* 表达不了
-    'host=h dbname=d keepalives=1', // 同上
+    'host=h dbname=d replication=database', // 真实参数、PG* 表达不了、**且会改语义**
     'host=h dbname=d totally_made_up=1'
   ]) {
     assert.equal(pgConnFromTarget(bad), null, `没拒：${bad}`)
@@ -226,4 +225,33 @@ test('**key=value 分支也要 fail-closed**（上一版只修了 URI 那条）'
   // 混用：认识的参数在前也不能让未映射的那个蒙混过关
   assert.equal(pgConnFromTarget('user=u password=pw123456 host=h servic=nope'), null)
   assert.ok(pgConnFromTarget('host=h dbname=d application_name=tb'))
+})
+
+/* ── 白名单漏项：本来能连的不能连不上（我自己用真 psql 枚举出来的）───────
+   拿一个候选参数表逐个喂给 psql 17.5，看它报不报 `invalid connection option`。
+   结果：`fallback_application_name` / `keepalives*` / `sslnegotiation` / `replication`
+   psql 全都认，而我们一律拒 —— **本来能连的连接串现在连不上了**，
+   这比放过一个无害参数更容易被用户撞上。 */
+
+test('**psql 认的参数我们不能误杀**（真 psql 枚举出来的漏项）', () => {
+  // 有对应 PG* 的：必须映射
+  assert.equal(
+    pgConnFromTarget('host=h dbname=d sslnegotiation=direct')?.env['PGSSLNEGOTIATION'],
+    'direct'
+  )
+  // 没有 PG* 但**不改变连到哪/连成谁/怎么认证**的：接受并丢弃，不能拒
+  for (const ok of [
+    'host=h dbname=d fallback_application_name=tb',
+    'host=h dbname=d keepalives=1 keepalives_idle=30',
+    'postgres://h/db?fallback_application_name=tb'
+  ]) {
+    assert.ok(pgConnFromTarget(ok), `本来能连的被误杀：${ok}`)
+  }
+})
+
+test('**replication 仍然要拒** —— 它是真的语义改变，不在"无害可丢"那一档', () => {
+  /* 它把连接切到复制模式，又没有环境变量可表达。
+     和 keepalives 的区别就是这条判据的分界线：改不改变"连到哪/连成谁/怎么认证"。 */
+  assert.equal(pgConnFromTarget('host=h dbname=d replication=database'), null)
+  assert.equal(pgConnFromTarget('postgres://h/db?replication=true'), null)
 })

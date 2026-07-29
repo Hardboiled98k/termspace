@@ -93,12 +93,31 @@ const CONN_PARAM_ENV: Record<string, string> = {
   sslsni: 'PGSSLSNI',
   ssl_min_protocol_version: 'PGSSLMINPROTOCOLVERSION',
   ssl_max_protocol_version: 'PGSSLMAXPROTOCOLVERSION',
+  sslnegotiation: 'PGSSLNEGOTIATION',
   requirepeer: 'PGREQUIREPEER',
   gssencmode: 'PGGSSENCMODE',
   gssdelegation: 'PGGSSDELEGATION',
   krbsrvname: 'PGKRBSRVNAME',
   gsslib: 'PGGSSLIB'
 }
+
+/**
+ * **认得出、但没有 `PG*` 可表达、而且丢了也不改变"连到哪 / 连成谁 / 怎么认证"** 的键。
+ *
+ * 这一档是"表达不了才拒"那条判据的必要细化 —— 实测发现真 psql 接受
+ * `fallback_application_name` 和 `keepalives*`，一律拒的话
+ * **本来能连的连接串现在连不上了**，而那比放过一个无害参数更容易被用户撞上。
+ *
+ * ⚠️ `replication` **不在这一档**：它把连接切到复制模式，是实打实的语义改变，
+ * 又没有环境变量可表达 —— 只能拒。
+ */
+const DROPPABLE_PARAMS = new Set([
+  'fallback_application_name',
+  'keepalives',
+  'keepalives_idle',
+  'keepalives_interval',
+  'keepalives_count'
+])
 
 /** 这些键的值是密码，要进脱敏名单 */
 const SECRET_PARAMS = new Set(['password', 'sslpassword'])
@@ -242,8 +261,11 @@ export function pgConnFromTarget(target: string): PgConn | null {
     for (const [k, v] of new URLSearchParams(query)) {
       const key = k.toLowerCase()
       const envKey = CONN_PARAM_ENV[key]
-      // **未映射一律拒绝**（含拼错的）—— 真 psql 对 `servic=` 也是直接报错拒连
-      if (!envKey) return null
+      // 无害且表达不了的可以丢；其余未映射一律拒（含拼错的）
+      if (!envKey) {
+        if (DROPPABLE_PARAMS.has(key)) continue
+        return null
+      }
       put(envKey, v)
       if (SECRET_PARAMS.has(key) && v) {
         secrets.add(v)
@@ -259,7 +281,10 @@ export function pgConnFromTarget(target: string): PgConn | null {
     for (const [k, v] of Object.entries(kv)) {
       const envKey = CONN_PARAM_ENV[k]
       // 和 URI 分支**共用同一张表、同一条判据** —— 各写一份就是改一处漏一处
-      if (!envKey) return null
+      if (!envKey) {
+        if (DROPPABLE_PARAMS.has(k)) continue
+        return null
+      }
       put(envKey, v)
       if (SECRET_PARAMS.has(k) && v) {
         secrets.add(v)
