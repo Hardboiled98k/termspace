@@ -51,7 +51,7 @@ test('Claude 已登录：显示套餐和邮箱', () => {
   assert.match(r.detail, /max/)
   /* **detail 里的邮箱必须是脱敏的**（这条断言的上一版要求的是明文，
      把泄漏行为固化成了期望）。实测撞到的现象：额度卡上同一个邮箱出现两遍 ——
-     「v***@…」（渲染层 maskEmail 过的）和「max · abc123xyz@…」（这里拼的，明文）。
+     「a***@…」（渲染层 maskEmail 过的）和「max · abc123xyz@…」（这里拼的，明文）。
      判据：**脱敏只能有一个出口**，谁把邮箱拼进给人看的字符串，谁就得先脱敏。
      `r.email` 字段仍是原值 —— 那是给程序区分两个同 provider 订阅号用的。 */
   assert.match(r.detail, /a\*\*\*@b\.com/)
