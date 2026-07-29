@@ -2430,6 +2430,84 @@ app.whenReady().then(async () => {
           // 自检产物必须自己收干净，否则留一地孤儿 tmux 会话
           for (const tid of ids) await destroyPty(tid)
         }
+        /* `TERMBOARD_DEMO=1`：把界面上的**可识别信息**换成 demo 值，再截图。
+           给文档/官网出图用 —— 真实截图比手画的示意图有说服力得多，
+           但项目名、邮箱、机器名不能发出去。
+
+           ⚠️ **终端正文是画在 WebGL canvas 上的，DOM 替换不了它。**
+           所以这个开关只处理 DOM 文本；终端内容要靠**缩到 LOD 档**
+           （`TERMBOARD_ZOOM`）让它退化成色块 —— 而那恰好是这个产品的招牌视图。
+           两件配合才安全，只用其中一个都会漏。 */
+        if (process.env['TERMBOARD_DEMO']) {
+          await win.webContents.executeJavaScript(
+            `(() => {
+              const TABS = ['我的项目', 'api-service', 'web-app', '实验']
+              let i = 0
+              for (const el of document.querySelectorAll('.project-tab-name, .project-tab-cwd')) {
+                el.textContent = el.classList.contains('project-tab-cwd')
+                  ? '~/code/demo'
+                  : (TABS[i++ % TABS.length])
+              }
+              // 邮箱：连脱敏过的也换掉（a***@gmail.com 仍能看出首字母）
+              for (const el of document.querySelectorAll('.quota-email, .quota-account-note')) {
+                el.textContent = el.textContent.replace(
+                  /[A-Za-z0-9._%+*-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g,
+                  'demo@example.com'
+                )
+              }
+              return true
+            })()`
+          )
+          console.log('[demo] 已替换 DOM 里的可识别文本')
+        }
+        /* `TERMBOARD_ZOOM=<0-1>`：截图前把画布缩到指定比例。
+           LOD 阈值是 0.35 —— 低于它终端就退化成纯色块，正文不可读。
+           这正是 demo 出图需要的：既展示了招牌视图，又不会把终端里的真实内容发出去。
+
+           ⚠️ 先切到**有节点的那个项目**再缩。用户的工作区里有空项目，
+           上一次出图就落在空的那个上，截出来是一片黑（而且 minimap 也空着，
+           一眼能看出不对 —— 出图后必须真的看一眼，别只看命令有没有报错）。 */
+        if (process.env['TERMBOARD_ZOOM']) {
+          const z = Number(process.env['TERMBOARD_ZOOM'])
+          const picked = await win.webContents.executeJavaScript(
+            `(async () => {
+              const tabs = [...document.querySelectorAll('.project-tab')]
+              // 逐个试，停在第一个真有终端节点的项目上
+              for (const t of tabs) {
+                t.click()
+                await new Promise((r) => setTimeout(r, 700))
+                if (document.querySelectorAll('.react-flow__node-terminal').length > 0) {
+                  return document.querySelectorAll('.react-flow__node-terminal').length
+                }
+              }
+              return 0
+            })()`
+          )
+          console.log(`[demo] 选中的项目有 ${picked} 个终端`)
+          // 缩放：`.react-flow__controls-button` 的顺序是 zoomIn / zoomOut / fitView / lock
+          await win.webContents.executeJavaScript(
+            `(() => {
+              const b = document.querySelectorAll('.react-flow__controls-button')
+              b[2]?.click()   // fitView：先把全部节点收进视野
+              return true
+            })()`
+          )
+          await new Promise((r) => setTimeout(r, 700))
+          if (Number.isFinite(z) && z > 0 && z < 1) {
+            await win.webContents.executeJavaScript(
+              `(() => {
+                const vp = document.querySelector('.react-flow__viewport')
+                const m = /scale\\(([\\d.]+)\\)/.exec(vp?.style.transform || '')
+                const cur = m ? Number(m[1]) : 1
+                const times = Math.max(0, Math.round(Math.log(${z} / cur) / Math.log(1 / 1.2)))
+                const out = document.querySelectorAll('.react-flow__controls-button')[1]
+                for (let i = 0; i < times; i++) out?.click()
+                return cur
+              })()`
+            )
+            await new Promise((r) => setTimeout(r, 700))
+          }
+        }
         /* `TERMBOARD_CLICK=<CSS 选择器>[|<选择器>…]`：截图前依次点一遍。
            没有它就只能拍到"入口"，拍不到点进去之后的样子 ——
            而需要验的恰恰是流程本身（比如「添加账号」点开后的四选一）。

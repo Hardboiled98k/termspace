@@ -156,7 +156,13 @@ UNNOTARIZED=""
 for APP in dist/mac-arm64/Termspace.app dist/mac/Termspace.app; do
   [ -d "$APP" ] || { echo "❌ 缺 $APP —— 两个架构都要验签名。先跑 npm run dist:signed" >&2; exit 1; }
   codesign --verify --deep --strict "$APP" || { echo "$APP 签名校验没过，别发" >&2; exit 1; }
-  spctl --assess --type execute "$APP" 2>&1 | grep -q "Notarized" || UNNOTARIZED="$UNNOTARIZED $APP"
+  # **判据用 stapler，不用 spctl。** 两个原因：
+  #  ① `spctl --assess` **不加 `--verbose` 时只打印 `path: accepted`** ——
+  #     `source=Notarized Developer ID` 那行根本不出现，于是这个 grep **每次都误报**。
+  #     比漏检更糟：它训练操作者对着一个吓人的警告按 y，闸门等于没有。
+  #  ② 就算加了 --verbose，`spctl` 允许**在线**查询票据 —— 而用户下载时可能离线。
+  #     `stapler validate` 验的是票据有没有真钉进包里，那才是分发要的东西。
+  xcrun stapler validate "$APP" >/dev/null 2>&1 || UNNOTARIZED="$UNNOTARIZED $APP"
 done
 if [ -n "$UNNOTARIZED" ]; then
   echo "⚠️  这些包**没过公证**：$UNNOTARIZED" >&2
