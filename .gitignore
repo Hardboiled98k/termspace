@@ -7,3 +7,6 @@ dist/
 
 # wrangler pages dev 的本地缓存/状态（miniflare 产物，不该进仓库）
 site/.wrangler/
+
+# Claude 本地运行工件：含 session UUID / PID / 进程启动时间
+.claude/scheduled_tasks.lock

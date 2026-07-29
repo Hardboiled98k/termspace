@@ -17,7 +17,7 @@ const v4 = (
 ): os.NetworkInterfaceInfo =>
   ({ address, family: 'IPv4', internal, netmask, mac, cidr: null }) as unknown as os.NetworkInterfaceInfo
 
-/** 物理网卡：真实掩码 + 真实 MAC */
+/** 物理网卡：真实掩码形态 + 一个 locally-administered MAC（02: 开头，规范保证不撞任何厂商 OUI） */
 const phys = (address: string, netmask = '255.255.255.0'): os.NetworkInterfaceInfo =>
   v4(address, false, netmask, '02:00:00:00:00:01')
 

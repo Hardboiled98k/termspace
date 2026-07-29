@@ -2459,6 +2459,20 @@ app.whenReady().then(async () => {
                   'demo@example.com'
                 )
               }
+              // 额度面板：套餐档位 + 用量百分比 + 重置倒计时都是**个人遥测**。
+              // 不是凭证，但公开出图等于告诉所有人你买了哪档、这周用了多少、几点在干活。
+              const PCT = [12, 41, 3, 7, 24, 5]
+              let p = 0
+              for (const el of document.querySelectorAll('.quota-pct')) {
+                el.textContent = PCT[p++ % PCT.length] + '%'
+              }
+              for (const el of document.querySelectorAll('.quota-bar')) {
+                const fill = el.firstElementChild
+                if (fill && fill.style) fill.style.width = PCT[p++ % PCT.length] + '%'
+              }
+              for (const el of document.querySelectorAll('.quota-reset')) el.textContent = '3h00m'
+              for (const el of document.querySelectorAll('.quota-plan')) el.textContent = 'demo'
+              for (const el of document.querySelectorAll('.quota-money')) el.textContent = '$0.00'
               return true
             })()`
           )
