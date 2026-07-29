@@ -2437,7 +2437,11 @@ app.whenReady().then(async () => {
            ⚠️ **终端正文是画在 WebGL canvas 上的，DOM 替换不了它。**
            所以这个开关只处理 DOM 文本；终端内容要靠**缩到 LOD 档**
            （`TERMBOARD_ZOOM`）让它退化成色块 —— 而那恰好是这个产品的招牌视图。
-           两件配合才安全，只用其中一个都会漏。 */
+           两件配合才安全，只用其中一个都会漏。
+
+           ⚠️ 下面整段正文在**模板字符串**里，反斜杠会先被 TS 吃掉一层：
+           想让浏览器里的正则拿到字面点号必须写 `\\.`，写 `\.` 到那边只剩 `.`
+           （任意字符），脱敏正则会比预期宽。同理这段里不能出现裸反引号。 */
         if (process.env['TERMBOARD_DEMO']) {
           await win.webContents.executeJavaScript(
             `(() => {
@@ -2451,7 +2455,7 @@ app.whenReady().then(async () => {
               // 邮箱：连脱敏过的也换掉（a***@gmail.com 仍能看出首字母）
               for (const el of document.querySelectorAll('.quota-email, .quota-account-note')) {
                 el.textContent = el.textContent.replace(
-                  /[A-Za-z0-9._%+*-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g,
+                  /[A-Za-z0-9._%+*-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}/g,
                   'demo@example.com'
                 )
               }
