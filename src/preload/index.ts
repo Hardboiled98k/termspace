@@ -183,6 +183,7 @@ const api = {
   upsertPreset: (input: unknown): Promise<unknown> => ipcRenderer.invoke('preset:upsert', input),
   deletePreset: (id: string): Promise<unknown> => ipcRenderer.invoke('preset:delete', id),
   listIdentities: (): Promise<unknown> => ipcRenderer.invoke('identity:list'),
+  identityStoreHealth: (): Promise<string | null> => ipcRenderer.invoke('identity:health'),
   upsertIdentity: (input: unknown): Promise<unknown> =>
     ipcRenderer.invoke('identity:upsert', input),
   createSubscriptionIdentity: (input: unknown): Promise<unknown> =>

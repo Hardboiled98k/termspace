@@ -42,7 +42,8 @@ export function parseProcessTable(stdout: string): ProcessRow[] {
 export function providerFromProcessCommand(command: string): string | null {
   const head = command.trim().split(/\s+/, 2)
   const executable = head[0]?.split('/').at(-1)?.toLowerCase() ?? ''
-  const script = (head[1] ?? '').toLowerCase()
+  const isInterpreter = /^(?:node|python(?:\d+(?:\.\d+)*)?|bun|deno|ruby|sh|bash|zsh)$/.test(executable)
+  const script = isInterpreter ? (head[1] ?? '').toLowerCase() : ''
   const candidates = `${executable} ${script}`
   if (/(^|[/_-])cursor-agent(?:$|[\s./_-])/.test(candidates)) return 'cursor'
   if (/(^|[/_-])antigravity(?:-cli)?(?:$|[\s./_-])|(^|[/_-])agy(?:$|[\s./_-])/.test(candidates)) return 'antigravity'
@@ -53,18 +54,22 @@ export function providerFromProcessCommand(command: string): string | null {
 }
 
 export function descendantProvider(rootPid: number, rows: ProcessRow[]): string | null {
-  const pending = [rootPid]
-  const seen = new Set<number>()
-  let found: string | null = null
-  while (pending.length) {
-    const parent = pending.pop()!
-    if (seen.has(parent)) continue
-    seen.add(parent)
+  let parents = new Set([rootPid])
+  const seen = new Set([rootPid])
+  while (parents.size) {
+    const children: ProcessRow[] = []
     for (const row of rows) {
-      if (row.ppid !== parent) continue
-      pending.push(row.pid)
-      found = providerFromProcessCommand(row.command) ?? found
+      if (!parents.has(row.ppid) || seen.has(row.pid)) continue
+      children.push(row)
+      seen.add(row.pid)
     }
+    let nearest: { pid: number; provider: string } | null = null
+    for (const row of children) {
+      const provider = providerFromProcessCommand(row.command)
+      if (provider && (!nearest || row.pid < nearest.pid)) nearest = { pid: row.pid, provider }
+    }
+    if (nearest) return nearest.provider
+    parents = new Set(children.map((row) => row.pid))
   }
-  return found
+  return null
 }

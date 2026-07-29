@@ -32,8 +32,6 @@ export function quotaUnavailableText(a: QuotaDisplayInput): string {
   return '暂无数据'
 }
 
-export function maskEmail(email: string): string {
-  const at = email.indexOf('@')
-  if (at <= 0) return '***'
-  return `${email[0]}***${email.slice(at)}`
-}
+/* 脱敏实现在 `src/shared/mask.ts` —— 主进程也要用同一份。
+   这里只 re-export，**别在这里再写一份** */
+export { maskEmail } from '../../shared/mask.ts'

@@ -10,8 +10,7 @@ export interface ProviderManifestEntry {
   displayName: string
   commands: string[]
   authModes: ProviderAuthMode[]
-  fields: { id: string; label: string; envKey: string; secret: boolean; optional?: boolean }[]
-  envOperations: { key: string; action: 'set' | 'unset'; value?: string }[]
+  fields: { id: string; label: string; envKey: string; secret: boolean; optional?: boolean; default?: string }[]
   conflictVariables: string[]
   /** 隔离登录空间靠哪个变量。`isolationCapability === 'directory'` 时必须有 */
   homeEnvKey?: string
@@ -39,7 +38,6 @@ export const PROVIDERS: ProviderManifestEntry[] = [
     commands: ['codex'],
     authModes: ['system', 'isolated-subscription', 'api-key'],
     fields: [{ id: 'apiKey', label: 'OpenAI API key', envKey: 'OPENAI_API_KEY', secret: true }],
-    envOperations: [{ key: 'OPENAI_API_KEY', action: 'unset' }],
     /* **建隔离账号时这些会被全部 unset**。少删一个的后果是：
        新登录空间表面建成功了，CLI 却继续走继承来的 key —— 不报错，只是账单不吭声。
        宁可多列（`env -u` 删一个本来就不存在的变量是 no-op），也不能少列。 */
@@ -55,7 +53,6 @@ export const PROVIDERS: ProviderManifestEntry[] = [
     commands: ['claude'],
     authModes: ['system', 'isolated-subscription', 'api-key'],
     fields: [{ id: 'apiKey', label: 'Anthropic API key', envKey: 'ANTHROPIC_API_KEY', secret: true }],
-    envOperations: [{ key: 'ANTHROPIC_API_KEY', action: 'unset' }],
     conflictVariables: [
       'ANTHROPIC_API_KEY',
       'ANTHROPIC_AUTH_TOKEN',
@@ -73,7 +70,6 @@ export const PROVIDERS: ProviderManifestEntry[] = [
     commands: ['gemini'],
     authModes: ['system', 'isolated-subscription', 'api-key'],
     fields: [{ id: 'apiKey', label: 'Gemini API key', envKey: 'GEMINI_API_KEY', secret: true }],
-    envOperations: [{ key: 'GEMINI_API_KEY', action: 'unset' }],
     conflictVariables: ['GEMINI_API_KEY', 'GOOGLE_API_KEY', 'GOOGLE_APPLICATION_CREDENTIALS'],
     homeEnvKey: 'GEMINI_CLI_HOME',
     isolationCapability: 'directory',
@@ -86,7 +82,6 @@ export const PROVIDERS: ProviderManifestEntry[] = [
     commands: ['copilot'],
     authModes: ['system', 'api-key'],
     fields: [{ id: 'token', label: 'GitHub token', envKey: 'COPILOT_GITHUB_TOKEN', secret: true }],
-    envOperations: [],
     conflictVariables: ['GH_TOKEN', 'GITHUB_TOKEN'],
     isolationCapability: 'token-only',
     quotaCapability: 'officially_unavailable',
@@ -98,7 +93,6 @@ export const PROVIDERS: ProviderManifestEntry[] = [
     commands: ['cursor-agent'],
     authModes: ['system', 'api-key'],
     fields: [{ id: 'apiKey', label: 'Cursor API key', envKey: 'CURSOR_API_KEY', secret: true }],
-    envOperations: [],
     conflictVariables: [],
     isolationCapability: 'token-only',
     quotaCapability: 'officially_unavailable',
@@ -110,7 +104,6 @@ export const PROVIDERS: ProviderManifestEntry[] = [
     commands: ['agy'],
     authModes: ['system'],
     fields: [],
-    envOperations: [],
     conflictVariables: [],
     isolationCapability: 'system-shared',
     quotaCapability: 'officially_unavailable',
@@ -128,11 +121,9 @@ export const PROVIDERS: ProviderManifestEntry[] = [
         label: 'Base URL（可选）',
         envKey: 'OPENAI_BASE_URL',
         secret: false,
-        optional: true
+        optional: true,
+        default: 'https://openrouter.ai/api/v1'
       }
-    ],
-    envOperations: [
-      { key: 'OPENAI_BASE_URL', action: 'set', value: 'https://openrouter.ai/api/v1' }
     ],
     conflictVariables: [],
     isolationCapability: 'token-only',

@@ -98,7 +98,9 @@ async function load(): Promise<Identity[]> {
       await copyFile(file(), `${file()}.pre-envops.bak`).catch((err) =>
         console.error('凭证迁移前的备份没写成（迁移继续）：', err)
       )
-      await persist(cache)
+      await persist(cache).catch((err) =>
+        console.error('凭证迁移重写没成功（内存已是新格式，下次写入会补上）：', err)
+      )
     }
   } catch (e) {
     // **绝不 cache=[]**：那会让后续任何一次写入把整库抹平

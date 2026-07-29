@@ -9,6 +9,7 @@
  * 1. 视口中心是节点**中心**该在的位置 —— 忘了减半个尺寸，节点偏右下半个身位
  * 2. `viewport.x/y` 是画布原点在屏幕上的偏移（已乘过 zoom），反算方向写反时，
  *    **在缩放 1.0、平移 0 的默认状态下恰好是对的** —— 一动画布才暴露
+ * 3. 混合尺寸只比较左上角时，小节点会完整落进已有大节点内部。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -28,6 +29,15 @@ test('中心被占了就往右下错开，不叠在一起', () => {
   const second = placeNewNode({ x: 0, y: 0 }, SIZE, [first])
   assert.notDeepEqual(second, first)
   assert.ok(second.x > first.x && second.y > first.y, '错开方向要和 macOS 新窗口一致（右下）')
+})
+
+test('混合尺寸节点按中心判占用，凭证不会完整落进已有终端内部', () => {
+  const p = placeNewNode(
+    { x: 0, y: 0 },
+    { width: 420, height: 320 },
+    [{ x: -300, y: -200, width: 600, height: 400 }]
+  )
+  assert.notDeepEqual(p, { x: -210, y: -160 })
 })
 
 test('**错开按"占没占"判，不按节点总数**', () => {

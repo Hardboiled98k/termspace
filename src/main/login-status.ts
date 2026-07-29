@@ -12,6 +12,7 @@
  * 就是防止用户以为"拉了线就等于登录了"—— 判反了比不显示更糟。
  */
 
+import { maskEmail } from '../shared/mask.ts'
 export interface LoginStatus {
   state: 'in' | 'out' | 'unknown'
   detail: string
@@ -63,9 +64,12 @@ export function parseClaudeAuth(stdout: string, home?: string): LoginStatus {
   /* authMethod 要显示出来：`api_key` 意味着这个终端**走按量计费**，不是订阅额度。
      两者在界面上长得一样但账单完全不同 —— 这正是 identity 里那条
      "用户 shell export 的 ANTHROPIC_API_KEY 会让订阅号白开"的坑。 */
+  /* **邮箱拼进给人看的字符串之前必须先脱敏**（`email` 字段本身仍返回原值，
+     那是给程序区分两个同 provider 订阅号用的）。实测过的反例：
+     额度卡上「v***@…」和「max · abc123xyz@…」并列，一个脱敏一个明文。 */
   const bits = [
     j.subscriptionType ?? j.authMethod ?? '已登录',
-    j.email,
+    j.email ? maskEmail(j.email) : undefined,
     j.authMethod === 'api_key' ? '按量计费（非订阅）' : undefined
   ].filter(Boolean)
   return {

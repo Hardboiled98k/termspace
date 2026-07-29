@@ -20,6 +20,7 @@ import {
   renameIdentity,
   deleteIdentity,
   identityLoginStatus,
+  identityStoreError,
   resolveIdentityEnv
 } from './identity-store'
 import { PROVIDERS } from '../shared/provider-manifest.ts'
@@ -39,7 +40,13 @@ import { brokerRun } from './broker'
 import { getBrokerTarget, setBrokerTarget, deleteBrokerTarget } from './broker-store'
 import { handleBroker } from './broker-handler'
 import { sanitizeImportedWorkspace } from './workspace-import'
-import { createLedger, sortForReview, type Ledger } from './task-ledger'
+import {
+  createLedger,
+  sortForReview,
+  withLedger as recordWithLedger,
+  type Ledger,
+  type LedgerMeta
+} from './task-ledger'
 import { startRemoteApi, type RemoteApi } from './remote'
 import { startUpdater, type Updater } from './updater'
 import {
@@ -61,7 +68,6 @@ import { getSettings, setSettings, type Settings } from './settings-store'
 import { searchSkills, loadSkill, listSkills } from './skill-index'
 import {
   delegate,
-  classifyDelegateResult,
   noteTranscript,
   noteStatus,
   dropNode,
@@ -233,48 +239,19 @@ let boardSnapshot: unknown = null
  */
 let ledger: Ledger | null = null
 
-/**
- * 包一层记账。**默认分类判据用 delegate 自己的 classifyDelegateResult** ——
- * 那些话术是它产生的，调用方各猜一份就会改一处漏三处。
- *
- * 但 `classifyDelegateResult` 认的是 `派活被拒` / `派活失败` 这几个**前缀**，
- * 只有 delegate 会产出它们。别的链路（代理连接说「执行失败：」、「已拒绝：」）
- * 一个都匹配不上，于是**全部落到 `done`** —— 账本"失败优先排序"对它们直接失效，
- * 而且不会报错、只会安静地把出错的调用显示成成功。所以非 delegate 的调用方
- * 必须自带 `classify`。
- *
- * 记账失败绝不能影响正事：账本是观测。
- */
-async function withLedger(
-  meta: {
-    source: string
-    target: string
-    task: string
-    branch?: string
-    classify?: (text: string) => 'done' | 'failed' | 'timeout' | 'rejected'
-  },
-  run: () => Promise<string>
-): Promise<string> {
-  const id = await ledger
-    ?.start({ source: meta.source, target: meta.target, brief: meta.task, branch: meta.branch })
-    .catch(() => undefined)
-  let text = ''
-  try {
-    text = await run()
-    return text
-  } finally {
-    if (id) {
-      const state = (meta.classify ?? classifyDelegateResult)(text)
-      void ledger
-        ?.finish(id, {
-          state,
-          ...(state === 'done' ? { result: text } : { error: text })
-        })
-        .then(() => pushTasks())
-        .catch(() => undefined)
-    }
-  }
-}
+/** 主进程只绑定当前账本实例；可测试的记账控制流在 task-ledger.ts。 */
+const withLedger = (meta: LedgerMeta, run: () => Promise<string>): Promise<string> =>
+  recordWithLedger(
+    ledger && {
+      ...ledger,
+      finish: async (id, patch) => {
+        await ledger?.finish(id, patch)
+        pushTasks()
+      }
+    },
+    meta,
+    run
+  )
 
 /**
  * 这个终端此刻落在哪个 worktree 分支上。
@@ -1382,6 +1359,11 @@ const afterIdentityChange = <T,>(r: T): T => {
    凭证库是这个 app 里最敏感的东西（改一条 identity 就能把某个终端的 CODEX_HOME 指走），
    来源判定必须和同组的其它路由一致。 */
 ipcMain.handle('identity:list', (e) => (fromMainWin(e) ? listIdentities() : []))
+/* 凭证库的健康状态。**必须有一个出口** —— `identityStoreError()` 原来是死代码，
+   于是解密失败时界面显示的是「还没有凭证」，那是**假话**：库还在、只是读不出来，
+   而任何写入都会被拒（防止拿残缺视图覆盖真库）。用户看到的是"空列表 + 保存报错"，
+   完全对不上。这条 IPC 让面板能如实说出"读不出来，已进入只读保护"。 */
+ipcMain.handle('identity:health', (e) => (fromMainWin(e) ? identityStoreError() : null))
 ipcMain.handle('identity:upsert', async (e, input: Parameters<typeof upsertIdentity>[0]) =>
   fromMainWin(e) ? afterIdentityChange(await upsertIdentity(input)) : []
 )
@@ -1450,8 +1432,10 @@ ipcMain.handle('quota:scanUsage', async (e, ids: unknown) => {
   return providers
 })
 
-ipcMain.handle('quota:rescan', (e) => {
-  if (fromMainWin(e)) void syncQuotaAccountsRef?.()
+ipcMain.handle('quota:rescan', async (e) => {
+  if (!fromMainWin(e)) return
+  await syncQuotaAccountsRef?.()
+  quotaHub?.refresh()
 })
 
 // ── F2 上下文：每个简报节点一个文件，按画布连线决定注入给谁 ──
@@ -1668,6 +1652,9 @@ ipcMain.handle('broker:save', async (e, input: unknown) => {
   }
   const id = b.id || randomUUID()
   const st = await getSettings()
+  if (st.brokers.some((x) => x.id !== id && x.kind === b.kind && x.name === b.name)) {
+    return { ok: false, error: '已有同名同类型的连接，先删掉那个' }
+  }
   const rest = st.brokers.filter((x) => x.id !== id)
   const next = [...rest, { id, name: b.name, kind: b.kind, readOnly: b.readOnly !== false }]
   try {

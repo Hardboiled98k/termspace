@@ -137,11 +137,25 @@ export function apiKeyUnavailable(a: QuotaAccount, presence: AccountPresence): A
   }
 }
 
+/** 统一选择真实采集结果或 API key 兜底，避免测试和生产各写一套判定顺序 */
+export function pickQuota(
+  a: QuotaAccount,
+  presence: AccountPresence,
+  r: AccountQuota | null
+): AccountQuota | null {
+  if (r && hasRealWindows(r)) return decorateQuota(a, presence, r)
+  if (a.kind === 'api-key') return apiKeyUnavailable(a, presence)
+  if (r) return decorateQuota(a, presence, r)
+  return null
+}
+
 export function startQuotaHub(
   homeDir: string,
   onUpdate: (list: AccountQuota[]) => void,
   /** 只给测试用：替换真采集器。生产不传 —— 真采集要打网络、跑子进程，测不了调度逻辑 */
-  collectOverride?: (a: QuotaAccount) => Promise<AccountQuota>
+  collectOverride?: (a: QuotaAccount) => Promise<AccountQuota>,
+  /** 只给测试用：观察 collectOne 是否调用底层 probe；不替换 collectOne 自身的判定 */
+  probeOverride?: (a: QuotaAccount) => Promise<AccountQuota | null>
 ): QuotaHub {
   let accounts: QuotaAccount[] = []
   const results = new Map<string, AccountQuota>()
@@ -150,10 +164,9 @@ export function startQuotaHub(
 
   const collectOne = async (a: QuotaAccount): Promise<AccountQuota> => {
     const presence = defaultPresence(a)
-    const decorate = (r: AccountQuota): AccountQuota => decorateQuota(a, presence, r)
-    const apiKeyFallback = (): AccountQuota => apiKeyUnavailable(a, presence)
     try {
       const probe = async (): Promise<AccountQuota | null> => {
+        if (probeOverride) return probeOverride(a)
         if (a.provider === 'codex') {
           return collectCodex({
             accountId: a.accountId,
@@ -173,7 +186,11 @@ export function startQuotaHub(
         }
         return null
       }
-      const r = await probe()
+      const own =
+        a.accountId.startsWith('system:') ||
+        a.env['CODEX_HOME'] ||
+        a.env['CLAUDE_CONFIG_DIR']
+      const r = own ? await probe() : null
       /* **`kind` 绝不能在采集之前短路**（实测回归：本机 `OPENAI_API_KEY` 在登录 shell 里
          export 着，于是 `billingKind` 把 `system:codex` 判成 api-key，
          而 codex CLI 实际走的是 OAuth 订阅 —— 真实的 `pro` + 周窗 1% 被三行
@@ -181,9 +198,8 @@ export function startQuotaHub(
          **订阅和 API key 可以同时存在**，而"采集器真拿到了窗口"是观测，
          "env 里有 key"只是推断 —— 观测赢。
          只有采集器确实什么都没拿到时，才退回按量计费那句话。 */
-      if (r && (r.state === 'ok' || r.state === 'stale') && r.windows.length) return decorate(r)
-      if (a.kind === 'api-key') return apiKeyFallback()
-      if (r) return decorate(r)
+      const picked = pickQuota(a, presence, r)
+      if (picked) return picked
     } catch (e) {
       // 采集器不该抛，但真抛了也不能让整轮挂掉
       return {
@@ -216,7 +232,7 @@ export function startQuotaHub(
     }
   }
 
-  /* 采集期间来的强制刷新。**不能直接丢** —— 一轮采集要几秒（codex 未登录时硬超时 25s），
+  /* 采集期间来的强制刷新。**不能直接丢** —— 一轮采集要几秒（codex 未登录时硬超时 15s），
      用户正好在这段时间里换了凭证的隔离目录，那次 setAccounts 的 run(true) 就被
      `if (running) return` 吃掉了，界面上继续挂着旧号的额度直到下一个 5 分钟周期。
      而且**正在跑的那轮用的是旧 accounts**（Promise.all 的入参在 await 之前就求值完了），

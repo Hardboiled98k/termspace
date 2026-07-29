@@ -2,7 +2,7 @@
  * 钉住 `tb db` / `tb ssh` 曾经绕过授权和任务账本的漏洞。
  *
  * 这里测的是可注入依赖的主进程 handler：拒绝授权或缺失 source 时绝不能触发
- * brokerRun；允许后必须留下 start + finish，并且授权详情、账本和返回文本都不能泄露连接串。
+ * brokerRun；profile 换 id 后不能继承旧授权；成功或失败的返回文本都不能泄露连接串。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -79,8 +79,27 @@ test('**授权 key 必须带 kind**：db:prod 的授权不能白送给 ssh:prod'
   await handleBroker(deps, 'term-1', 'ssh', 'prod', 'ls')
 
   const targets = calls.authorize.map((a) => a.target)
-  assert.deepEqual(targets, ['broker:postgres:prod', 'broker:ssh:prod'])
+  assert.deepEqual(targets, ['broker:postgres:prod#p1', 'broker:ssh:prod#s1'])
   assert.notEqual(targets[0], targets[1], '两种连接共用一个授权 key')
+})
+
+test('同名同类型连接换了 id 后必须使用不同授权 key', async () => {
+  const { deps, calls } = makeDeps()
+  let id = 'old-profile-id'
+  deps.getSettings = async () => ({
+    brokers: [{ id, name: 'prod', kind: 'postgres', readOnly: true }]
+  })
+
+  await handleBroker(deps, 'term-1', 'postgres', 'prod', 'select 1')
+  id = 'new-profile-id'
+  await handleBroker(deps, 'term-1', 'postgres', 'prod', 'delete from users')
+
+  const targets = calls.authorize.map((a) => a.target)
+  assert.deepEqual(targets, [
+    'broker:postgres:prod#old-prof',
+    'broker:postgres:prod#new-prof'
+  ])
+  assert.notEqual(targets[0], targets[1], '新 profile 继承了旧 profile 的授权')
 })
 
 test('**失败的代理调用不能在账本里记成 done**', async () => {
@@ -152,4 +171,10 @@ test('broker 返回值里的连接串也会被隐去', async () => {
 
   assert.ok(!result.includes(secret))
   assert.match(result, /«已隐去»/)
+
+  deps.run = async () => ({ ok: false, output: '', error: `psql: ${secret}` })
+  const failed = await handleBroker(deps, 'term-1', 'postgres', 'prod', 'select 1')
+
+  assert.ok(!failed.includes(secret))
+  assert.match(failed, /«已隐去»/)
 })

@@ -2,7 +2,7 @@
  * 额度采集的调度。
  *
  * 钉的是一条：**采集期间换了账号，那次刷新不能被丢掉。**
- * 一轮采集要几秒（codex 未登录时硬超时 25s），用户正好在这段时间里
+ * 一轮采集要几秒（codex 未登录时硬超时 15s），用户正好在这段时间里
  * 把凭证的 CODEX_HOME 改到另一个订阅号 —— 老代码里 `if (running) return`
  * 把那次 run(true) 吃掉了，而正在跑的那轮用的还是**旧账号列表**
  * （Promise.all 的入参在 await 之前就求值完了），它结束时还会用旧结果
@@ -34,7 +34,7 @@ const fake = (a: QuotaAccount): AccountQuota => ({
 
 const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 10))
 
-test('采集期间换账号 → 那一轮结束后自动补跑，界面最终看到的是新账号', async () => {
+test('采集期间更换账号后会自动补跑并最终广播新账号。', async () => {
   const seen: string[][] = []
   let release = (): void => {}
   const gate = new Promise<void>((r) => (release = r))
@@ -75,7 +75,7 @@ test('采集期间换账号 → 那一轮结束后自动补跑，界面最终看
   )
 })
 
-test('指纹一样时不重采（改个不影响结果的东西不该触发网络请求）', async () => {
+test('账号指纹相同时不会重新采集。', async () => {
   let calls = 0
   const hub = startQuotaHub(
     '/tmp',

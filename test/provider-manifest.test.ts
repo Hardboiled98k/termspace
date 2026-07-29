@@ -11,6 +11,9 @@
  *
  * 全部在本机 `--help` 逐个核对过（2026-07-29）。
  * 所以这里的判据不是"字段非空"，而是**内容和该 CLI 的真实形状对得上**。
+ *
+ * 还钉住 OpenRouter 默认 Base URL 必须经过 API key 表单的保存路径落库；
+ * 不能只写在没有消费者的 manifest 字段里，造成看似声明、实际丢失。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -97,6 +100,26 @@ test('声称能目录隔离的，必须写了靠哪个变量隔离', () => {
 
 test('清单有版本号（将来加字段要靠它做迁移）', () => {
   assert.ok(Number.isInteger(PROVIDER_MANIFEST_VERSION) && PROVIDER_MANIFEST_VERSION >= 1)
+})
+
+test('OpenRouter 的默认 Base URL 会随 API key 表单一起落库', () => {
+  const spec = byId('openrouter')
+  const rows = spec.fields.map((field) => ({
+    key: field.envKey,
+    action: 'set' as const,
+    value: field.default ?? (field.secret ? 'test-api-key' : '')
+  }))
+  const envOps = spec.fields
+    .map((field) => {
+      const row = rows.find((candidate) => candidate.key === field.envKey)
+      return row?.value ? { key: field.envKey, action: 'set' as const, value: row.value } : null
+    })
+    .filter((operation): operation is { key: string; action: 'set'; value: string } => !!operation)
+
+  assert.deepEqual(
+    envOps.find((operation) => operation.key === 'OPENAI_BASE_URL'),
+    { key: 'OPENAI_BASE_URL', action: 'set', value: 'https://openrouter.ai/api/v1' }
+  )
 })
 
 // ── 真去问 CLI：manifest 只能自洽，外部命令变了它不会知道 ──

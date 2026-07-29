@@ -40,7 +40,11 @@ export function placeNewNode(
 ): { x: number; y: number } {
   const base = { x: Math.round(center.x - size.width / 2), y: Math.round(center.y - size.height / 2) }
   const taken = (p: { x: number; y: number }): boolean =>
-    existing.some((e) => Math.abs(e.x - p.x) < NEAR && Math.abs(e.y - p.y) < NEAR)
+    existing.some(
+      (e) =>
+        Math.abs(e.x + (e.width ?? size.width) / 2 - (p.x + size.width / 2)) < NEAR &&
+        Math.abs(e.y + (e.height ?? size.height) / 2 - (p.y + size.height / 2)) < NEAR
+    )
 
   let p = base
   for (let i = 0; i < MAX_TRIES && taken(p); i++) {

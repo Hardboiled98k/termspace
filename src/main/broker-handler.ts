@@ -63,11 +63,11 @@ export async function handleBroker(
   /* 授权 key 必须带 kind。`db` 和 `ssh` 各有一个都叫 `prod` 的连接是完全合法的
      （`find` 就是按 name + kind 两个条件匹配的），key 只用 name 的话，
      用户给 `tb db prod` 点的那次「本次运行内不再询问」会把 `tb ssh prod` 一起放行。 */
-  const authTarget = `broker:${kind}:${name}`
+  const profileLabel = `broker:${kind}:${name}`
 
   if (!source) {
     // 拿不到调用方就没法授权 —— fail-closed，且**在读连接串之前**就返回
-    return `${DENIED}调用方节点未知，未获授权使用 ${authTarget}。`
+    return `${DENIED}调用方节点未知，未获授权使用 ${profileLabel}。`
   }
 
   const cfg = await deps.getSettings()
@@ -76,6 +76,7 @@ export async function handleBroker(
     const avail = cfg.brokers.filter((b) => b.kind === kind).map((b) => b.name)
     return `没有名为「${name}」的${kind}连接。${avail.length ? `可用：${avail.join('、')}` : '去设置 → 代理连接里加一个。'}`
   }
+  const authTarget = `${profileLabel}#${prof.id.slice(0, 8)}`
 
   const target = await deps.getBrokerTarget(prof.id)
   if (!target) return `连接「${name}」还没配连接串（设置 → 代理连接）`

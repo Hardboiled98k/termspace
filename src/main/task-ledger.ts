@@ -20,6 +20,7 @@ import { appendFile, readFile, writeFile, rename, mkdir } from 'node:fs/promises
 import { existsSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
+import { classifyDelegateResult } from './delegate.ts'
 
 export type TaskState = 'running' | 'done' | 'failed' | 'timeout' | 'rejected'
 
@@ -117,6 +118,50 @@ export interface Ledger {
   start: (r: Omit<TaskRecord, 'id' | 'startedAt' | 'state'>) => Promise<string>
   finish: (id: string, patch: Partial<TaskRecord> & { state: TaskState }) => Promise<void>
   list: () => Promise<TaskRecord[]>
+}
+
+type LedgerState = 'done' | 'failed' | 'timeout' | 'rejected'
+
+export interface LedgerMeta {
+  source: string
+  target: string
+  task: string
+  branch?: string
+  classify?: (text: string) => LedgerState
+}
+
+/**
+ * 包一层记账。run 抛异常时必须记为 failed，并把原异常继续抛给调用方；
+ * 账本只是观测层，不能把崩溃伪装成成功或改变控制流。
+ */
+export async function withLedger(
+  ledger: Ledger | null,
+  meta: LedgerMeta,
+  run: () => Promise<string>
+): Promise<string> {
+  const id = await ledger
+    ?.start({ source: meta.source, target: meta.target, brief: meta.task, branch: meta.branch })
+    .catch(() => undefined)
+  let text = ''
+  let crashed = false
+  try {
+    text = await run()
+    return text
+  } catch (e) {
+    crashed = true
+    text = String((e as Error)?.message ?? e).slice(0, 500)
+    throw e
+  } finally {
+    if (id) {
+      const state = crashed ? 'failed' : (meta.classify ?? classifyDelegateResult)(text)
+      void ledger
+        ?.finish(id, {
+          state,
+          ...(state === 'done' ? { result: text } : { error: text })
+        })
+        .catch(() => undefined)
+    }
+  }
 }
 
 export function createLedger(file: string, now: () => number = Date.now): Ledger {

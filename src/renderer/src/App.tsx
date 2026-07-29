@@ -374,33 +374,34 @@ function BoardHUD({
   const [quota, setQuota] = useState<AccountQuota[]>([])
   const [processAgents, setProcessAgents] = useState<Record<string, string>>({})
   const [collapsed, setCollapsed] = useState(false)
+  const scanGeneration = useRef(0)
   useEffect(() => window.termspace.onQuota(setQuota), [])
 
   const terms = nodes.filter((n): n is TermNode => n.type === 'terminal')
   const termIds = terms.map((n) => n.id).toSorted().join('\n')
+  const scan = useCallback((): void => {
+    if (document.hidden) return
+    const generation = ++scanGeneration.current
+    void window.termspace.scanQuotaUsage(termIds ? termIds.split('\n') : []).then((result) => {
+      if (scanGeneration.current === generation) setProcessAgents(result)
+    })
+  }, [termIds])
   /* 进程树扫描：每轮两次 `ps`（先只取 PID 图、再只对本 pane 的子孙取 argv）。
      **窗口不可见时必须跳过** —— 这个 app 是开一整天的，后台每 4 秒唤醒两个进程
      纯属白烧电，而"用户手敲了 codex"这件事在他看不见界面时也没人要看。
      间隔也从 4s 放到 10s：这是"补上 hook 报不到的那部分"的兜底信号，
      不是需要秒级响应的东西（真 agent 会话有 hook，那条路是事件驱动的）。 */
   useEffect(() => {
-    let alive = true
-    const scan = (): void => {
-      if (document.hidden) return
-      void window.termspace.scanQuotaUsage(termIds ? termIds.split('\n') : []).then((r) => {
-        if (alive) setProcessAgents(r)
-      })
-    }
     scan()
     const timer = window.setInterval(scan, 10_000)
     // 切回前台立刻补一轮，否则最长要等 10 秒界面才追上
     document.addEventListener('visibilitychange', scan)
     return () => {
-      alive = false
+      scanGeneration.current++
       window.clearInterval(timer)
       document.removeEventListener('visibilitychange', scan)
     }
-  }, [termIds])
+  }, [scan])
   const observedAgents = { ...processAgents, ...liveAgents }
   const running = terms.filter((n) => n.data.status === 'running').length
   const attention = terms.filter((n) => n.data.status === 'attention').length
@@ -484,7 +485,10 @@ function BoardHUD({
                 <button
                   className="quota-rescan"
                   title="重新扫描本机账号与终端进程"
-                  onClick={() => void window.termspace.rescanAccounts()}
+                  onClick={() => {
+                    void window.termspace.rescanAccounts()
+                    scan()
+                  }}
                 >
                   ↻
                 </button>
@@ -571,6 +575,13 @@ function IdentityPanel({
   const [editingId, setEditingId] = useState<string>()
   const [presentVars, setPresentVars] = useState<string[]>([])
   const [error, setError] = useState('')
+  /* 凭证库读不出来时（换机器 / 钥匙串变更 / 磁盘半坏），列表会是空的而库还在。
+     不显示这条的话界面说的是「还没有凭证」—— **那是假话**，且用户新建一个
+     会发现保存被拒，两条信息完全对不上。 */
+  const [storeError, setStoreError] = useState<string | null>(null)
+  useEffect(() => {
+    void window.termspace.identityStoreHealth().then(setStoreError)
+  }, [identities])
 
   const selectedSpec = PROVIDERS.find((p) => p.id === provider)
 
@@ -647,7 +658,14 @@ function IdentityPanel({
     <div className="settings-section">
         <h3 className="settings-h">凭证管理</h3>
         <div className="identity-list">
-          {identities.length === 0 && <div className="identity-empty">还没有凭证</div>}
+          {storeError ? (
+            <div className="identity-warning">
+              ⚠ 凭证库读不出来（{storeError}），已进入只读保护。库还在、没有被覆盖 ——
+              换过机器或钥匙串变更时会这样。修好之前保存会被拒绝。
+            </div>
+          ) : (
+            identities.length === 0 && <div className="identity-empty">还没有凭证</div>
+          )}
           {identities.map((i) => (
             <div key={i.id} className="identity-row">
               <span className={`identity-provider ${i.provider}`}>{i.provider}</span>
@@ -802,7 +820,7 @@ function IdentityPanel({
                   const next = e.currentTarget.value as IdentityMeta['provider']
                   setProvider(next)
                   const spec = PROVIDERS.find((p) => p.id === next)
-                  setRows((spec?.fields ?? []).map((f) => ({ key: f.envKey, action: 'set', value: '' })))
+                  setRows((spec?.fields ?? []).map((f) => ({ key: f.envKey, action: 'set', value: f.default ?? '' })))
                 }}>
                   {PROVIDERS.filter((p) => p.authModes.includes('api-key')).map((p) => (
                     <option key={p.id} value={p.id}>{p.displayName}</option>
@@ -1053,7 +1071,10 @@ function Board(): React.JSX.Element {
      老实现用画布绝对坐标的固定网格，把画布拖走之后新建的节点会出现在几千像素外，
      每次都要满画布找 —— 用户实测报的就是这个。 */
   const centerOf = useCallback(
-    (size: { width: number; height: number }, existing: { x: number; y: number }[]) => {
+    (
+      size: { width: number; height: number },
+      existing: { x: number; y: number; width?: number; height?: number }[]
+    ) => {
       const pane = document.querySelector('.react-flow__viewport')?.parentElement
       const r = pane?.getBoundingClientRect()
       const center = viewportCenter(getViewport(), {
@@ -1708,7 +1729,16 @@ function Board(): React.JSX.Element {
                   // 有父节点时 position 是**相对组身**的，用绝对坐标会飞到组外
                   position: { x: 24, y: 56 + (n % 3) * 40 }
                 }
-              : { position: centerOf(DEFAULT_SIZE, ns.map((x) => x.position)) }),
+              : {
+                  position: centerOf(
+                    DEFAULT_SIZE,
+                    ns.map((x) => ({
+                      ...x.position,
+                      width: x.width ?? x.measured?.width,
+                      height: x.height ?? x.measured?.height
+                    }))
+                  )
+                }),
             ...DEFAULT_SIZE,
             data: {
               title: preset ? `${preset.name} · ${id}` : `zsh · ${id}`,
@@ -1742,7 +1772,14 @@ function Board(): React.JSX.Element {
           {
             id: newId,
             type: 'browser' as const,
-            position: centerOf({ width: 640, height: 460 }, ns.map((x) => x.position)),
+            position: centerOf(
+              { width: 640, height: 460 },
+              ns.map((x) => ({
+                ...x.position,
+                width: x.width ?? x.measured?.width,
+                height: x.height ?? x.measured?.height
+              }))
+            ),
             width: 640,
             height: 460,
             data: { url: url || 'https://www.google.com' }
@@ -1767,7 +1804,14 @@ function Board(): React.JSX.Element {
         {
           id: newId,
           type: 'credential' as const,
-          position: centerOf({ width: 220, height: 132 }, ns.map((x) => x.position)),
+          position: centerOf(
+            { width: 220, height: 132 },
+            ns.map((x) => ({
+              ...x.position,
+              width: x.width ?? x.measured?.width,
+              height: x.height ?? x.measured?.height
+            }))
+          ),
           width: 220,
           height: 132,
           data: { identityId }
@@ -1790,7 +1834,14 @@ function Board(): React.JSX.Element {
         {
           id: `ctx-${activeProject}`,
           type: 'context' as const,
-          position: centerOf({ width: 420, height: 320 }, ns.map((x) => x.position)),
+          position: centerOf(
+            { width: 420, height: 320 },
+            ns.map((x) => ({
+              ...x.position,
+              width: x.width ?? x.measured?.width,
+              height: x.height ?? x.measured?.height
+            }))
+          ),
           width: 420,
           height: 320,
           data: { title: '共享上下文' }

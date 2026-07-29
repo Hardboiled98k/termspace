@@ -316,6 +316,7 @@ interface TermspaceApi {
   listPresets: () => Promise<Preset[]>
   upsertPreset: (input: Omit<Preset, 'id'> & { id?: string }) => Promise<Preset[]>
   deletePreset: (id: string) => Promise<Preset[]>
+  identityStoreHealth: () => Promise<string | null>
   listIdentities: () => Promise<IdentityMeta[]>
   upsertIdentity: (input: {
     id?: string

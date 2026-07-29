@@ -27,6 +27,7 @@ interface LegacyIdentity {
 
 /** 旧的空字符串本来表示删除变量；迁移时绝不能漂成 set 空串。 */
 export function migrateIdentity(raw: LegacyIdentity): StoredIdentity {
+  // envOps 出现前没有任何版本会同时写 env；新格式又不写 env，所以优先 envOps 不会丢掉有效旧数据。
   const envOps = Array.isArray(raw.envOps)
     ? raw.envOps
     : Object.entries(raw.env ?? {}).map(([key, value]): EnvOp =>
@@ -54,4 +55,3 @@ export function identityMeta(i: StoredIdentity): {
     envOps: i.envOps.map((op) => ({ key: op.key, action: op.action }))
   }
 }
-
