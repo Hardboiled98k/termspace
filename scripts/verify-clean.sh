@@ -62,8 +62,8 @@ else say "作者/提交者" "全部 noreply ✅"; fi
 RULES=$(cat <<'EOF'
 邮箱┆[A-Za-z0-9._%+*-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}┆^(alice@example\.com|alice@gmail\.com|abc123xyz@privaterelay\.appleid\.com|bob@corp\.io|carol@x\.org|demo@example\.com|user@example\.com|user@host\.example|old@z\.com|x@y\.com|a@b\.com|a@b\.sql|git@github\.com|root@prod\.internal|password@example\.com|s3cret@db\.example\.com|S3cr3tPassw0rdVeryLong@db-primary\.internal|TOPSECRET@prod\.example|pe\*\*\*@mail\.com|wo\*\*\*@mail\.com|a\*\*\*@gmail\.com|a\*\*\*@privaterelay\.appleid\.com|Hardboiled98k@users\.noreply\.github\.com|noreply@anthropic\.com)$
 MAC┆\b[0-9a-fA-F]{2}(:[0-9a-fA-F]{2}){5}\b┆^(02:00:00:00:00:01|00:00:00:00:00:00)$
-私网/CGNAT IPv4┆\b(10\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|172\.(1[6-9]|2[0-9]|3[01])\.[0-9]{1,3}\.[0-9]{1,3}|192\.168\.[0-9]{1,3}\.[0-9]{1,3}|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]{1,3}\.[0-9]{1,3})\b┆^(10\.0\.0\.[0-9]{1,3}|172\.19\.0\.1|192\.168\.1\.1|100\.64\.0\.1|100\.71\.3\.42|100\.100\.1\.1|100\.101\.102\.103|100\.127\.255\.254)$
-家目录（含编码形式）┆(/Users/[a-zA-Z][a-zA-Z0-9_-]+|-Users-[a-zA-Z][a-zA-Z0-9_-]+-)┆^(/Users/(you|x|me|other|newbie|somebody|test|demo|alice)|-Users-you-)$
+私网/CGNAT IPv4┆\b(10\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|172\.(1[6-9]|2[0-9]|3[01])\.[0-9]{1,3}\.[0-9]{1,3}|192\.168\.[0-9]{1,3}\.[0-9]{1,3}|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]{1,3}\.[0-9]{1,3})\b┆^(10\.0\.0\.[0-9]{1,3}|172\.19\.0\.1|192\.168\.1\.1|100\.64\.0\.1|100\.71\.3\.42|100\.100\.1\.1|100\.101\.102\.103|100\.127\.255\.254|100\.64\.0\.0|172\.16\.0\.0|10\.0\.0\.0|192\.168\.0\.0)$
+家目录（含编码形式）┆(/Users/[a-zA-Z][a-zA-Z0-9_-]+|-Users-[a-zA-Z][a-zA-Z0-9_-]+-)┆^(/Users/(you|x|me|other|newbie|somebody|test|demo|alice)$|-Users-you-)
 凭证前缀┆sk-[A-Za-z0-9_-]{16,}|ghp_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|xox[baprs]-[0-9A-Za-z-]{20,}|glpat-[0-9A-Za-z_-]{20}|-----BEGIN[A-Z ]*PRIVATE KEY-----┆^sk-SECRET-DO-NOT-LEAK$
 JWT┆eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}┆^$
 长 hex（账号 id / 令牌）┆\b[0-9a-f]{32,64}\b┆^(abcdef0123456789abcdef0123456789|eddef6be8dcabf76651893ecd2548866658f339f)$
