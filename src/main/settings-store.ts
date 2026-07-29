@@ -80,6 +80,12 @@ export interface Settings {
  * ⚠️ 信任根是**这个目录的控制权**，代码签名是最后一道而不是第一道
  * （见 CLAUDE.md「自动更新」那张表）。所以它虽然可改，UI 上要显著显示
  * 当前生效的域名 —— 被诱导改源等于换掉了信任根。
+ *
+ * 📌 **fork 这个仓库的人请改掉这个值。** 保持原样的话，你的构建会去查
+ * 上游的更新源。下载下来的包**装不上**（Squirrel 要求候选包的签名满足
+ * 当前 app 的 designated requirement，签名主体不同就会被拒），
+ * 所以不是安全问题 —— 但你的用户会看到一个永远失败的更新，
+ * 而流量记在上游的账上。要么指向你自己的目录，要么设成空串关掉更新。
  */
 export const OFFICIAL_FEED = 'https://updates.termspace.app/'
 
