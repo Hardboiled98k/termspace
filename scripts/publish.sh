@@ -99,13 +99,20 @@ for f in "$ZIP_ARM" "$ZIP_X64" "$YML"; do
   [ -f "$f" ] || { echo "缺 $f —— 先跑 npm run dist:signed（要出双架构）" >&2; exit 1; }
 done
 
-# yml 里列的 zip 必须都在本地 —— 否则等于对外宣告一个下不到的文件。
-# 反过来不必查：dmg 也在 files 里，但 updater 只挑 zip，不影响。
+# **yml 里列的每一个文件都必须在本地**，不分类型。
+#
+# ⚠️ 这里原来只查 .zip，理由写在注释里：「dmg 也在 files 里，但 updater
+# 只挑 zip，不影响」。那句话在**只有自动更新、没有下载页**的时候是对的。
+# 有了官网之后，下载页的主按钮就是从这份 yml 里挑 dmg —— 于是 0.3.0 发布后
+# 两个 dmg 从没上传过、线上 404，而发布脚本一路绿灯。
+# 教训：**判据不要按用途做类型白名单**，用途会变而白名单不会跟着变。
+# yml 广播了什么，就必须传什么、验什么。
+FILES=()
 while read -r u; do
-  case "$u" in
-    *.zip) [ -f "dist/$u" ] || { echo "yml 列了 $u 但 dist/ 里没有" >&2; exit 1; } ;;
-  esac
+  [ -f "dist/$u" ] || { echo "yml 列了 $u 但 dist/ 里没有" >&2; exit 1; }
+  FILES+=("$u")
 done < <(awk '/^  - url: /{print $3}' "$YML")
+[ ${#FILES[@]} -gt 0 ] || { echo "latest-mac.yml 的 files 是空的" >&2; exit 1; }
 
 # **反方向也要查：两个架构都必须出现在 yml 的 files 里。**
 # 这条是踩出来的：分两次 electron-builder 调用（先 x64 后 arm64）时，
@@ -190,11 +197,11 @@ fi
 
 # **先传 zip 再传 yml**：反过来的话，客户端在这两次传输之间检查更新，
 # 会读到新版本的 yml 却下载到一个还不存在的 zip。
-echo "→ 上传（先 zip 后 yml）"
-for z in "$ZIP_ARM" "$ZIP_X64"; do
-  # zip 文件名带版本号，内容永不改变 → 可以长缓存
-  put "$z" "$(basename "$z")" "public, max-age=31536000, immutable"
-  [ -f "${z}.blockmap" ] && put "${z}.blockmap" "$(basename "${z}").blockmap" "public, max-age=31536000, immutable"
+echo "→ 上传（先产物后 yml，共 ${#FILES[@]} 个）"
+for b in "${FILES[@]}"; do
+  # 文件名带版本号，内容永不改变 → 可以长缓存
+  put "dist/$b" "$b" "public, max-age=31536000, immutable"
+  [ -f "dist/${b}.blockmap" ] && put "dist/${b}.blockmap" "${b}.blockmap" "public, max-age=31536000, immutable"
 done
 # **yml 绝不能被缓存**：它是"有没有新版本"的唯一判据。缓存住了你发了新版
 # 客户端也发现不了，而你自己那台机很可能命中另一个边缘节点、显示一切正常。
@@ -236,11 +243,26 @@ if [ -n "$CACHE_BAD" ] && [ "${ALLOW_CACHED_YML:-}" != "1" ]; then
   exit 1
 fi
 
-# 两个 zip 都要真取得到 —— 只验一个的话，另一个架构的用户是唯一的发现者
-for z in "$ZIP_ARM" "$ZIP_X64"; do
-  b=$(basename "$z")
-  zcode=$(curl -sS -o /dev/null -w '%{http_code}' -r 0-1 "${PUBLISH_URL}${b}")
-  [ "$zcode" = "200" ] || [ "$zcode" = "206" ] || { echo "取不到 ${b}（HTTP ${zcode}）" >&2; exit 1; }
+# **yml 广播的每一个文件都要真取得到** —— 传上去 ≠ 取得到（桶权限、自定义域、
+# CDN 规则都可能挡），而漏验哪一个，用哪一个的人就是唯一的发现者：
+# 漏验 x64 的 zip → Intel 用户更新永远失败；漏验 dmg → 官网下载按钮是死链。
+# 000 是 curl 自己没连上（超时/DNS），不是服务器的答复 —— 必须重试再判，
+# 否则一次网络抖动会把一次好端端的发布判成失败。
+for b in "${FILES[@]}"; do
+  fcode=000
+  for try in 1 2 3; do
+    # ⚠️ 别写 `$(curl -w '%{http_code}' ... || echo 000)`：curl 连不上时
+    # **`-w` 已经打印了 `000`**，`|| echo 000` 会再追加一个 → 变量是 "000000"，
+    # 于是 `[ "$fcode" != "000" ]` 成立、重试循环第一次就退出。
+    # 判成功只认 200/206，其余（含空、含 000）一律继续重试。
+    fcode=$(curl -sS -o /dev/null -w '%{http_code}' -r 0-1 -m 40 "${PUBLISH_URL}${b}" 2>/dev/null)
+    case "$fcode" in 200|206) break ;; esac
+    sleep 3
+  done
+  case "$fcode" in
+    200|206) printf '   %-44s %s ✅\n' "$b" "$fcode" ;;
+    *) echo "❌ 取不到 ${b}（HTTP ${fcode:-无响应}）—— yml 在广播一个下不到的文件" >&2; exit 1 ;;
+  esac
 done
 
 echo "✅ $VERSION 已发布。客户端 6 小时内会自己发现，或在设置 → 更新里点「立即检查」。"
