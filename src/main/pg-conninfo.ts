@@ -34,6 +34,8 @@
  * 那正好是现在这个 bug。
  */
 
+import { scrub } from './secret-scrub.ts'
+
 export interface PgConn {
   /** 传给子进程的 PG* 变量 */
   env: Record<string, string>
@@ -43,38 +45,63 @@ export interface PgConn {
   passwords: string[]
 }
 
-/** URI 查询参数 → 对应的 libpq 环境变量。只放常用且无歧义的 */
-const PARAM_ENV: Record<string, string> = {
-  sslmode: 'PGSSLMODE',
-  sslrootcert: 'PGSSLROOTCERT',
-  sslcert: 'PGSSLCERT',
-  sslkey: 'PGSSLKEY',
-  application_name: 'PGAPPNAME',
-  connect_timeout: 'PGCONNECT_TIMEOUT',
-  options: 'PGOPTIONS',
-  target_session_attrs: 'PGTARGETSESSIONATTRS'
-}
-
 /**
- * 查询参数里的**连接目标**类键。这些能改变"连到哪台机器、连成谁"，
- * 丢掉一个就可能连错库 —— 而连错库在可写 broker 上是会真写进去的。
+ * libpq 参数 → 对应的 `PG*` 环境变量。**这张表就是白名单** ——
+ * 不在表里的键一律拒绝（见下）。
+ *
+ * 为什么不能只挡"看起来危险"的那几个（上一版是个前缀正则，被 codex 逮到）：
+ * **拼错一个字符就绕过**。真 psql 对 `servic=nope` 直接报
+ * `invalid connection option "servic"` 拒绝连接，而我们静默忽略、照常连过去。
+ * `replication=database` 这种真实参数同理 —— 它会改变连接语义，丢了就是连错了。
+ *
+ * 只有能通过 `PG*` 环境变量表达的参数才在表里。表达不了的
+ * （`fallback_application_name` / `keepalives*` / `replication`）
+ * 一律返回 null —— 我们做不到就说做不到，不能假装连上了。
  */
-const TARGET_PARAM_ENV: Record<string, string> = {
+const CONN_PARAM_ENV: Record<string, string> = {
+  // 连接目标 / 认证
   host: 'PGHOST',
   hostaddr: 'PGHOSTADDR',
   port: 'PGPORT',
+  dbname: 'PGDATABASE',
   user: 'PGUSER',
   password: 'PGPASSWORD',
-  dbname: 'PGDATABASE'
+  passfile: 'PGPASSFILE',
+  service: 'PGSERVICE',
+  servicefile: 'PGSERVICEFILE',
+  require_auth: 'PGREQUIREAUTH',
+  channel_binding: 'PGCHANNELBINDING',
+  // 行为
+  connect_timeout: 'PGCONNECT_TIMEOUT',
+  client_encoding: 'PGCLIENTENCODING',
+  options: 'PGOPTIONS',
+  application_name: 'PGAPPNAME',
+  tcp_user_timeout: 'PGTCPUSERTIMEOUT',
+  target_session_attrs: 'PGTARGETSESSIONATTRS',
+  load_balance_hosts: 'PGLOADBALANCEHOSTS',
+  // TLS / GSS
+  sslmode: 'PGSSLMODE',
+  requiressl: 'PGREQUIRESSL',
+  sslcompression: 'PGSSLCOMPRESSION',
+  sslcert: 'PGSSLCERT',
+  sslkey: 'PGSSLKEY',
+  sslpassword: 'PGSSLPASSWORD',
+  sslcertmode: 'PGSSLCERTMODE',
+  sslrootcert: 'PGSSLROOTCERT',
+  sslcrl: 'PGSSLCRL',
+  sslcrldir: 'PGSSLCRLDIR',
+  sslsni: 'PGSSLSNI',
+  ssl_min_protocol_version: 'PGSSLMINPROTOCOLVERSION',
+  ssl_max_protocol_version: 'PGSSLMAXPROTOCOLVERSION',
+  requirepeer: 'PGREQUIREPEER',
+  gssencmode: 'PGGSSENCMODE',
+  gssdelegation: 'PGGSSDELEGATION',
+  krbsrvname: 'PGKRBSRVNAME',
+  gsslib: 'PGGSSLIB'
 }
 
-/**
- * 认不出来就必须拒绝的参数形状。
- *
- * 只挡"影响连到哪/连成谁/怎么认证"的那类 —— 剩下的（`application_name` 之类）
- * 丢了只是少个标签，不值得为此把合法连接串整个拒掉。
- */
-const RISKY_UNKNOWN_PARAM = /^(host|hostaddr|port|user|password|dbname|passfile|service|require|channel_binding|krb|gss|ssl|sslmode|target_session_attrs|load_balance)/
+/** 这些键的值是密码，要进脱敏名单 */
+const SECRET_PARAMS = new Set(['password', 'sslpassword'])
 
 /** `key=value key='v with space'` 形式的 conninfo 拆成键值对 */
 export function parseKeyValueConninfo(s: string): Record<string, string> | null {
@@ -119,15 +146,6 @@ export function parseKeyValueConninfo(s: string): Record<string, string> | null 
   return Object.keys(out).length ? out : null
 }
 
-const KV_ENV: Record<string, string> = {
-  host: 'PGHOST',
-  hostaddr: 'PGHOSTADDR',
-  port: 'PGPORT',
-  user: 'PGUSER',
-  password: 'PGPASSWORD',
-  dbname: 'PGDATABASE',
-  ...PARAM_ENV
-}
 
 export function pgConnFromTarget(target: string): PgConn | null {
   const t = target.trim()
@@ -223,17 +241,14 @@ export function pgConnFromTarget(target: string): PgConn | null {
        所以连接目标类参数必须支持，且**认不出来的一律拒绝，绝不静默忽略**。 */
     for (const [k, v] of new URLSearchParams(query)) {
       const key = k.toLowerCase()
-      const envKey = PARAM_ENV[key] ?? TARGET_PARAM_ENV[key]
-      if (envKey) {
-        put(envKey, v)
-        if (key === 'password' && v) {
-          secrets.add(v)
-          passwords.add(v)
-        }
-        continue
+      const envKey = CONN_PARAM_ENV[key]
+      // **未映射一律拒绝**（含拼错的）—— 真 psql 对 `servic=` 也是直接报错拒连
+      if (!envKey) return null
+      put(envKey, v)
+      if (SECRET_PARAMS.has(key) && v) {
+        secrets.add(v)
+        passwords.add(v)
       }
-      // 影响"连到哪 / 连成谁"的参数认不出来 = fail closed
-      if (RISKY_UNKNOWN_PARAM.test(key)) return null
     }
     return { env, secrets: [...secrets].filter(Boolean), passwords: [...passwords].filter(Boolean) }
   }
@@ -242,22 +257,11 @@ export function pgConnFromTarget(target: string): PgConn | null {
     const kv = parseKeyValueConninfo(t)
     if (!kv) return null
     for (const [k, v] of Object.entries(kv)) {
-      const envKey = KV_ENV[k]
-      /* **这里必须和 URI 分支用同一条 fail-closed 判据。**
-         上一版只给 URI 那条分支加了 `RISKY_UNKNOWN_PARAM`，key=value 这条
-         照旧 `continue` —— 于是
-           `host=127.0.0.1 port=1 dbname=d service=definitely_missing`
-         我们解析成 `{PGHOST,PGPORT,PGDATABASE}` 照常连过去，
-         而**真 psql 会直接报 `definition of service ... not found` 拒绝连接**。
-         也就是可写 broker 会连到一个 libpq 本来根本不会连的库。
-         （codex 第三轮 P0。同一个判据两条分支各写一份 = 改一处漏一处，
-         这正是这个仓库反复栽的形状。） */
-      if (!envKey) {
-        if (RISKY_UNKNOWN_PARAM.test(k)) return null
-        continue
-      }
+      const envKey = CONN_PARAM_ENV[k]
+      // 和 URI 分支**共用同一张表、同一条判据** —— 各写一份就是改一处漏一处
+      if (!envKey) return null
       put(envKey, v)
-      if (k === 'password' && v) {
+      if (SECRET_PARAMS.has(k) && v) {
         secrets.add(v)
         passwords.add(v)
       }
@@ -275,20 +279,9 @@ export function pgConnFromTarget(target: string): PgConn | null {
 }
 
 /**
- * 从输出里抹掉所有敏感片段。
- *
- * **必须逐片段抹，不能只抹整条连接串** —— psql 会把"数据库名"截断到 63 字节，
- * 截断后的串仍含完整密码，而整串精确替换匹配不上它。
- * 同时兜一道：任何形如 `://user:pw@` 的片段里的密码位一律打掉。
+ * 从输出里抹掉所有敏感片段。**实现在 `secret-scrub.ts`（全项目唯一一份）** ——
+ * 这里只做参数适配，别在这里再写一份（两份必然漂移，已经栽过）。
  */
 export function scrubSecrets(text: string, secrets: string[], passwords: string[] = []): string {
-  let out = text
-  // 长的先替换，避免短片段先把长片段切碎
-  const explicitPasswords = new Set(passwords.filter(Boolean))
-  for (const s of [...new Set([...secrets, ...explicitPasswords])]
-    .filter((s) => s.length >= 4 || explicitPasswords.has(s))
-    .toSorted((a, b) => b.length - a.length)) {
-    out = out.split(s).join('«已隐去»')
-  }
-  return out.replace(/(:\/\/[^:@\s/]*):[^@\s]+@/g, '$1:«已隐去»@')
+  return scrub(text, { secrets, passwords })
 }

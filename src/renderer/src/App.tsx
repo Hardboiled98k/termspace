@@ -308,18 +308,14 @@ function AccountBlock({
   const hasData = hasQuotaProgress(a)
   return (
     <div className={`quota-account${stale ? ' stale' : ''}`} title={`${a.source}｜${a.hint ?? ''}`}>
-      <div
+      {/* 用原生 button 而不是 `div role="button"`：键盘、焦点环、
+          屏幕阅读器的"可点"语义全都白送，还省掉手写的 onKeyDown */}
+      <button
+        type="button"
         className="quota-account-head clickable"
-        role="button"
-        tabIndex={0}
+        aria-expanded={expanded}
         title={expanded ? '收起账号详情' : '展开账号详情（邮箱 / 登录态 / 花费）'}
         onClick={onToggle}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault()
-            onToggle()
-          }
-        }}
       >
         <span className={`identity-provider ${a.provider}`}>{a.provider}</span>
         <span className="quota-account-name">{a.name}</span>
@@ -336,7 +332,7 @@ function AccountBlock({
         >
           {usingCount} 个终端
         </span>
-      </div>
+      </button>
       {/* 邮箱是区分两个同 provider 订阅号的唯一可靠标识 —— planType 都叫 'pro'。
           但那是**要查的时候才需要**，日常占两行不值，所以收进展开态。 */}
       {expanded && a.email && <div className="quota-email">{maskEmail(a.email)}</div>}
@@ -540,7 +536,9 @@ function BoardHUD({
           {/* 折叠时**计数和"需要你"仍然留在标题里** —— 这一段的全部价值就是
               "有没有 agent 在等我"，藏成一个光秃秃的 ▾ 等于把功能一起折掉了 */}
           <button
+            type="button"
             className="quota-title as-toggle"
+            aria-expanded={prefs.board}
             title={prefs.board ? '收起画布终端列表' : '展开画布终端列表'}
             onClick={() => updatePrefs({ ...prefs, board: !prefs.board })}
           >
@@ -1150,11 +1148,17 @@ function Board(): React.JSX.Element {
       return placeNewNode(
         center,
         size,
-        nodes.map((n) => ({
+        /* **折叠组里的隐藏子节点不参与碰撞。** 组折叠后子节点是 `hidden: true`，
+           屏幕上一个像素都没有，却照样把新节点往外推 —— 实测：可见节点算出来是
+           (1024,1068)，把隐藏子节点也算进去就被推到 (1296,1340)，偏了 272px。
+           用户看到的是"新终端莫名其妙落在很远的地方"。（codex 第四轮 P1） */
+        nodes
+          .filter((n) => !n.hidden)
+          .map((n) => ({
           ...absolute(n),
-          width: n.width ?? n.measured?.width,
-          height: n.height ?? n.measured?.height
-        }))
+            width: n.width ?? n.measured?.width,
+            height: n.height ?? n.measured?.height
+          }))
       )
     },
     [getViewport]

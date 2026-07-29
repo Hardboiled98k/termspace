@@ -1,12 +1,21 @@
-import { createHash } from 'node:crypto'
+import { createHmac, randomBytes } from 'node:crypto'
+import { scrub } from './secret-scrub.ts'
 import type { BrokerProfile, BrokerResult } from './broker'
 
 /**
  * 连接的安全语义指纹。**连接串本身绝不能进 key** —— key 会进弹窗文案、
  * 进任务账本、进日志。取 sha256 前 12 位：够区分改动，又反推不出原文。
  */
+/* **进程内随机密钥。** grant 本来就只活在当前运行期（内存 Set，重启即失效），
+   所以指纹没有跨进程稳定的必要 —— 而用随机密钥能顺带挡掉两件事：
+   ① 48 位截断的构造碰撞（约 2^24 次哈希就能找到一对，攻击者可以预生成
+      两个 readOnly 相同、target 不同的碰撞对，用户授权第一个之后换成第二个）；
+   ② 对低熵 target（比如 `postgres://localhost/app`）做**离线字典比对**反推原文。 */
+const REVISION_KEY = randomBytes(32)
+
 export function brokerRevision(target: string, readOnly: boolean): string {
-  return createHash('sha256').update(`${readOnly ? 'ro' : 'rw'}\u0000${target}`).digest('hex').slice(0, 12)
+  // 不截断：指纹是给机器比对的，长一点没有任何代价
+  return createHmac('sha256', REVISION_KEY).update(`${readOnly ? 'ro' : 'rw'}\u0000${target}`).digest('hex')
 }
 
 interface BrokerSettings {
@@ -64,37 +73,67 @@ const redact = (text: string, secret: string): string =>
  */
 export function extractPayloadSecrets(kind: string, payload: string): string[] {
   const out = new Set<string>()
+  /* **不设长度门槛。** 上一版丢掉了 <4 字符的 —— 但这里抠出来的东西
+     **已经确定是密码**，`PASSWORD 'abc'` 也得抹。
+     "太短会把正常输出切碎"那条判据只适用于**猜出来的**片段，
+     不适用于语法上明确标着 PASSWORD 的。区分在 secret-scrub.ts 的两个通道。 */
   const add = (v?: string): void => {
     const t = v?.trim()
-    // 太短的不参与全局替换，否则会把正常输出切碎（见 pg-conninfo 的同款判据）
-    if (t && t.length >= 4) out.add(t)
+    if (t) out.add(t)
   }
+
+  /* 连接串风格的 userinfo 密码。**任何 kind 都要查** ——
+     ssh payload 里完全可能出现 `psql postgres://u:pw@h/db`（第五条路径之一）。 */
+  for (const m of payload.matchAll(/:\/\/[^:@\s/]*:([^@\s]+)@/g)) add(m[1])
+
+  /* `PGPASSWORD=x` / `MYSQL_PWD=x` 这类**环境变量前缀**。
+     codex 第四轮点名的第五条路径：ssh payload 里 `PGPASSWORD=FifthSecret psql …`
+     此前完全不识别。 */
+  for (const m of payload.matchAll(
+    /\b(?:PGPASSWORD|MYSQL_PWD|PGSSLPASSWORD|ANSIBLE_PASSWORD|SSHPASS)=(?:"([^"]*)"|'([^']*)'|(\S+))/g
+  )) {
+    add(m[1] ?? m[2] ?? m[3])
+  }
+
   if (kind === 'postgres') {
-    /* 三种合法写法都要认。`E'...'` 是转义字符串、`$tag$...$tag$` 是 dollar-quoting，
-       只写单双引号那版会漏掉后两种 —— 而它们都是 psql 接受的。 */
+    /* 三种合法写法：普通引号、`E'…'`（转义字符串，**反斜杠可以转义引号**）、
+       `$tag$…$tag$`（dollar-quoting，**tag 可以含数字**）。
+       上一版的字符集不接受数字 tag，E-string 里的 `\'` 也会让正则提前结束。 */
+    /* 捕获组编号必须和反向引用对齐：1=E'…' 2='…' 3="…" 4=dollar tag 5=dollar 内容，
+       所以闭合是 `\4` 不是 `\5`。加了组之后忘改编号 → 整条 dollar-quoting 分支
+       **静默匹配不上**（实测抠出来是空数组），而 typecheck 和别的用例都不会响。 */
     for (const m of payload.matchAll(
-      /\b(?:PASSWORD|IDENTIFIED\s+BY)\s+(?:E?'((?:[^']|'')*)'|"([^"]*)"|\$([A-Za-z_]*)\$([\s\S]*?)\$\3\$)/gi
+      /\b(?:PASSWORD|IDENTIFIED\s+BY)\s+(?:E'((?:\\.|''|[^'\\])*)'|'((?:[^']|'')*)'|"([^"]*)"|\$([A-Za-z_][A-Za-z0-9_]*|)\$([\s\S]*?)\$\4\$)/gi
     )) {
-      add(m[1] ?? m[2] ?? m[4])
+      add(m[1] ?? m[2] ?? m[3] ?? m[5])
     }
   } else if (kind === 'ssh') {
-    // `--password=x` / `--password x` / `-pX` / `sshpass -p X` 都见过
+    /* `--password=x` 和 `--password x` 都认。
+       ⚠️ **裸 `-p X` 只在 `sshpass` 上认**（codex 第四轮 P2 实测）：
+       通用地认的话，`ssh -p 2222 host` 的**端口号**会被当密码，
+       然后输出里所有 `2222` 都被打码；`tool -p status` 更是把 `status` 抹掉。
+       脱敏过度和脱敏不足一样是 bug。
+       MySQL 风格只认**紧贴**的 `-pSecret`（那是它的真实语法）。 */
     for (const m of payload.matchAll(
-      /(?:--password[=\s]+|(?:^|\s)-p\s*)(?:"([^"]*)"|'([^']*)'|(\S+))/g
+      /--password[=\s]+(?:"([^"]*)"|'([^']*)'|(\S+))/g
     )) {
+      add(m[1] ?? m[2] ?? m[3])
+    }
+    for (const m of payload.matchAll(/\bsshpass\s+-p\s*(?:"([^"]*)"|'([^']*)'|(\S+))/g)) {
+      add(m[1] ?? m[2] ?? m[3])
+    }
+    for (const m of payload.matchAll(/(?:^|\s)-p(?:"([^"]*)"|'([^']*)'|([^\s-]\S*))/g)) {
+      // 紧贴式（MySQL）：`-psecret`。`-p 22` 这种带空格的不在这条里
       add(m[1] ?? m[2] ?? m[3])
     }
   }
   return [...out]
 }
 
-/** 把一组 secret 从任意文本里抹掉。长的先替换，避免短片段把长片段切碎 */
-export function scrubAll(text: string, secrets: string[]): string {
-  let out = text
-  for (const sct of [...secrets].toSorted((a, b) => b.length - a.length)) {
-    out = out.split(sct).join('«已隐去»')
-  }
-  return out
+/** 抹掉 payload 里抠出来的密码。**引擎在 `secret-scrub.ts`（全项目唯一一份）** */
+export function scrubAll(text: string, passwords: string[]): string {
+  // 走 passwords 通道：这些**已经确定是密码**，`abc` 这种也必须抹，不设长度门槛
+  return scrub(text, { passwords })
 }
 
 /**

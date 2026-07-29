@@ -184,13 +184,38 @@ test('查询参数里的 user / password / port / dbname 同样要认，且密�
   assert.ok(!scrubSecrets('err: pw123456', c!.secrets).includes('pw123456'), '密码没进脱敏名单')
 })
 
-test('**认不出的连接目标参数一律拒绝**，绝不静默忽略', () => {
-  /* `service=` 会去读 pg_service.conf 里的一整套连接参数、
-     `passfile=` 改认证来源 —— 忽略它们等于连到一个我们没预期的地方。
-     而 application_name 这种丢了只是少个标签，不该为它拒掉合法连接串。 */
-  assert.equal(pgConnFromTarget('postgres://h/db?service=prod'), null)
-  assert.equal(pgConnFromTarget('postgres://h/db?passfile=/tmp/x'), null)
-  assert.ok(pgConnFromTarget('postgres://h/db?application_name=tb'), '无害参数不该被拒')
+test('service / passfile 现在**如实转发**，不再靠"拒绝"来兜底', () => {
+  /* 上一版把它们一律拒掉，理由是"忽略等于连到没预期的地方" —— 那个理由只在
+     "我们做不到"时成立。收紧成白名单之后，这两个能通过 `PGSERVICE` / `PGPASSFILE`
+     **原样表达**，于是行为和真 psql 一致，没有再拒的道理。
+     判据变了：不是"危险就拒"，是"**表达不了才拒**"。 */
+  assert.equal(pgConnFromTarget('postgres://h/db?service=prod')?.env['PGSERVICE'], 'prod')
+  assert.equal(pgConnFromTarget('postgres://h/db?passfile=/tmp/x')?.env['PGPASSFILE'], '/tmp/x')
+  assert.ok(pgConnFromTarget('postgres://h/db?application_name=tb'))
+})
+
+test('**任何未映射的键一律拒绝** —— 拼错一个字符就绕过是上一版的洞', () => {
+  /* 上一版用的是"看起来危险"的前缀正则，于是 `servic=nope`（拼错）直接绕过。
+     真 psql：`invalid connection option "servic"` —— 它**拒绝连接**，
+     而我们静默忽略、照常连过去。`replication=database` 同理：
+     真实参数、会改连接语义、我们表达不了 → 只能拒。
+     判据因此收紧成白名单：能用 PG* 表达的才收，其余一律 null。 */
+  for (const bad of [
+    'host=127.0.0.1 port=1 dbname=d servic=nope', // 拼错 service
+    'host=h dbname=d replication=database', // 真实参数但 PG* 表达不了
+    'host=h dbname=d keepalives=1', // 同上
+    'host=h dbname=d totally_made_up=1'
+  ]) {
+    assert.equal(pgConnFromTarget(bad), null, `没拒：${bad}`)
+  }
+  assert.equal(pgConnFromTarget('postgres://h/db?servic=nope'), null, 'URI 分支同样')
+  // 白名单里的合法参数不能被误杀
+  assert.ok(pgConnFromTarget('host=h dbname=d sslmode=require connect_timeout=5'))
+  assert.ok(pgConnFromTarget('postgres://h/db?ssl_min_protocol_version=TLSv1.2'))
+  assert.equal(
+    pgConnFromTarget('host=h dbname=d sslpassword=keyphrase123')?.env['PGSSLPASSWORD'],
+    'keyphrase123'
+  )
 })
 
 test('**key=value 分支也要 fail-closed**（上一版只修了 URI 那条）', () => {
@@ -198,10 +223,7 @@ test('**key=value 分支也要 fail-closed**（上一版只修了 URI 那条）'
      `definition of service "definitely_missing" not found` 拒绝连接，
      而我们静默忽略它照常连过去 = 可写 broker 连到 libpq 本来不会连的库。
      判据必须两条分支共用 —— 各写一份就是改一处漏一处。 */
-  assert.equal(pgConnFromTarget('host=127.0.0.1 port=1 dbname=d service=nope'), null)
-  assert.equal(pgConnFromTarget('host=h dbname=d passfile=/tmp/x'), null)
-  // 混用：认识的参数在前也不能让它蒙混过关
-  assert.equal(pgConnFromTarget('user=u password=pw123456 host=h service=nope'), null)
-  // 无害的未映射键不该拒（否则合法连接串会被误杀）
+  // 混用：认识的参数在前也不能让未映射的那个蒙混过关
+  assert.equal(pgConnFromTarget('user=u password=pw123456 host=h servic=nope'), null)
   assert.ok(pgConnFromTarget('host=h dbname=d application_name=tb'))
 })

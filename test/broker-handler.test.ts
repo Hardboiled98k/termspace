@@ -11,6 +11,8 @@ import {
   createBrokerMutations,
   handleBroker,
   classifyBrokerResult,
+  extractPayloadSecrets,
+  brokerRevision,
   type BrokerHandlerDeps
 } from '../src/main/broker-handler.ts'
 import { classifyDelegateResult } from '../src/main/delegate.ts'
@@ -85,8 +87,8 @@ test('**授权 key 必须带 kind**：db:prod 的授权不能白送给 ssh:prod'
   await handleBroker(deps, 'term-1', 'ssh', 'prod', 'ls')
 
   const targets = calls.authorize.map((a) => a.target)
-  assert.match(targets[0] ?? '', /^broker:postgres:prod#p1@[0-9a-f]{12}$/)
-  assert.match(targets[1] ?? '', /^broker:ssh:prod#s1@[0-9a-f]{12}$/)
+  assert.match(targets[0] ?? '', /^broker:postgres:prod#p1@[0-9a-f]{64}$/)
+  assert.match(targets[1] ?? '', /^broker:ssh:prod#s1@[0-9a-f]{64}$/)
   assert.notEqual(targets[0], targets[1], '两种连接共用一个授权 key')
 })
 
@@ -259,10 +261,17 @@ const PW_CASES: Array<[string, string, string]> = [
   ['postgres', `ALTER ROLE alice PASSWORD 'LedgerSecret'`, 'LedgerSecret'],
   ['postgres', `ALTER ROLE alice PASSWORD E'EscapedSecret'`, 'EscapedSecret'],
   ['postgres', `ALTER ROLE alice PASSWORD $tag$DollarSecret$tag$`, 'DollarSecret'],
+  // dollar tag **可以含数字**，上一版的字符集不接受 → 整条分支静默失配
+  ['postgres', `ALTER ROLE alice PASSWORD $tag1$DigitTagSecret$tag1$`, 'DigitTagSecret'],
+  ['postgres', `ALTER ROLE alice PASSWORD $$PlainDollarSecret$$`, 'PlainDollarSecret'],
   ['postgres', `CREATE USER bob IDENTIFIED BY "QuotedSecret"`, 'QuotedSecret'],
   ['ssh', `mysql --password=CliSecret1 -e 'select 1'`, 'CliSecret1'],
   ['ssh', `sshpass -p SshpassSecret ssh host`, 'SshpassSecret'],
-  ['ssh', `tool --password SpacedSecret run`, 'SpacedSecret']
+  ['ssh', `tool --password SpacedSecret run`, 'SpacedSecret'],
+  // 第五条路径（codex 第四轮）：环境变量前缀 + payload 里的连接串 userinfo
+  ['ssh', `PGPASSWORD=FifthSecret psql -c 'select 1'`, 'FifthSecret'],
+  ['ssh', `psql postgres://u:UriUserinfoSecret@h/db`, 'UriUserinfoSecret'],
+  ['ssh', `mysql -pTightSecret -e 'x'`, 'TightSecret']
 ]
 
 for (const [kind, payload, pw] of PW_CASES) {
@@ -314,4 +323,39 @@ test('**同一个 id 改了 target 或 readOnly，授权 key 必须变**', async
   const t = calls.authorize.map((a) => a.target)
   assert.equal(new Set(t).size, 3, `三种安全语义共用了授权 key：${JSON.stringify(t)}`)
   for (const x of t) assert.ok(!x.includes('prod.internal') && !x.includes('root'), `连接串进了 key：${x}`)
+})
+
+test('**短密码也要抹**（明确标着 PASSWORD 的不设长度门槛）', async () => {
+  /* 「太短会把正常输出切碎」那条判据只适用于**猜出来的**片段，
+     不适用于语法上明确标着 PASSWORD 的 —— 用弱口令是用户的事，
+     替他泄漏是我们的事。两个通道的区分见 secret-scrub.ts。 */
+  const { deps, calls } = makeDeps()
+  deps.run = async () => ({ ok: false, output: '', error: `err near: PASSWORD 'abc'` })
+  const r = await handleBroker(deps, 'term-1', 'postgres', 'prod', `ALTER ROLE a PASSWORD 'abc'`)
+  assert.ok(!r.includes(`'abc'`), `短密码漏了：${r}`)
+  assert.ok(!calls.authorize[0]?.detail.includes(`'abc'`))
+})
+
+test('**不能脱敏过度**：`ssh -p 2222` 的端口号不是密码', () => {
+  /* 通用地认裸 `-p X` 的话，`ssh -p 2222 host` 的端口会被当密码，
+     然后输出里所有 `2222` 都被打码；`tool -p status` 更是把 status 抹掉。
+     **脱敏过度和脱敏不足一样是 bug** —— 用户会看着一堆 «已隐去» 不知所云。
+     所以裸 `-p X` 只在 sshpass 上认，MySQL 风格只认紧贴的 `-pSecret`。 */
+  assert.deepEqual(extractPayloadSecrets('ssh', 'ssh -p 2222 host uptime'), [])
+  assert.deepEqual(extractPayloadSecrets('ssh', 'tool -p status'), [])
+  assert.deepEqual(extractPayloadSecrets('ssh', 'ssh -p 22 h'), [])
+  // 但真的 sshpass / 紧贴式仍然要抓到
+  assert.deepEqual(extractPayloadSecrets('ssh', 'sshpass -p 2222 ssh h'), ['2222'])
+})
+
+test('**授权指纹不能截断，也不能是可离线比对的裸哈希**', () => {
+  /* 48 位截断约 2^24 次哈希就能构造碰撞：攻击者预生成两个 readOnly 相同、
+     target 不同的碰撞对，用户授权第一个之后换成第二个即可复用旧 grant。
+     而裸 sha256 又能对低熵 target（`postgres://localhost/app`）做**离线字典比对**
+     反推原文。→ 进程内随机密钥的 HMAC，且不截断。 */
+  const a = brokerRevision('postgres://u:p@h/db', true)
+  assert.match(a, /^[0-9a-f]{64}$/, '不能截断')
+  assert.notEqual(a, brokerRevision('postgres://u:p@h/db', false), 'readOnly 变了指纹必须变')
+  assert.notEqual(a, brokerRevision('postgres://u:p@other/db', true), 'target 变了指纹必须变')
+  assert.equal(a, brokerRevision('postgres://u:p@h/db', true), '同一进程内要稳定')
 })
