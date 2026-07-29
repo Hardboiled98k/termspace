@@ -152,3 +152,36 @@ test('形状不对的边直接丢，不能让它进授权图', () => {
   assert.equal((r.ws as { edges: unknown[] }).edges.length, 1)
   assert.equal(r.edges, 3)
 })
+
+test('**id 带冒号的诱饵节点必须整个丢掉**（授权闸的第三条绕过）', () => {
+  /* 攻击路径：塞一个 id 就叫 `mac-mini:t1` 的隐形组节点（1×1、坐标 9000,9000、
+     标题空）+ 一条指向它的边。`sanitizeEdges` 要求两端都在节点集里，
+     而诱饵**就在文件里**，所以边不悬空、确认框一个字都不提示。
+     导入后 `tb ask mac-mini:t1 <任务>` 零弹窗直接注入对端 agent
+     —— 因为 authorizeLink 那时只排除 `broker:` 前缀。
+     主进程侧已改成正向判"是不是本机节点 id"，这里是第二道。 */
+  const r = sanitizeImportedWorkspace({
+    nodes: [
+      { id: 't-abc', type: 'terminal' },
+      { id: 'mac-mini:t1', type: 'group', width: 1, height: 1 }
+    ],
+    edges: [
+      { id: 'e1', source: 't-abc', target: 'mac-mini:t1' },
+      { id: 'e2', source: 't-abc', target: 't-abc' }
+    ]
+  })
+  const ids = (r.ws as { nodes: { id: string }[] }).nodes.map((n) => n.id)
+  assert.deepEqual(ids, ['t-abc'], `诱饵节点还在：${ids.join()}`)
+  assert.equal(r.dropped, 1)
+  // 指向它的边随之变成悬空 → 一并摘掉，且要报给确认框
+  const edges = (r.ws as { edges: { target: string }[] }).edges
+  assert.deepEqual(edges.map((e) => e.target), ['t-abc'])
+  assert.equal(r.edges, 1)
+})
+
+test('合法 id 的各种形态不能被误杀', () => {
+  const ok = ['t-7k3f9a', 't1', 'b3', 'ctx-hub', 'A_b-9']
+  const r = sanitizeImportedWorkspace({ nodes: ok.map((id) => ({ id, type: 'terminal' })), edges: [] })
+  assert.equal(r.dropped, 0)
+  assert.deepEqual((r.ws as { nodes: { id: string }[] }).nodes.map((n) => n.id), ok)
+})

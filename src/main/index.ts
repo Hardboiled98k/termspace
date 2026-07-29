@@ -438,17 +438,27 @@ async function authorizeLink(
 ): Promise<boolean> {
   if (!source || !target) return false
   const key = `${source}>${target}`
-  /* **`broker:` 目标绝不认画布连线**（codex 对手方审查逮到的绕过）。
-     我原本的设计断言是"broker 不是画布上的节点，所以这个 key 永远不会出现在
-     `boardLinks` 里，必然走弹窗" —— 而 `boardLinks` 是从**渲染层上报的边**建的，
-     导入外部工作区时 `sanitizeImportedWorkspace` 只净化了 nodes、**edges 原样加载**。
-     于是一条伪造的 `term-1 → broker:postgres:prod` 悬空边就等于永久授权，
-     一次弹窗都不会有。判据只能是显式的会话内 grant。
-     （edges 那一侧也补了净化，两道都要，别只留一道。） */
-  const isBroker = target.startsWith('broker:')
-  if (grants.has(key) || (!isBroker && boardLinks.has(key))) return true
+  /* **只有"本画布真实节点 id"才认画布连线。**
+     这条判据换过两次，每次都是被绕过之后才收紧的：
+     ① 最初：broker 不是画布节点 → 假设 key 永不出现在 boardLinks 里。
+        被破：`boardLinks` 来自**渲染层上报的边**，导入外部工作区时
+        `sanitizeImportedWorkspace` 只净化 nodes、edges 原样加载。
+     ② 于是改成 `!target.startsWith('broker:')`。**又被破**：
+        跨机派活的 key 是 `${alias}:${nodeId}`，同样永远不是画布节点，
+        而它不带 `broker:` 前缀。构造一份工作区，塞一个 **id 就叫 `mac-mini:t1`**
+        的诱饵组节点（1×1、坐标 9000,9000、标题空）+ 一条指向它的边 ——
+        `sanitizeEdges` 要求两端 id 都在节点集里，而诱饵**就在文件里**，
+        所以边不悬空、`dropped` 和 `edges` 全是 0，确认框里一个字都不提示。
+        导入后 `tb ask mac-mini:t1 <任务>` **零弹窗**直接注入对端 agent。
+     ③ 现在：正向判「是不是本机节点 id」。本机 id 不含冒号
+        （`NODE_ID_RE`），所以这一条同时盖住 `broker:`、`alias:node`
+        以及将来任何新命名空间 —— 不必每加一种就来补一次前缀黑名单。
+        `index.ts` 的撤销循环里早就有 `dst?.includes(':')` 这个同款判据，
+        属于"同一个判据存在于两处"，现在合流。 */
+  const isCanvasNode = NODE_ID_RE.test(target)
+  if (grants.has(key) || (isCanvasNode && boardLinks.has(key))) return true
   if (!mainWin || mainWin.isDestroyed()) return false
-  const grantHint = isBroker
+  const grantHint = target.startsWith('broker:')
     ? '代理连接不是画布节点；可仅允许本次，或勾选在本次运行内记住。'
     : '画布上这两个节点之间没有连线。拉一条线过去即可长期授权。'
   const { response, checkboxChecked } = await dialog.showMessageBox(mainWin, {

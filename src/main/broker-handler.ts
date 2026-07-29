@@ -95,7 +95,15 @@ export function extractPayloadSecrets(kind: string, payload: string): string[] {
     add(m[1] ?? m[2] ?? m[3])
   }
 
-  if (kind === 'postgres') {
+  /* **SQL 改密语句任何 kind 都要查。**
+     上一版把它关在 `if (kind === 'postgres')` 里 —— 而 agent 在 ssh 连接上跑 SQL
+     是最普通不过的事：
+
+       tb ssh prod "docker exec db psql -c \"ALTER ROLE app PASSWORD 'x'\""
+
+     明文密码于是进了授权弹窗、进了**落盘保留 500 条**的 tasks.jsonl。
+     这和上一轮已修的第五条路径（URI userinfo / `PGPASSWORD=` 前缀）
+     是**同一条理由**："ssh payload 里完全可能出现 SQL" —— 那两条提上来了，这条漏了。 */
     /* 三种合法写法：普通引号、`E'…'`（转义字符串，**反斜杠可以转义引号**）、
        `$tag$…$tag$`（dollar-quoting，**tag 可以含数字**）。
        上一版的字符集不接受数字 tag，E-string 里的 `\'` 也会让正则提前结束。 */
@@ -107,7 +115,8 @@ export function extractPayloadSecrets(kind: string, payload: string): string[] {
     )) {
       add(m[1] ?? m[2] ?? m[3] ?? m[5])
     }
-  } else if (kind === 'ssh') {
+
+  if (kind === 'ssh') {
     /* `--password=x` 和 `--password x` 都认。
        ⚠️ **裸 `-p X` 只在 `sshpass` 上认**（codex 第四轮 P2 实测）：
        通用地认的话，`ssh -p 2222 host` 的**端口号**会被当密码，

@@ -38,6 +38,34 @@ export interface BrokerProfile {
 const WRITE_SQL =
   /^\s*(insert|update|delete|drop|truncate|alter|create|grant|revoke|copy|vacuum|reindex|call|do|merge)\b/i
 
+/**
+ * psql 的**反斜杠元命令**。这是 broker 唯一存在理由的头号威胁。
+ *
+ * 实测（真 postgres，只读连接）：
+ *
+ * ```
+ * tb db prod "\\! printenv PGPASSWORD | base64"
+ * → ok:true, output: U3VwZXJTZWNyZXRQdwo=   （base64 -d 就是连接串里的密码）
+ * ```
+ *
+ * **三道闸一道都拦不住**，因为它们管的都不是这件事：
+ * - `isWriteSql` 只看开头的 SQL 关键字，`\!` 不在 WRITE_SQL 里
+ * - `hasMultipleStatements` 找分号，`\!` 里没有分号
+ * - `PGOPTIONS` 的 `default_transaction_read_only` 是**服务端**的事务属性，
+ *   而 `\!` 是 **psql 客户端**行为，压根不进服务端
+ *
+ * 脱敏也拦不住：`| base64` / `| rev` 一步就绕过整串精确替换。
+ * 而且这同时是**任意本机命令执行** —— 只读连接上 `\! echo X > /tmp/x` 真会建出文件。
+ * 同族的还有 `\o | cmd`、`\g | cmd`、`\copy … from program '…'`、`\i /etc/passwd`。
+ *
+ * 判据只能是「**任何一行**去掉前导空白后以 `\` 开头就拒」，和 `sshCommandAllowed`
+ * 「认不出一律拒」同一个态度。**必须逐行判** —— `select 1\n\! id` 就是这么绕过首行检查的。
+ * 换 `-c` 不是退路：psql 文档明写 `-c` 同样接受单个反斜杠命令。
+ */
+export function hasPsqlMetaCommand(sql: string): boolean {
+  return sql.split(/\r?\n/).some((line) => line.trimStart().startsWith('\\'))
+}
+
 export function isWriteSql(sql: string): boolean {
   // 去掉前导注释再判：`-- x\nDELETE …` 不能因为第一行是注释就过关
   const stripped = sql.replace(/^(\s*(--[^\n]*|\/\*[\s\S]*?\*\/)\s*)+/, '')
@@ -150,6 +178,16 @@ export async function brokerRun(
     return run(bin, ['-o', 'BatchMode=yes', profile.target, '--', payload])
   }
 
+  /* **元命令一律拒，和只读与否无关。**
+     `\!` 在可写连接上同样是任意命令执行 + 密码外泄，
+     "可写"授权的是**这个数据库**，不是这台机器。 */
+  if (hasPsqlMetaCommand(payload)) {
+    return {
+      ok: false,
+      output: '',
+      error: 'psql 反斜杠元命令（\\! \\o \\copy \\i …）不走代理连接 —— 它们是 psql 客户端行为，能读到连接串本身。'
+    }
+  }
   // postgres
   if (profile.readOnly) {
     if (isWriteSql(payload)) {

@@ -76,6 +76,17 @@ function sanitizeNodes(raw: unknown, r: SanitizeResult): unknown {
       continue
     }
     const node = { ...(n as Record<string, unknown>) }
+    /* **id 形状不合法的整个丢掉。** 主进程本来就只认
+       `/^[A-Za-z0-9_-]{1,64}$/`（`NODE_ID_RE`），所以带冒号的 id
+       在这儿留着**只能当诱饵用** —— 一个 id 叫 `mac-mini:t1` 的隐形节点
+       加一条指向它的边，就能让 `tb ask mac-mini:t1` 零弹窗通过
+       （连线即授权，而 authorizeLink 那时只排除 `broker:` 前缀）。
+       主进程侧已经改成正向判"是不是本机节点 id"，这里是第二道：
+       让授权图里根本不出现幽灵。两道都要留。 */
+    if (typeof node.id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(node.id)) {
+      r.dropped++
+      continue
+    }
     // type 缺失 = v1 老文件的终端，合法；给了但不认识 = 丢
     if (node.type !== undefined && !KNOWN_TYPES.has(String(node.type))) {
       r.dropped++
