@@ -334,6 +334,34 @@ body {
   letter-spacing: 0.05em;
   color: var(--tb-muted);
 }
+/* 区块标题兼作折叠开关。**整行可点** —— 只有那个小三角能点的话，
+   这么小的字号下命中率太差（三角本身不到 10px 宽）。
+   ⚠️ **不能写 `font: inherit`**：那是 shorthand，会把 `.quota-title` 自己声明的
+   `font-size: 9.5px` / `font-weight: 600` 一起重置成继承来的值 ——
+   实测字直接大了一圈。要什么写什么，别用 shorthand 图省事。 */
+.quota-title.as-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  color: var(--tb-muted);
+}
+.quota-title.as-toggle .hud-caret {
+  font-size: 8px;
+  opacity: 0.5;
+}
+.quota-title.as-toggle:hover {
+  color: var(--tb-text);
+}
 
 .quota-rescan {
   margin-left: 6px;
@@ -2332,6 +2360,22 @@ body {
   align-items: center;
   gap: 5px;
   font-size: 10px;
+}
+/* 卡头可点开/收起账号详情。不加显式的三角：一排卡片各挂一个三角太吵，
+   hover 变亮 + tooltip 已经够提示可点了（这是个高频看、低频点的面板）。 */
+.quota-account-head.clickable {
+  cursor: pointer;
+  border-radius: 5px;
+  margin: -2px -4px;
+  padding: 2px 4px;
+  transition: background 0.12s ease;
+}
+.quota-account-head.clickable:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+.quota-account-head.clickable:focus-visible {
+  outline: 1px solid var(--tb-blue);
+  outline-offset: 0;
 }
 .quota-account-name {
   font-weight: 600;

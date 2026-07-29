@@ -42,6 +42,7 @@ import { IdentityContext, TmuxContext, RequestDeleteContext } from './identity-c
 import { SettingsPanel, type SettingsSection } from './SettingsPanel'
 import { shouldShowAccount } from './quota-visibility'
 import { countUsing } from './quota-usage'
+import { loadHudPrefs, saveHudPrefs, toggleIn, type HudPrefs } from './hud-prefs'
 import { hasQuotaProgress, maskEmail, quotaUnavailableText } from './quota-display'
 import { placeNewNode, viewportCenter } from './place-node'
 import { CommandPalette } from './CommandPalette'
@@ -288,10 +289,16 @@ function spendText(sp: QuotaSpend): string {
  */
 function AccountBlock({
   a,
-  usingCount
+  usingCount,
+  expanded,
+  onToggle
 }: {
   a: AccountQuota
   usingCount: number
+  /** 精简态只留"看一眼就想知道的"：徽标 / 名字 / 套餐 / 几个终端 / 进度条。
+      邮箱、登录态文案、花费明细都是**查证信息**，点开才给 —— 用户明确要求的 */
+  expanded: boolean
+  onToggle: () => void
 }): React.JSX.Element | null {
   // 判据只有一份，见 quota-visibility.ts（这里和外层 filter 曾经各写一份）
   if (!shouldShowAccount({ accountId: a.accountId, usingCount })) return null
@@ -301,7 +308,19 @@ function AccountBlock({
   const hasData = hasQuotaProgress(a)
   return (
     <div className={`quota-account${stale ? ' stale' : ''}`} title={`${a.source}｜${a.hint ?? ''}`}>
-      <div className="quota-account-head">
+      <div
+        className="quota-account-head clickable"
+        role="button"
+        tabIndex={0}
+        title={expanded ? '收起账号详情' : '展开账号详情（邮箱 / 登录态 / 花费）'}
+        onClick={onToggle}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            onToggle()
+          }
+        }}
+      >
         <span className={`identity-provider ${a.provider}`}>{a.provider}</span>
         <span className="quota-account-name">{a.name}</span>
         {a.plan && <span className="quota-plan">{a.plan}</span>}
@@ -318,9 +337,10 @@ function AccountBlock({
           {usingCount} 个终端
         </span>
       </div>
-      {/* 邮箱是区分两个同 provider 订阅号的唯一可靠标识 —— planType 都叫 'pro' */}
-      {a.email && <div className="quota-email">{maskEmail(a.email)}</div>}
-      <div className="quota-account-note">{a.presence.detail}</div>
+      {/* 邮箱是区分两个同 provider 订阅号的唯一可靠标识 —— planType 都叫 'pro'。
+          但那是**要查的时候才需要**，日常占两行不值，所以收进展开态。 */}
+      {expanded && a.email && <div className="quota-email">{maskEmail(a.email)}</div>}
+      {expanded && <div className="quota-account-note">{a.presence.detail}</div>}
       {hasData ? (
         <div className="quota-provider-rows">
           {a.windows.map((w) => (
@@ -332,17 +352,20 @@ function AccountBlock({
       )}
       {/* 花钱侧不画进度条，只给金额 —— 和上面的百分比混在一起必然被读成一回事。
           enabled:false 要显式说「未开启」，藏起来等于告诉用户"没这回事" */}
-      {a.spend?.map((sp) => (
+      {expanded &&
+        a.spend?.map((sp) => (
         <div key={sp.label} className="quota-row">
           <span className="quota-label">{sp.label}</span>
           <span className="quota-money">{spendText(sp)}</span>
         </div>
       ))}
-      {(stale || a.hint) && (
+      {/* **stale 永远显示** —— "这个数不新鲜"精简了也必须知道，
+          否则用户会照着一个几小时前的百分比做决定。hint 是解释，收进展开态。 */}
+      {(stale || (expanded && a.hint)) && (
         <div className="quota-account-note">
           {stale ? `⚠ ${ago(a.capturedAt)}的数` : ''}
-          {stale && a.hint ? ' · ' : ''}
-          {a.hint ?? ''}
+          {stale && expanded && a.hint ? ' · ' : ''}
+          {expanded ? (a.hint ?? '') : ''}
         </div>
       )}
     </div>
@@ -374,6 +397,11 @@ function BoardHUD({
   const [quota, setQuota] = useState<AccountQuota[]>([])
   const [processAgents, setProcessAgents] = useState<Record<string, string>>({})
   const [collapsed, setCollapsed] = useState(false)
+  const [prefs, setPrefs] = useState<HudPrefs>(() => loadHudPrefs())
+  const updatePrefs = (next: HudPrefs): void => {
+    setPrefs(next)
+    saveHudPrefs(next)
+  }
   const scanGeneration = useRef(0)
   useEffect(() => window.termspace.onQuota(setQuota), [])
 
@@ -494,19 +522,37 @@ function BoardHUD({
                 </button>
               </span>
               {accounts.map((a) => (
-                <AccountBlock key={a.accountId} a={a} usingCount={usingCount(a)} />
+                <AccountBlock
+                  key={a.accountId}
+                  a={a}
+                  usingCount={usingCount(a)}
+                  expanded={prefs.accounts.includes(a.accountId)}
+                  onToggle={() =>
+                    updatePrefs({ ...prefs, accounts: toggleIn(prefs.accounts, a.accountId) })
+                  }
+                />
               ))}
             </>
           )}
           {agentRows.length > 0 && (
         <>
           <div className="hud-divider" />
-          <span className="quota-title">
-            画布 · {terms.length} 终端
-            {running > 0 && ` · ${running} 运行`}
-            {attention > 0 && ` · ${attention} 需要你`}
-          </span>
-          {shown.map((n) => {
+          {/* 折叠时**计数和"需要你"仍然留在标题里** —— 这一段的全部价值就是
+              "有没有 agent 在等我"，藏成一个光秃秃的 ▾ 等于把功能一起折掉了 */}
+          <button
+            className="quota-title as-toggle"
+            title={prefs.board ? '收起画布终端列表' : '展开画布终端列表'}
+            onClick={() => updatePrefs({ ...prefs, board: !prefs.board })}
+          >
+            <span>
+              画布 · {terms.length} 终端
+              {running > 0 && ` · ${running} 运行`}
+              {attention > 0 && ` · ${attention} 需要你`}
+            </span>
+            <span className="hud-caret">{prefs.board ? '▴' : '▾'}</span>
+          </button>
+          {prefs.board &&
+            shown.map((n) => {
             const ctx = ctxMap[n.id]
             return (
               <button
@@ -535,7 +581,7 @@ function BoardHUD({
               </button>
             )
           })}
-          {agentRows.length > shown.length && (
+          {prefs.board && agentRows.length > shown.length && (
             <span className="hud-more">还有 {agentRows.length - shown.length} 个…</span>
           )}
         </>
