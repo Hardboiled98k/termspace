@@ -10,3 +10,14 @@ site/.wrangler/
 
 # Claude 本地运行工件：含 session UUID / PID / 进程启动时间
 .claude/scheduled_tasks.lock
+
+# 过程产物：AI 评审转录、原始调研 dump、内部规划。
+# 它们不是 app 的文档，不随仓库发布 —— 副本在 ~/Desktop/code/termspace-notes/
+.claude/codex-runs/
+docs/*-review-codex.md
+docs/*-raw.json
+docs/audit-workflow-*.json
+docs/QUOTA-PLAN.md
+PRD.md
+ARCHITECTURE-NOTES.md
+site/TODO.md

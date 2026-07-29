@@ -170,7 +170,7 @@ TERMBOARD_FITPROBE=1                      # 量终端 canvas 溢出内容区多�
 ## 额度采集（2026-07-27）
 
 `src/main/quota/` —— **一个账号一个采集器**，全局单例拉一次广播给所有节点（额度是账号级的，
-绝不每节点各拉）。5 分钟一轮。完整调研见 `docs/QUOTA.md` 与 `docs/QUOTA-PLAN.md`。
+绝不每节点各拉）。5 分钟一轮。完整调研见 `docs/QUOTA.md`。
 
 - **Claude**：`GET https://api.anthropic.com/api/oauth/usage`，token 从钥匙串取。
   必须 `execFile('/usr/bin/security')` —— 那条记录的 ACL 信任的是 security 这个二进制本身，
@@ -313,7 +313,7 @@ npm run dist:signed
 
 `tb ask <ssh别名>:<节点> <任务>` —— 走用户已有的免密 ssh，**不新增任何网络暴露面**
 （两边 hook server 照旧只绑 127.0.0.1，ssh 隧道进来的源地址本身就是回环）。
-评审全文见 `docs/peer-review-codex.md`。
+（当初的评审全文是过程产物，未随仓库发布。）
 
 - **不要改成给 `remote.ts` 加 `/api/delegate`**（这是最初的方案，被否了）：字面上不是
   exec，安全语义上是 RCE-by-proxy —— 往一个有 Bash 权限的 agent 里注入提示词。
@@ -505,7 +505,7 @@ canvas 画到 333.1` → 溢出 12.6px ≈ 0.76 行被 `overflow:hidden` 切掉�
 `GlyphRenderer._bindAtlasPageTexture` 调 `gl.generateMipmap`，而整个 addon
 **从没设过 `TEXTURE_MIN_FILTER`** —— WebGL2 默认 `NEAREST_MIPMAP_LINEAR` 会真去
 采样 mip 层，对字形图集就是相邻字形渗色。上游已修（取消 mipmap + 显式 LINEAR）
-排在 7.0。A/B 判据表见 `.claude/codex-runs/render-review.md`。
+排在 7.0。
 
 ## 历史清洗：扫形状，不扫已知串（2026-07-29，七轮 filter-repo）
 
@@ -629,7 +629,7 @@ gitleaks git --log-opts=--all --redact # 凭证熵值
 配套纪律：**大块改动后让 codex 当对手方审 diff**（见记忆 `codex-adversarial-diff-review`），
 点名要它找「哪条用例即使实现坏掉也会通过」—— 这一项收益最高。
 
-## 路线图（真实状态见 PRD.md「优先级排序」，那张表已重校）
+## 路线图（真实状态见下表；更细的「明确未做」在 https://termspace.app/features/ ）
 
 M1–M6 与 F1–F8 均有可用实现；签名公证、手机端、三家额度采集、崩溃日志、工作区导出导入
 均已完成。**发布工程已就绪**（2026-07-28）：x64 包、oxlint、CI skeleton、应用图标、
