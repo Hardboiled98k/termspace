@@ -1116,18 +1116,46 @@ function Board(): React.JSX.Element {
   /* 新节点落在**当前视口正中**（判据见 place-node.ts）。
      老实现用画布绝对坐标的固定网格，把画布拖走之后新建的节点会出现在几千像素外，
      每次都要满画布找 —— 用户实测报的就是这个。 */
+  /* **绝对坐标的换算放在这里，不放在调用方。**
+     React Flow 里组内节点的 `position` 是**相对父节点**的 —— 四个调用方各自
+     `ns.map(x => x.position)` 的话，组在 (1000,1000)、子节点相对 (24,56) 时会
+     ① 在原点附近造出幽灵碰撞、② 漏掉真实 (1024,1056) 处的遮挡。
+     （codex 第三轮 P1，是我加"带上尺寸"那次引入的。）
+     收在 centerOf 里，四个调用点一次修好，将来新增的也不会再写错。 */
   const centerOf = useCallback(
-    (
-      size: { width: number; height: number },
-      existing: { x: number; y: number; width?: number; height?: number }[]
-    ) => {
+    (size: { width: number; height: number }, nodes: BoardNode[]) => {
+      const byId = new Map(nodes.map((n) => [n.id, n]))
+      const absolute = (n: BoardNode): { x: number; y: number } => {
+        let x = n.position.x
+        let y = n.position.y
+        // 组可以嵌套，所以要一路累加上去；带环的数据也不能把这里挂死
+        const seen = new Set<string>([n.id])
+        let pid = n.parentId
+        while (pid && !seen.has(pid)) {
+          seen.add(pid)
+          const p = byId.get(pid)
+          if (!p) break
+          x += p.position.x
+          y += p.position.y
+          pid = p.parentId
+        }
+        return { x, y }
+      }
       const pane = document.querySelector('.react-flow__viewport')?.parentElement
       const r = pane?.getBoundingClientRect()
       const center = viewportCenter(getViewport(), {
         width: r?.width ?? window.innerWidth,
         height: r?.height ?? window.innerHeight
       })
-      return placeNewNode(center, size, existing)
+      return placeNewNode(
+        center,
+        size,
+        nodes.map((n) => ({
+          ...absolute(n),
+          width: n.width ?? n.measured?.width,
+          height: n.height ?? n.measured?.height
+        }))
+      )
     },
     [getViewport]
   )
@@ -1776,14 +1804,7 @@ function Board(): React.JSX.Element {
                   position: { x: 24, y: 56 + (n % 3) * 40 }
                 }
               : {
-                  position: centerOf(
-                    DEFAULT_SIZE,
-                    ns.map((x) => ({
-                      ...x.position,
-                      width: x.width ?? x.measured?.width,
-                      height: x.height ?? x.measured?.height
-                    }))
-                  )
+                  position: centerOf(DEFAULT_SIZE, ns)
                 }),
             ...DEFAULT_SIZE,
             data: {
@@ -1818,14 +1839,7 @@ function Board(): React.JSX.Element {
           {
             id: newId,
             type: 'browser' as const,
-            position: centerOf(
-              { width: 640, height: 460 },
-              ns.map((x) => ({
-                ...x.position,
-                width: x.width ?? x.measured?.width,
-                height: x.height ?? x.measured?.height
-              }))
-            ),
+            position: centerOf({ width: 640, height: 460 }, ns),
             width: 640,
             height: 460,
             data: { url: url || 'https://www.google.com' }
@@ -1850,14 +1864,7 @@ function Board(): React.JSX.Element {
         {
           id: newId,
           type: 'credential' as const,
-          position: centerOf(
-            { width: 220, height: 132 },
-            ns.map((x) => ({
-              ...x.position,
-              width: x.width ?? x.measured?.width,
-              height: x.height ?? x.measured?.height
-            }))
-          ),
+          position: centerOf({ width: 220, height: 132 }, ns),
           width: 220,
           height: 132,
           data: { identityId }
@@ -1880,14 +1887,7 @@ function Board(): React.JSX.Element {
         {
           id: `ctx-${activeProject}`,
           type: 'context' as const,
-          position: centerOf(
-            { width: 420, height: 320 },
-            ns.map((x) => ({
-              ...x.position,
-              width: x.width ?? x.measured?.width,
-              height: x.height ?? x.measured?.height
-            }))
-          ),
+          position: centerOf({ width: 420, height: 320 }, ns),
           width: 420,
           height: 320,
           data: { title: '共享上下文' }

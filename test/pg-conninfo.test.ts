@@ -192,3 +192,16 @@ test('**认不出的连接目标参数一律拒绝**，绝不静默忽略', () =
   assert.equal(pgConnFromTarget('postgres://h/db?passfile=/tmp/x'), null)
   assert.ok(pgConnFromTarget('postgres://h/db?application_name=tb'), '无害参数不该被拒')
 })
+
+test('**key=value 分支也要 fail-closed**（上一版只修了 URI 那条）', () => {
+  /* 真 psql 17.5 对 `service=definitely_missing` 会直接报
+     `definition of service "definitely_missing" not found` 拒绝连接，
+     而我们静默忽略它照常连过去 = 可写 broker 连到 libpq 本来不会连的库。
+     判据必须两条分支共用 —— 各写一份就是改一处漏一处。 */
+  assert.equal(pgConnFromTarget('host=127.0.0.1 port=1 dbname=d service=nope'), null)
+  assert.equal(pgConnFromTarget('host=h dbname=d passfile=/tmp/x'), null)
+  // 混用：认识的参数在前也不能让它蒙混过关
+  assert.equal(pgConnFromTarget('user=u password=pw123456 host=h service=nope'), null)
+  // 无害的未映射键不该拒（否则合法连接串会被误杀）
+  assert.ok(pgConnFromTarget('host=h dbname=d application_name=tb'))
+})

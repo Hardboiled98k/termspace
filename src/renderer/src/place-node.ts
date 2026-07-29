@@ -71,7 +71,11 @@ export function placeNewNode(
     // 往右下错开：和 macOS 新窗口的层叠方向一致，人对这个方向有预期
     p = { x: base.x + (i + 1) * STEP, y: base.y + (i + 1) * STEP }
   }
-  return p
+  /* **试满了还是被占，就回到 base。**
+     一个 2400×2000 的大组能把 24 次全部吃掉，那时 p 已经在 base 右下 816px 外 ——
+     **仍然被完全包住，却离视口中心更远了**，两头不讨好。
+     回到 base 至少保证"出现在你正看着的地方"，那是这个函数存在的全部理由。 */
+  return taken(p) ? base : p
 }
 
 /**

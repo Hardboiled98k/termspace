@@ -119,3 +119,12 @@ test('zoom 为 0 / 缺失时不产生 Infinity', () => {
   const p = viewportCenter({ x: 0, y: 0, zoom: 0 }, { width: 800, height: 600 })
   assert.ok(Number.isFinite(p.x) && Number.isFinite(p.y))
 })
+
+test('**试满仍被占就回到 base**，不能落得更远还照样被吞', () => {
+  /* 2400×2000 的大组能把 24 次错开全部吃掉。那时落点在 base 右下 816px 外，
+     **仍然被完全包住、却离视口中心更远**，两头不讨好。
+     回到 base 至少保证"出现在你正看着的地方"—— 那是这个函数存在的全部理由。 */
+  const huge = { x: -1200, y: -1000, width: 2400, height: 2000 }
+  const p = placeNewNode({ x: 0, y: 0 }, { width: 220, height: 132 }, [huge])
+  assert.deepEqual(p, { x: -110, y: -66 }, `没回到 base：${JSON.stringify(p)}`)
+})

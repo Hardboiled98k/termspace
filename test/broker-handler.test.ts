@@ -85,7 +85,8 @@ test('**授权 key 必须带 kind**：db:prod 的授权不能白送给 ssh:prod'
   await handleBroker(deps, 'term-1', 'ssh', 'prod', 'ls')
 
   const targets = calls.authorize.map((a) => a.target)
-  assert.deepEqual(targets, ['broker:postgres:prod#p1', 'broker:ssh:prod#s1'])
+  assert.match(targets[0] ?? '', /^broker:postgres:prod#p1@[0-9a-f]{12}$/)
+  assert.match(targets[1] ?? '', /^broker:ssh:prod#s1@[0-9a-f]{12}$/)
   assert.notEqual(targets[0], targets[1], '两种连接共用一个授权 key')
 })
 
@@ -101,10 +102,8 @@ test('同名同类型连接换了 id 后必须使用不同授权 key', async () 
   await handleBroker(deps, 'term-1', 'postgres', 'prod', 'delete from users')
 
   const targets = calls.authorize.map((a) => a.target)
-  assert.deepEqual(targets, [
-    'broker:postgres:prod#old-profile-id',
-    'broker:postgres:prod#new-profile-id'
-  ])
+  assert.match(targets[0] ?? '', /#old-profile-id@/)
+  assert.match(targets[1] ?? '', /#new-profile-id@/)
   assert.notEqual(targets[0], targets[1], '新 profile 继承了旧 profile 的授权')
 })
 
@@ -249,4 +248,70 @@ test('broker 返回值里的连接串也会被隐去', async () => {
 
   assert.ok(!failed.includes(secret))
   assert.match(failed, /«已隐去»/)
+})
+
+/* ── 第四条密码路径（codex 第三轮 P1）─────────────────────────────────
+   只脱敏"起始摘要"挡不住：psql 会把出错的语句**原样回显**，
+   于是 `执行失败：… ALTER ROLE alice PASSWORD 'x' …` 顺着返回值进任务账本，
+   而账本是**落盘持久化**的。摘要 / 成功输出 / 失败输出必须走同一份 secrets。 */
+
+const PW_CASES: Array<[string, string, string]> = [
+  ['postgres', `ALTER ROLE alice PASSWORD 'LedgerSecret'`, 'LedgerSecret'],
+  ['postgres', `ALTER ROLE alice PASSWORD E'EscapedSecret'`, 'EscapedSecret'],
+  ['postgres', `ALTER ROLE alice PASSWORD $tag$DollarSecret$tag$`, 'DollarSecret'],
+  ['postgres', `CREATE USER bob IDENTIFIED BY "QuotedSecret"`, 'QuotedSecret'],
+  ['ssh', `mysql --password=CliSecret1 -e 'select 1'`, 'CliSecret1'],
+  ['ssh', `sshpass -p SshpassSecret ssh host`, 'SshpassSecret'],
+  ['ssh', `tool --password SpacedSecret run`, 'SpacedSecret']
+]
+
+for (const [kind, payload, pw] of PW_CASES) {
+  test(`**${kind}：${pw} 既不能进弹窗、也不能进账本**`, async () => {
+    const { deps, calls } = makeDeps()
+    deps.getSettings = async () => ({
+      brokers: [{ id: 'p1', name: 'prod', kind: kind as 'postgres' | 'ssh', readOnly: false }]
+    })
+    // psql / shell 出错时会把整条命令回显出来
+    deps.run = async () => ({ ok: false, output: '', error: `syntax error near: ${payload}` })
+
+    const result = await handleBroker(deps, 'term-1', kind, 'prod', payload)
+
+    assert.ok(!calls.authorize[0]?.detail.includes(pw), `密码进了授权弹窗：${calls.authorize[0]?.detail}`)
+    assert.ok(!calls.ledger[0]?.task?.includes(pw), `密码进了账本摘要：${calls.ledger[0]?.task}`)
+    assert.ok(!result.includes(pw), `密码进了返回值（→ 落盘的账本）：${result}`)
+  })
+}
+
+test('执行拿到的仍是**原始** payload（脱敏只用于展示，改了就不是用户要跑的那条了）', async () => {
+  const { deps } = makeDeps()
+  let got = ''
+  deps.run = async (_p, payload) => {
+    got = payload
+    return { ok: true, output: 'ok' }
+  }
+  const sql = `ALTER ROLE alice PASSWORD 'KeepMe123'`
+  await handleBroker(deps, 'term-1', 'postgres', 'prod', sql)
+  assert.equal(got, sql)
+})
+
+test('**同一个 id 改了 target 或 readOnly，授权 key 必须变**', async () => {
+  /* 换完整 id 只挡住了"删了重建"。同一个 id 上把连接串改到别处、
+     或把只读改成可写，authTarget 完全不变 ——
+     用户当初为一个**只读的 staging** 勾的"本次不再询问"，
+     会原样放行一个**可写的 prod**。（codex 第三轮 P1） */
+  const { deps, calls } = makeDeps()
+  let readOnly = true
+  let conn = 'postgres://ro@staging/app'
+  deps.getSettings = async () => ({ brokers: [{ id: 'same-id', name: 'prod', kind: 'postgres', readOnly }] })
+  deps.getBrokerTarget = async () => conn
+
+  await handleBroker(deps, 'term-1', 'postgres', 'prod', 'select 1')
+  conn = 'postgres://root@prod.internal/app' // 同一个 id，连接串换了
+  await handleBroker(deps, 'term-1', 'postgres', 'prod', 'select 1')
+  readOnly = false // 同一个 id，从只读变可写
+  await handleBroker(deps, 'term-1', 'postgres', 'prod', 'select 1')
+
+  const t = calls.authorize.map((a) => a.target)
+  assert.equal(new Set(t).size, 3, `三种安全语义共用了授权 key：${JSON.stringify(t)}`)
+  for (const x of t) assert.ok(!x.includes('prod.internal') && !x.includes('root'), `连接串进了 key：${x}`)
 })

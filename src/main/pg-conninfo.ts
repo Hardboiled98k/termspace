@@ -243,7 +243,19 @@ export function pgConnFromTarget(target: string): PgConn | null {
     if (!kv) return null
     for (const [k, v] of Object.entries(kv)) {
       const envKey = KV_ENV[k]
-      if (!envKey) continue
+      /* **这里必须和 URI 分支用同一条 fail-closed 判据。**
+         上一版只给 URI 那条分支加了 `RISKY_UNKNOWN_PARAM`，key=value 这条
+         照旧 `continue` —— 于是
+           `host=127.0.0.1 port=1 dbname=d service=definitely_missing`
+         我们解析成 `{PGHOST,PGPORT,PGDATABASE}` 照常连过去，
+         而**真 psql 会直接报 `definition of service ... not found` 拒绝连接**。
+         也就是可写 broker 会连到一个 libpq 本来根本不会连的库。
+         （codex 第三轮 P0。同一个判据两条分支各写一份 = 改一处漏一处，
+         这正是这个仓库反复栽的形状。） */
+      if (!envKey) {
+        if (RISKY_UNKNOWN_PARAM.test(k)) return null
+        continue
+      }
       put(envKey, v)
       if (k === 'password' && v) {
         secrets.add(v)

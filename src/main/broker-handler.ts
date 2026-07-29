@@ -1,4 +1,13 @@
+import { createHash } from 'node:crypto'
 import type { BrokerProfile, BrokerResult } from './broker'
+
+/**
+ * 连接的安全语义指纹。**连接串本身绝不能进 key** —— key 会进弹窗文案、
+ * 进任务账本、进日志。取 sha256 前 12 位：够区分改动，又反推不出原文。
+ */
+export function brokerRevision(target: string, readOnly: boolean): string {
+  return createHash('sha256').update(`${readOnly ? 'ro' : 'rw'}\u0000${target}`).digest('hex').slice(0, 12)
+}
 
 interface BrokerSettings {
   brokers: Array<Omit<BrokerProfile, 'target'>>
@@ -43,21 +52,57 @@ const redact = (text: string, secret: string): string =>
   secret ? text.split(secret).join('«已隐去»') : text
 
 /**
- * 只生成授权弹窗和任务账本使用的摘要；执行器仍收到未经修改的原始 payload。
+ * 从 payload 里把**密码字面量**抠出来。
+ *
+ * 为什么要单独抠一份、而不是只对摘要做正则替换：
+ * 密码不止出现在"我们发出去的那条语句"里 —— psql 会把出错的语句**原样回显**，
+ * 于是 `执行失败：… ALTER ROLE alice PASSWORD 'x' …` 顺着返回值进了任务账本，
+ * 而账本是**落盘持久化**的。只脱敏摘要挡不住这条。
+ * （codex 第三轮 P1：这是第四条没走统一出口的密码路径。）
+ *
+ * 抠出来之后，摘要 / 成功输出 / 失败输出 / 账本结果**全部走同一份 secrets**。
+ */
+export function extractPayloadSecrets(kind: string, payload: string): string[] {
+  const out = new Set<string>()
+  const add = (v?: string): void => {
+    const t = v?.trim()
+    // 太短的不参与全局替换，否则会把正常输出切碎（见 pg-conninfo 的同款判据）
+    if (t && t.length >= 4) out.add(t)
+  }
+  if (kind === 'postgres') {
+    /* 三种合法写法都要认。`E'...'` 是转义字符串、`$tag$...$tag$` 是 dollar-quoting，
+       只写单双引号那版会漏掉后两种 —— 而它们都是 psql 接受的。 */
+    for (const m of payload.matchAll(
+      /\b(?:PASSWORD|IDENTIFIED\s+BY)\s+(?:E?'((?:[^']|'')*)'|"([^"]*)"|\$([A-Za-z_]*)\$([\s\S]*?)\$\3\$)/gi
+    )) {
+      add(m[1] ?? m[2] ?? m[4])
+    }
+  } else if (kind === 'ssh') {
+    // `--password=x` / `--password x` / `-pX` / `sshpass -p X` 都见过
+    for (const m of payload.matchAll(
+      /(?:--password[=\s]+|(?:^|\s)-p\s*)(?:"([^"]*)"|'([^']*)'|(\S+))/g
+    )) {
+      add(m[1] ?? m[2] ?? m[3])
+    }
+  }
+  return [...out]
+}
+
+/** 把一组 secret 从任意文本里抹掉。长的先替换，避免短片段把长片段切碎 */
+export function scrubAll(text: string, secrets: string[]): string {
+  let out = text
+  for (const sct of [...secrets].toSorted((a, b) => b.length - a.length)) {
+    out = out.split(sct).join('«已隐去»')
+  }
+  return out
+}
+
+/**
+ * 只生成授权弹窗和任务账本使用的摘要；执行器仍收到**未经修改的原始 payload**。
  * 除完整连接串外，还要遮住 SQL 改密语句和 ssh 常见的命令行密码参数。
  */
 export function summarizeBrokerPayload(kind: string, payload: string, target: string): string {
-  let summary = redact(payload, target)
-  if (kind === 'postgres') {
-    summary = summary
-      .replace(/\b(PASSWORD)\s+(?:'[^']*'|"[^"]*")/gi, '$1 «已隐去»')
-      .replace(/\b(IDENTIFIED\s+BY)\s+(?:'[^']*'|"[^"]*")/gi, '$1 «已隐去»')
-  } else if (kind === 'ssh') {
-    summary = summary
-      .replace(/(--password=)(?:"[^"]*"|'[^']*'|[^\s]+)/gi, '$1«已隐去»')
-      .replace(/(^|\s)(-p)(?:"[^"]*"|'[^']*'|[^\s]+)/g, '$1$2«已隐去»')
-  }
-  return summary
+  return scrubAll(redact(payload, target), extractPayloadSecrets(kind, payload))
 }
 
 /**
@@ -184,10 +229,16 @@ export async function handleBroker(
      但设置里的 id 并不强制是 UUID，可以**确定性地构造**一个同前缀的。
      撞上的后果是旧 grant 跳过授权弹窗、而连接串按新的完整 id 去取
      = 授权被转移给了另一条连接。授权 key 是给机器比对的，没有截短的理由。 */
-  const authTarget = `${profileLabel}#${prof.id}`
-
+  /* **授权 key 必须钉住"授权时看到的那个连接的安全语义"**，不只是它的 id。
+     换完整 id 只挡住了"删了重建"；同一个 id 上把 target 改到别处、
+     或把 readOnly 从 true 改成 false，authTarget 完全不变 ——
+     用户当初为一个**只读的 staging** 勾的"本次不再询问"，
+     会原样放行一个**可写的 prod**。（codex 第三轮 P1。）
+     指纹只用**不泄密**的成分：readOnly 是布尔，target 只取它的 sha256 前 12 位。 */
   const target = await deps.getBrokerTarget(prof.id)
   if (!target) return `连接「${name}」还没配连接串（设置 → 代理连接）`
+  // 指纹要连接串本身，所以必须在取到它之后才算得出来
+  const authTarget = `${profileLabel}#${prof.id}@${brokerRevision(target, prof.readOnly)}`
 
   const safePayload = summarizeBrokerPayload(kind, payload, target)
 
@@ -209,8 +260,11 @@ export async function handleBroker(
       if (!ok) return `${DENIED}${source} 未获授权使用 ${authTarget}。`
 
       const r = await deps.run({ ...prof, kind: prof.kind, target }, payload)
-      if (!r.ok) return `${FAILED}${redact(r.error ?? '未知错误', target)}`
-      return redact(r.output || '（无输出）', target)
+      /* **返回值也要过同一份 secrets**：psql 会把出错的语句原样回显，
+         `执行失败：… PASSWORD 'x' …` 会顺着这里进**落盘的**任务账本。 */
+      const payloadSecrets = extractPayloadSecrets(kind, payload)
+      if (!r.ok) return `${FAILED}${scrubAll(redact(r.error ?? '未知错误', target), payloadSecrets)}`
+      return scrubAll(redact(r.output || '（无输出）', target), payloadSecrets)
     }
   )
 }
