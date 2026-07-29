@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="zh-CN" class="no-js">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>更新日志 — Termspace</title>
+<meta name="description" content="Termspace 每个版本改了什么。包括修掉的安全问题。" />
+<meta name="color-scheme" content="dark" />
+<link rel="icon" href="/favicon.png" />
+<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+<link rel="stylesheet" href="/assets/site.css" />
+<style>
+  .rel { display: grid; grid-template-columns: 148px 1fr; gap: 0 32px; padding: 40px 0; border-top: 1px solid var(--line); }
+  .rel:first-of-type { border-top: 0; padding-top: 0; }
+  .rel .v { font: 500 22px/1.2 var(--mono); letter-spacing: -.03em; }
+  .rel .d { font: 500 11.5px/1 var(--mono); letter-spacing: .1em; color: var(--dim); margin-top: 8px; }
+  .rel h3 { margin-top: 22px; }
+  .rel h3:first-child { margin-top: 0; }
+  .rel ul { margin: 0; padding-left: 18px; color: var(--muted); font-size: 14.5px; }
+  .rel li { margin-bottom: 7px; }
+  .rel li strong { color: var(--ink); font-weight: 600; }
+  @media (max-width: 720px) { .rel { grid-template-columns: 1fr; gap: 14px; } }
+</style>
+</head>
+<body>
+
+<nav class="nav">
+  <div class="nav-in">
+    <a class="brand" href="/"><img src="/favicon.png" alt="" width="22" height="22" /><span>Termspace</span></a>
+    <a class="link" href="/features/">功能</a>
+    <a class="link" href="/security/">安全</a>
+    <a class="link" href="/changelog/">更新日志</a>
+    <a class="btn btn-sm" href="/download/">下载</a>
+  </div>
+</nav>
+
+<div class="wrap narrow">
+
+  <section class="band first">
+    <p class="eyebrow">更新日志</p>
+    <h1>改了什么</h1>
+    <p class="lead">修掉的安全问题会单列出来 —— 藏起来对谁都没好处。
+      当前版本号从更新源实时读取，这一页不写死任何版本。</p>
+  </section>
+
+  <section class="band" style="padding-top:0;border-top:0">
+
+    <div class="rel rise">
+      <div>
+        <div class="v">0.3.0</div>
+        <div class="d">2026-07-29</div>
+        <div style="margin-top:8px"><span class="chip g">当前</span></div>
+      </div>
+      <div>
+        <h3>新增</h3>
+        <ul>
+          <li><strong>画布组绑定 git worktree</strong> —— 一个组一棵独立工作树，
+            并行的 agent 从物理上不再共享工作目录。组头显示分支与改动数；不是 git 仓库时这个功能完全不出现</li>
+          <li><strong>代理连接</strong> —— <code>tb db</code> / <code>tb ssh</code>：agent 用得到你的数据库和服务器，
+            但拿不到连接串。密码走环境变量，不进进程参数表</li>
+          <li><strong>任务账本</strong> —— 每次派活、每次代理连接、每次被拒绝的授权都留痕，可回溯</li>
+          <li><strong>⌘K 全局检索</strong> —— 零输入时按紧急度排，有输入时按相关度排</li>
+          <li><strong>可分享的布局模板</strong> —— 导出一套节点排布给别人。
+            模板里的启动命令<em>不会</em>自动执行，得你自己确认</li>
+          <li>Copilot 额度接入，三家都能查了</li>
+          <li>HUD 可折叠，账号卡默认精简</li>
+        </ul>
+
+        <h3>安全修复</h3>
+        <ul>
+          <li><strong>只读数据库连接能读出密码</strong> —— psql 有一类客户端侧的反斜杠命令，
+            其中一个可执行任意本机命令。三道原有的闸都拦不住它，因为管的都不是这件事。
+            现在任何一行以反斜杠开头都直接拒绝，可写连接同样拒</li>
+          <li><strong>导入别人的画布等于执行其中的命令</strong> ——
+            画布文件带着每个终端的启动命令，而确认框只说了「替换画布」。现在导入时全部摘掉，
+            账号绑定也一并摘（否则会静默用上你的订阅号并按它计费）</li>
+          <li><strong>浏览器节点共用 Cookie</strong> —— 授权按节点发，登录态却是共享的。
+            现在每个节点一个独立分区</li>
+          <li>远程访问的能力开关点掉后立刻断服务，不再是「下次重启生效」</li>
+          <li>审批记录的完整参数不再进入界面层，脱敏收口到唯一出口</li>
+        </ul>
+
+        <h3>修复</h3>
+        <ul>
+          <li>终端底行被裁掉约四分之三行 —— 内边距长错了元素</li>
+          <li>额度面板会把真实的订阅额度显示成「查不到」：订阅和按量计费可以同时存在，
+            判定顺序反了。现在先查，查不到才退回按量那句话</li>
+          <li>指针在终端和浏览器内容上时，滚轮只滚内容，不再平移画布</li>
+          <li>新节点落在视口正中，不再叠在已有节点里面</li>
+          <li>节点变窄时终端自动缩字号</li>
+          <li>关闭项目标签页时最后几步改动会丢（落盘有防抖，切板前没先快照）</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="rel rise">
+      <div>
+        <div class="v">0.1.1</div>
+        <div class="d">2026-07-27</div>
+      </div>
+      <div>
+        <h3>新增</h3>
+        <ul>
+          <li><strong>自动更新</strong> —— 后台检查、后台下载、<strong>等你点了才装</strong></li>
+          <li><strong>跨机派活</strong> —— <code>tb ask &lt;ssh 别名&gt;:&lt;节点&gt;</code>，
+            走你已有的免密 ssh，不新开任何端口</li>
+          <li>三家额度采集：Claude / Codex / Copilot</li>
+          <li>Intel 架构安装包</li>
+        </ul>
+        <h3>修复</h3>
+        <ul>
+          <li>安装包同时包含两个架构 —— 分两次构建会让后一次把更新元数据整个重写</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="rel rise">
+      <div>
+        <div class="v">0.1.0</div>
+        <div class="d">2026-07-26</div>
+      </div>
+      <div>
+        <h3>首个签名公证版本</h3>
+        <ul>
+          <li>无限画布 + 终端节点，会话由 tmux 续存</li>
+          <li>hook 驱动的状态灯（Claude Code / Codex）</li>
+          <li>多订阅账号并行，凭证加密存储</li>
+          <li>成组、群发、状态聚合</li>
+          <li>画布内派活 <code>tb ask</code></li>
+          <li>手机端远程查看与审批（只绑回环或 Tailscale）</li>
+          <li>浏览器节点</li>
+        </ul>
+      </div>
+    </div>
+
+  </section>
+
+  <section class="band rise">
+    <p class="note">
+      版本号规则：目前处于 0.x，意味着<strong>接口和数据格式仍可能变</strong>。
+      涉及数据格式的变更会自带迁移，并在动手前留一份原文件备份。
+    </p>
+  </section>
+
+</div>
+
+<footer>
+  <div class="wrap cols">
+    <a href="/features/">功能</a>
+    <a href="/security/">安全</a>
+    <a href="/download/">下载</a>
+    <a href="/changelog/">更新日志</a>
+    <a href="https://updates.termspace.app/latest-mac.yml">更新源</a>
+    <span class="ver" id="ver-foot"></span>
+  </div>
+</footer>
+
+<script src="/assets/site.js"></script>
+<script>Termspace.wireDownload({})</script>
+</body>
+</html>

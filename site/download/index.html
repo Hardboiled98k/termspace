@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="zh-CN" class="no-js">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>下载 — Termspace</title>
+<meta name="description" content="Termspace for macOS。Apple 芯片与 Intel 双架构，已通过 Apple 公证。安装、首次启动、卸载说明。" />
+<meta name="color-scheme" content="dark" />
+<link rel="icon" href="/favicon.png" />
+<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+<link rel="stylesheet" href="/assets/site.css" />
+</head>
+<body>
+
+<nav class="nav">
+  <div class="nav-in">
+    <a class="brand" href="/"><img src="/favicon.png" alt="" width="22" height="22" /><span>Termspace</span></a>
+    <a class="link" href="/features/">功能</a>
+    <a class="link" href="/security/">安全</a>
+    <a class="link" href="/changelog/">更新日志</a>
+    <a class="btn btn-sm" href="/download/">下载</a>
+  </div>
+</nav>
+
+
+  <section class="band first">
+  <div class="wrap">
+    <p class="eyebrow">下载</p>
+    <h1>Termspace for macOS</h1>
+    <p class="lead">已通过 Apple 公证，正常不会被 Gatekeeper 拦下。</p>
+
+    <div style="margin-top:32px">
+      <a class="btn" id="dl" href="https://updates.termspace.app/latest-mac.yml">读取版本中…</a>
+      <div style="font:500 12.5px/1 var(--mono);color:var(--dim);margin-top:18px" id="alt"></div>
+      <div style="font:500 12px/1 var(--mono);letter-spacing:.06em;color:var(--dim);margin-top:12px;min-height:1.2em" id="meta"></div>
+    </div>
+
+    <!-- 两个架构都直接给出来。判断芯片这件事**可能判错**，
+         而下错架构是最常见的下载失败点 —— 所以永远留一条手动路径。 -->
+    <div class="grid g2" style="max-width:620px;margin:34px 0 0">
+      <div class="cell">
+        <h3>Apple 芯片</h3>
+        <p>M 系列全部型号。<br /><a id="arm-link" href="https://updates.termspace.app/latest-mac.yml">直接下载</a></p>
+      </div>
+      <div class="cell">
+        <h3>Intel</h3>
+        <p>2020 年前的 Mac 基本都是。<br /><a id="x64-link" href="https://updates.termspace.app/latest-mac.yml">直接下载</a></p>
+      </div>
+    </div>
+    <p class="lead" style="margin-top:18px;font-size:14px">不确定用的哪种？点左上角苹果标 → 「关于本机」，写着「芯片 Apple M…」就是 Apple 芯片。</p></div>
+  </section>
+
+  <section class="band rise tint">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow">要求</p>
+      <h2>装之前</h2>
+    </div>
+    <div class="scroll-x">
+      <table class="tbl">
+        <thead><tr><th>项</th><th>要求</th></tr></thead>
+        <tbody>
+          <tr><td>系统</td><td>macOS 12 Monterey 或更新</td></tr>
+          <tr><td>架构</td><td>Apple 芯片与 Intel 都有独立安装包</td></tr>
+          <tr><td>tmux</td><td>强烈建议。<strong>会话跨应用重启存活全靠它</strong>，没装也能用但关掉应用就断。
+            设置里的依赖体检会告诉你装没装，<code>brew install tmux</code> 即可</td></tr>
+          <tr><td>agent CLI</td><td>可选。Claude Code / Codex 等你自己装、自己登录，Termspace 不代管</td></tr>
+          <tr><td>网络</td><td>只有检查更新是固定出站。其余全是你配置的 agent 在跟各自厂商说话</td></tr>
+        </tbody>
+      </table>
+    </div></div>
+  </section>
+
+  <section class="band rise">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow">安装</p>
+      <h2>三步</h2>
+    </div>
+    <ul class="items">
+      <li>
+        <span class="t">1 · 打开 dmg，把应用拖进「应用程序」</span>
+        <span class="d">标准流程，没有安装脚本，不需要管理员密码。</span>
+      </li>
+      <li>
+        <span class="t">2 · 第一次打开会问要不要装 hook</span>
+        <span class="d">那是节点边框跟着 agent 状态变的数据来源 ——
+          它会往 Claude Code / Codex 的配置里加几行。
+          <strong>你可以拒绝</strong>，其余功能照常，只是没有状态灯。
+          之后随时能在设置里开关，卸载时会问要不要一并清掉。</span>
+      </li>
+      <li>
+        <span class="t">3 · 建第一个终端节点</span>
+        <span class="d">工具栏加号。想让某个终端用特定的订阅账号，
+          先在设置里加一个凭证，再从凭证节点拉一根线到它。</span>
+      </li>
+    </ul></div>
+  </section>
+
+  <section class="band rise tint">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow">更新</p>
+      <h2>之后怎么升级</h2>
+    </div>
+    <div class="grid g2">
+      <div class="cell">
+        <h3>应用自己检查</h3>
+        <p>发现新版本会下好放着，然后<strong>等你点</strong>。
+          绝不自动安装，也绝不在退出时静默替换 ——
+          终端里跑着你的活，重启会掐掉正在进行的对话。</p>
+      </div>
+      <div class="cell">
+        <h3>会话不会丢</h3>
+        <p>更新重启后 tmux 会话还在，节点接回原来那个。
+          但 agent 的对话上下文是进程内的，重启就没了 —— 挑个空档再点安装。</p>
+      </div>
+    </div>
+    <p class="note" style="margin-top:22px">
+      更新链条到底保证了什么、不保证什么，逐条写在
+      <a href="/security/#updates">安全模型</a> 里。
+    </p></div>
+  </section>
+
+  <section class="band rise">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow">卸载</p>
+      <h2>删干净</h2>
+    </div>
+    <div class="card">
+      <p style="color:var(--ink)"><strong>删应用之前，先在设置里摘掉 hook。</strong>
+        设置 → 状态 hook → 卸载，它会从 Claude Code 的配置里移除 Termspace 加的条目。
+        首次写入时原文件已备份，就在同目录下。</p>
+      <p style="margin-top:12px">然后把应用拖进废纸篓。还会剩下两样，都不影响系统，
+        想清干净的话手动来：本机数据目录（画布、凭证、滚动历史），
+        以及后台还活着的 tmux 会话 —— 后者重启一次机器就没了。</p>
+      <p style="margin-top:14px;color:var(--dim);font-size:13.5px">
+        没摘 hook 就删应用不会报错也不会卡住 —— Termspace 的 hook 脚本发现服务不在时会直接退出，
+        不影响你在别处正常用 Claude Code。
+      </p>
+    </div></div>
+  </section>
+
+  <section class="band rise tint">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow">状态</p>
+      <h2>它现在是什么成熟度</h2>
+    </div>
+    <div class="card" style="border-color:rgba(255,159,10,.28)">
+      <p style="color:var(--ink)">
+        早期软件。功能是完整的、每天在真实使用中跑，但用户量还很小 ——
+        意味着还有没被踩到的边角。
+      </p>
+      <p style="margin-top:12px">
+        它跑在你的开发机上、握着你的账号凭证、能往你的终端里敲字。
+        请按这个前提决定要不要用，以及先拿哪台机器试。
+        边界在哪写在 <a href="/security/">安全模型</a>。
+      </p>
+    </div></div>
+  </section>
+
+
+<footer>
+  <div class="wrap cols">
+    <a href="/features/">功能</a>
+    <a href="/security/">安全</a>
+    <a href="/download/">下载</a>
+    <a href="/changelog/">更新日志</a>
+    <a href="https://updates.termspace.app/latest-mac.yml">更新源</a>
+    <span class="ver" id="ver-foot"></span>
+  </div>
+</footer>
+
+<script src="/assets/site.js"></script>
+<script>
+Termspace.wireDownload({ btn: 'dl', alt: 'alt', meta: 'meta' })
+/* 两个架构的直链单独接一次 —— 主按钮是「猜一个」，这两个是「你自己选」。
+   猜错架构是最常见的下载失败点，所以手动路径必须始终存在。 */
+document.addEventListener('feed', (e) => {
+  const f = e.detail
+  for (const [id, url] of [['arm-link', f.arm], ['x64-link', f.x64]]) {
+    const a = document.getElementById(id)
+    if (!a) continue
+    if (!url) { a.textContent = '这个版本没有该架构'; a.removeAttribute('href'); continue }
+    a.href = Termspace.CDN + url
+    a.setAttribute('download', '')
+    a.textContent = '下载 v' + f.version
+  }
+})
+</script>
+</body>
+</html>

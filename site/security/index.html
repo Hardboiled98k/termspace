@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="zh-CN" class="no-js">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>安全模型 — Termspace</title>
+<meta name="description" content="画布上的授权是产品护栏，不是安全边界。这一页讲清楚它挡什么、不挡什么，以及数据具体存在哪。" />
+<meta name="color-scheme" content="dark" />
+<link rel="icon" href="/favicon.png" />
+<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+<link rel="stylesheet" href="/assets/site.css" />
+</head>
+<body>
+
+<nav class="nav">
+  <div class="nav-in">
+    <a class="brand" href="/"><img src="/favicon.png" alt="" width="22" height="22" /><span>Termspace</span></a>
+    <a class="link" href="/features/">功能</a>
+    <a class="link" href="/security/">安全</a>
+    <a class="link" href="/changelog/">更新日志</a>
+    <a class="btn btn-sm" href="/download/">下载</a>
+  </div>
+</nav>
+
+
+  <section class="band first">
+  <div class="wrap">
+    <p class="eyebrow">安全模型</p>
+    <h1>先说不承诺什么</h1>
+    <p class="lead">安全页通常从「我们保护你」开始。这一页从边界开始，
+      因为一个说不清边界的承诺没有用。</p></div>
+  </section>
+
+  <!-- ── 边界 ──────────────────────────────────────────────── -->
+  <section class="band rise tint" id="boundary">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow">边界</p>
+      <h2>画布上的授权是产品护栏，不是安全边界</h2>
+    </div>
+
+    <div class="card" style="border-color:rgba(255,159,10,.28)">
+      <p style="color:var(--ink);font-size:15.5px;line-height:1.7">
+        Termspace 里所有终端和应用本身跑在<strong>同一个用户身份</strong>下。
+        底层是 tmux，而任何已经能在你机器上执行命令的进程，
+        都可以直接向那些会话发送按键 —— 绕开画布上的连线、弹窗、开关，一个都不经过。
+      </p>
+      <p style="margin-top:14px">
+        所以「连线即授权」防的是：agent 拿错账号、连错数据库、把活派到你没打算派的地方，
+        以及你自己手滑。<strong>它不防一个已经拿到你 shell 的攻击者</strong> ——
+        那种情况下，你的 ssh 私钥和浏览器 cookie 早就没了，Termspace 的弹窗是最不重要的一环。
+      </p>
+      <p style="margin-top:14px;color:var(--dim);font-size:13.5px">
+        这句话同样写在项目的开发文档和代码注释里。任何时候有人（包括我们自己）
+        把它描述成安全机制，那是错的。
+      </p>
+    </div></div>
+  </section>
+
+  <!-- ── 真做到的 ──────────────────────────────────────────── -->
+  <section class="band rise" id="does">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow">做到的</p>
+      <h2>在那条边界之内，具体做了这些</h2>
+      <p class="lead">每一条都给出它挡住的那个具体场景。挡不住什么也一并写。</p>
+    </div>
+
+    <ul class="items">
+      <li>
+        <span class="t">凭证只在主进程里存在</span>
+        <span class="src">safeStorage</span>
+        <span class="d">用系统钥匙串加密后落盘。界面层从设计上就拿不到值，只拿得到有哪些变量名 ——
+          已保存的明文永不回传给界面。所以任何界面上的 bug 都泄不出凭证内容。</span>
+      </li>
+      <li>
+        <span class="t">数据库和 ssh 连接「用得到，拿不到」</span>
+        <span class="src">tb db / tb ssh</span>
+        <span class="d">agent 提交一条 SQL，主进程拿着连接串去跑，只把结果还回去。
+          密码走环境变量，<strong>绝不进命令行参数</strong> —— 同一台机器上所有用户都能看到进程的参数表。
+          只读连接会在客户端和服务端各设一道，并拒绝多语句与客户端元命令。</span>
+      </li>
+      <li>
+        <span class="t">每个浏览器节点一个独立登录空间</span>
+        <span class="src">按节点分区</span>
+        <span class="d">否则 agent 拿到自己节点的授权后，只要导航到你在别的节点登录过的站，
+          就白拿登录态。分区参数形状不对时一律落到一次性空间，绝不退回共享的默认空间。</span>
+      </li>
+      <li>
+        <span class="t">远程访问只绑回环或 Tailscale</span>
+        <span class="src">网卡形态判定</span>
+        <span class="d">永远不提供绑定所有网卡的选项。判定 Tailscale 网卡用的是网卡形态
+          （地址段 + 掩码 + 硬件地址），不是只看地址段 ——
+          酒店和校园网络会把同一段地址发给物理网卡，只看段就会把服务开到公共 Wi-Fi 上。
+          找不到 Tailscale 时退回回环，并在设置里如实标注，绝不退到物理网卡。</span>
+      </li>
+      <li>
+        <span class="t">导入别人的画布不会执行任何东西</span>
+        <span class="src">导入前净化</span>
+        <span class="d">画布文件里可以带每个终端的启动命令，那会在第一次开会话时进 shell。
+          导入时全部摘掉，同时摘掉账号绑定 —— 否则别人的画布会静默用上你的订阅号并按它计费。
+          <strong>你选择打开一个文件，不等于同意执行它。</strong></span>
+      </li>
+      <li>
+        <span class="t">派活只进活着的 agent 会话</span>
+        <span class="src">fail-closed 判定</span>
+        <span class="d">状态判定拿不准时一律拒绝。检查和真正写入之间如果还有异步等待，
+          落笔那一刻会再查一遍 —— 那几毫秒足够 agent 退出，
+          那时终端里是光秃秃的 shell，任务正文就成了直接执行的命令。</span>
+      </li>
+      <li>
+        <span class="t">安全开关只往收紧的方向失败</span>
+        <span class="src">先改内存再落盘</span>
+        <span class="d">关掉一个开关时先让它立刻生效，再写磁盘。
+          反过来的话，写盘失败会让界面显示「已关闭」而实际还开着。</span>
+      </li>
+      <li>
+        <span class="t">敏感文件在创建那一刻就是私有的</span>
+        <span class="src">创建即设权限</span>
+        <span class="d">不是「先写完再改权限」—— 那中间有一个几毫秒的窗口文件是全局可读的，
+          而监听目录事件就能守到。</span>
+      </li>
+    </ul></div>
+  </section>
+
+  <!-- ── 数据在哪 ──────────────────────────────────────────── -->
+  <section class="band rise tint" id="data">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow">数据</p>
+      <h2>东西存在哪，谁能看到</h2>
+    </div>
+    <div class="scroll-x">
+      <table class="tbl">
+        <thead><tr><th>什么</th><th>存在哪</th><th>出网吗</th></tr></thead>
+        <tbody>
+          <tr><td>凭证内容</td><td>本机，系统钥匙串加密</td><td>不出网</td></tr>
+          <tr><td>画布布局 / 节点</td><td>本机 JSON，原子写 + 备份</td><td>不出网</td></tr>
+          <tr><td>终端滚动历史</td><td>本机文件</td><td>不出网</td></tr>
+          <tr><td>派活与授权记录</td><td>本机追加式日志</td><td>不出网</td></tr>
+          <tr><td>额度数据</td><td>不落盘，内存里</td><td>向对应厂商的官方接口查询</td></tr>
+          <tr><td>崩溃日志</td><td>本机</td><td>不自动上传</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note" style="margin-top:24px">
+      <strong>没有账号体系，没有服务端。</strong> Termspace 不向我们的服务器发送任何东西 ——
+      我们没有那样的服务器。唯一的固定出站是检查更新（见下），
+      其余全部是你自己配置的 agent 在跟它们各自的厂商说话。
+    </p></div>
+  </section>
+
+  <!-- ── 更新链 ──────────────────────────────────────────── -->
+  <section class="band rise" id="updates">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow">更新</p>
+      <h2>更新链条到底保证了什么</h2>
+      <p class="lead">更新包会替换掉整个应用，所以这条链的每一环都值得说清楚 ——
+        包括每一环<em>不</em>保证什么。</p>
+    </div>
+
+    <div class="scroll-x">
+      <table class="tbl">
+        <thead><tr><th>环节</th><th>保证</th><th>不保证</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>HTTPS</td>
+            <td>连上的确实是那个地址的服务器，传输中没被改</td>
+            <td>那台服务器可信</td>
+          </tr>
+          <tr>
+            <td>校验和</td>
+            <td>下载到的文件完整、没损坏</td>
+            <td>发布者身份 —— 控制了发布目录的人可以给恶意包算一个匹配的校验和</td>
+          </tr>
+          <tr>
+            <td>代码签名</td>
+            <td>候选包的签名与当前正在运行的这个应用同源</td>
+            <td>它来自官方目录、版本更新、通过了公证、私钥没泄漏</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p class="note warn" style="margin-top:24px">
+      结论：这条链的<strong>信任根是发布目录的控制权</strong>，代码签名是最后一道防线而不是第一道。
+      更新源地址在设置里可以改 —— 这有代价，所以界面上会显著提示当前生效的域名。
+      只接受 HTTPS，明文地址一律拒绝。
+    </p>
+
+    <div class="grid g2" style="margin-top:22px">
+      <div class="cell">
+        <h3>装不装你说了算</h3>
+        <p>后台检查、后台下载，但绝不自动安装、绝不在退出时静默替换。
+          终端里跑着你的活，自动重启会把正在进行的 agent 对话掐掉。</p>
+      </div>
+      <div class="cell">
+        <h3>不会降级</h3>
+        <p>签名本身不提供版本单调性，防降级完全靠这一层，所以它是显式写死的。</p>
+      </div>
+    </div></div>
+  </section>
+
+  <!-- ── 修过的 ──────────────────────────────────────────── -->
+  <section class="band rise tint" id="fixed">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow">修过的</p>
+      <h2>发布前审计拦下的三个</h2>
+      <p class="lead">写出来不是为了显得坦诚 —— 是因为它们说明了这套东西的失效模式长什么样：
+        <strong>不报错，测试全绿，只是安静地做了错误的事。</strong></p>
+    </div>
+
+    <ul class="items">
+      <li>
+        <span class="t">只读的数据库连接可以读出连接串里的密码</span>
+        <span class="chip r">严重</span>
+        <span class="d">psql 有一类以反斜杠开头的命令是<strong>客户端行为</strong>，
+          其中一个能执行任意本机命令。三道闸一道都拦不住，因为它们管的都不是这件事：
+          一道看 SQL 开头的关键字，一道找分号，一道设的是服务端的事务只读属性。
+          于是 broker 存在的唯一理由 —— agent 用得到、拿不到凭证 —— 被整个抹掉。
+          现在任何一行以反斜杠开头都直接拒绝，可写连接同样拒
+          （「可写」授权的是那个数据库，不是这台机器）。</span>
+      </li>
+      <li>
+        <span class="t">打开别人发来的画布等于执行里面的命令</span>
+        <span class="chip r">严重</span>
+        <span class="d">画布文件里带着每个终端的启动命令。确认框只说了「替换画布」，
+          没说「并执行其中的命令」。现在导入时全部摘掉。</span>
+      </li>
+      <li>
+        <span class="t">浏览器节点共用一套 Cookie</span>
+        <span class="chip o">中</span>
+        <span class="d">授权是按节点发的，而登录态是共享的 ——
+          agent 拿到一个节点的授权，导航一下就能用上另一个节点的登录态。
+          现在每个节点一个独立分区。</span>
+      </li>
+    </ul>
+
+    <p class="note" style="margin-top:26px">
+      这三个都不是在写代码时发现的，是在<strong>发布前专门做一遍审计</strong>时发现的 ——
+      改动审查看的是「这次改了什么」，而它们不在任何一次改动里。
+    </p></div>
+  </section>
+
+  <!-- ── 报告 ────────────────────────────────────────────── -->
+  <section class="band rise" id="report">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow">报告</p>
+      <h2>发现问题</h2>
+    </div>
+    <div class="card">
+      <p style="color:var(--ink)">
+        如果你找到了这一页没说清的问题，或者发现某句话与实际实现不符，请告诉我们。
+        <strong>「文档描述与实现不符」本身就算一个有效报告</strong> ——
+        这一页的价值全在于它是准确的。
+      </p>
+      <p style="margin-top:12px">
+        软件当前处于早期阶段。它跑在你的开发机上、握着你的账号凭证，
+        请按这个前提评估要不要用。
+      </p>
+    </div></div>
+  </section>
+
+
+<footer>
+  <div class="wrap cols">
+    <a href="/features/">功能</a>
+    <a href="/security/">安全</a>
+    <a href="/download/">下载</a>
+    <a href="/changelog/">更新日志</a>
+    <a href="https://updates.termspace.app/latest-mac.yml">更新源</a>
+    <span class="ver" id="ver-foot"></span>
+  </div>
+</footer>
+
+<script src="/assets/site.js"></script>
+<script>Termspace.wireDownload({})</script>
+</body>
+</html>

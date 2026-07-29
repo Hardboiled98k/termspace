@@ -1,234 +1,224 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" class="no-js">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>Termspace — 无限画布终端管理器</title>
-<meta name="description" content="终端不是叠 tab，是铺在无限画布上的节点。缩到全景，看颜色分布就知道哪个 agent 在等你。" />
+<meta name="description" content="终端不是叠 tab，是铺在无限画布上的节点。缩到全景，看颜色分布就知道哪个 agent 在等你。macOS 原生应用。" />
 <meta name="color-scheme" content="dark" />
 <link rel="icon" href="/favicon.png" />
 <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+<link rel="stylesheet" href="/assets/site.css" />
 <meta property="og:type" content="website" />
 <meta property="og:title" content="Termspace" />
 <meta property="og:description" content="无限画布终端管理器 · agent 状态一眼可读" />
 <meta property="og:image" content="/icon.png" />
-<style>
-  :root {
-    --bg: #0f0f10; --panel: #1c1c1e; --term: #131315;
-    --hairline: rgba(255,255,255,.09); --hairline-2: rgba(255,255,255,.16);
-    --text: #f5f5f7; --muted: #98989f;
-    --blue: #0a84ff; --orange: #ff9f0a; --green: #30d158; --red: #ff453a; --idle: #48484a;
-    --r: 12px;
-    --mono: ui-monospace, 'SF Mono', Menlo, monospace;
-    --ui: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', 'Microsoft YaHei', sans-serif;
-  }
-  * { box-sizing: border-box; }
-  html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
-  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; } }
-  body {
-    margin: 0; background: var(--bg); color: var(--text);
-    font-family: var(--ui); line-height: 1.6; overflow-x: hidden;
-    background-image: radial-gradient(rgba(255,255,255,.045) 1px, transparent 1px);
-    background-size: 22px 22px;
-  }
-  .wrap { max-width: 900px; margin: 0 auto; padding: 0 24px; }
-  a { color: var(--blue); }
-
-  /* ── Hero ─────────────────────────────────────────── */
-  header { padding: 88px 0 0; text-align: center; }
-  .app-icon { width: 96px; height: 96px; border-radius: 23%; box-shadow: 0 1px 2px rgba(0,0,0,.4), 0 14px 44px rgba(0,0,0,.55); }
-  h1 { font-size: clamp(34px, 6vw, 46px); letter-spacing: -.024em; margin: 20px 0 8px; font-weight: 600; }
-  .tag { color: var(--muted); font-size: clamp(15px, 2.6vw, 18px); margin: 0 auto; max-width: 30em; }
-
-  .dl { margin: 34px 0 0; display: flex; flex-direction: column; align-items: center; gap: 9px; }
-  .btn {
-    display: inline-flex; align-items: center; gap: 8px;
-    background: var(--blue); color: #fff; text-decoration: none;
-    font: 600 16px/1 var(--ui); padding: 14px 28px; border-radius: 980px; border: 0; cursor: pointer;
-    transition: filter .15s, transform .06s;
-  }
-  .btn:hover { filter: brightness(1.09); }
-  .btn:active { transform: scale(.98); }
-  .btn[aria-disabled='true'] { background: var(--idle); cursor: default; filter: none; }
-  .alt { font-size: 13px; color: var(--muted); }
-  .alt a { color: var(--muted); }
-  .alt a:hover { color: var(--text); }
-  .meta { font-size: 12px; color: var(--muted); font-family: var(--mono); min-height: 1.2em; }
-
-  /* ── 主视觉 ───────────────────────────────────────── */
-  .stage { margin: 56px 0 0; }
-  .shot {
-    width: 100%; height: auto; display: block; border-radius: 14px;
-    border: .5px solid var(--hairline);
-    box-shadow: 0 0 0 .5px rgba(0,0,0,.4), 0 22px 64px rgba(0,0,0,.55);
-  }
-  .cap { text-align: center; color: var(--muted); font-size: 13px; margin-top: 14px; }
-  /* 状态点：卡片里用来解释颜色编码 */
-  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--idle); flex: none; }
-  .dot.run { background: var(--blue); box-shadow: 0 0 7px rgba(10,132,255,.75); }
-  .dot.att { background: var(--orange); box-shadow: 0 0 7px rgba(255,159,10,.8); animation: pulse 2s ease-in-out infinite; }
-  .dot.err { background: var(--red); box-shadow: 0 0 7px rgba(255,69,58,.75); }
-  @keyframes pulse { 50% { opacity: .38; } }
-
-  /* ── 内容 ─────────────────────────────────────────── */
-  section { margin-top: 84px; }
-  h2 { font-size: 13px; font-weight: 600; letter-spacing: .06em; color: var(--muted); margin: 0 0 20px; text-transform: uppercase; }
-  .grid { display: grid; gap: 12px; grid-template-columns: 1fr 1fr; }
-  @media (max-width: 640px) { .grid { grid-template-columns: 1fr; } }
-  .card { background: var(--panel); border: .5px solid var(--hairline); border-radius: var(--r); padding: 20px; }
-  .card h3 { margin: 0 0 6px; font-size: 16px; font-weight: 600; }
-  .card p { margin: 0; color: var(--muted); font-size: 14.5px; }
-  .card .lead { display: flex; gap: 6px; margin-bottom: 12px; }
-
-  code { font-family: var(--mono); font-size: 13px; background: rgba(255,255,255,.06); padding: 2px 6px; border-radius: 5px; }
-  pre { background: var(--term); border: .5px solid var(--hairline); border-radius: 10px; padding: 14px 16px; overflow-x: auto; font: 12.5px/1.7 var(--mono); color: #b9b9c0; margin: 0; }
-  pre .c { color: #6e6e76; }
-  pre .k { color: var(--green); }
-
-  .note { border-left: 2px solid var(--orange); padding-left: 14px; color: var(--muted); font-size: 14px; }
-  footer { margin: 88px 0 56px; padding-top: 22px; border-top: .5px solid var(--hairline); color: var(--muted); font-size: 12.5px; text-align: center; }
-</style>
 </head>
 <body>
-<div class="wrap">
 
-  <header>
-    <img class="app-icon" src="/icon.png" alt="" width="96" height="96" />
-    <h1>Termspace</h1>
-    <p class="tag">终端不是叠 tab，是铺在无限画布上的节点。<br />缩到全景，看颜色分布就知道哪个 agent 在等你。</p>
+<nav class="nav">
+  <div class="nav-in">
+    <a class="brand" href="/"><img src="/favicon.png" alt="" width="20" height="20" /><span>Termspace</span></a>
+    <a class="link" href="/features/">功能</a>
+    <a class="link" href="/security/">安全</a>
+    <a class="link" href="/changelog/">更新日志</a>
+    <a class="btn btn-sm" href="/download/" style="margin-left:10px">下载</a>
+  </div>
+</nav>
 
-    <div class="dl">
-      <a class="btn" id="dl" href="https://updates.termspace.app/latest-mac.yml">下载 for macOS</a>
-      <div class="alt" id="alt"></div>
+<!-- ── HERO ──────────────────────────────────────────────── -->
+<header class="hero">
+  <div class="wrap split">
+    <div>
+      <p class="eyebrow">macOS · 无限画布终端</p>
+      <h1>把十几个 agent<br />摊在一块画布上</h1>
+      <div class="cta">
+        <a class="btn" id="dl" href="/download/">下载 for macOS</a>
+        <a class="ul" href="/features/">看功能</a>
+      </div>
+      <div class="alt" id="alt" style="margin-top:16px"></div>
       <div class="meta" id="meta">读取版本中…</div>
     </div>
-  </header>
-
-  <!-- 主视觉：**真实截图**。缩到 LOD 档拍的 —— 终端正文不可读，
-       项目名和邮箱已换成 demo 值（见 TERMBOARD_DEMO 自检开关） -->
-  <div class="stage">
-    <img class="shot" src="/canvas.png" width="1720" height="725"
-         alt="Termspace 界面：多个终端节点铺在画布上，右上角是各账号的额度面板" />
-    <p class="cap">缩到全景时终端退化成色块 —— 边框颜色就是 agent 的状态</p>
+    <div>
+      <p class="lead">终端不是叠 tab，是铺在无限画布上的节点。
+        缩到全景，看颜色分布就知道哪个在跑、哪个在等你、哪个已经错了十分钟。</p>
+      <p class="lead">状态来自 Claude Code 与 Codex 的 hook 事件 —— 是真状态，不是从输出里猜的。</p>
+    </div>
   </div>
+</header>
 
-  <section>
-    <h2>它解决什么</h2>
-    <div class="grid">
-      <div class="card">
-        <div class="lead"><span class="dot run"></span><span class="dot"></span><span class="dot att"></span><span class="dot err"></span><span class="dot run"></span></div>
-        <h3>十几个 agent 同时跑，不用一个个点进去看</h3>
-        <p>蓝色在跑、橙色在等你、红色出错。状态来自 Claude Code / Codex 的 hook 事件 —— 是真状态，不是从输出里猜的。</p>
-      </div>
-      <div class="card">
-        <h3>同一台机器，多个订阅号并行</h3>
-        <p>凭证是画布上的节点，连线到终端就是"这个终端用这个号"。每个账号一个隔离登录空间，右上角实时显示各自还剩多少额度。</p>
-      </div>
-      <div class="card">
-        <h3>agent 之间能互相派活</h3>
-        <p>把活派给画布上另一个 agent，跨机器也行 —— 走你已有的 ssh，不开任何端口。每次派活都留痕，回来能看清哪些结果可信。</p>
-      </div>
-      <div class="card">
-        <h3>关掉再打开，还在原处</h3>
-        <p>会话由 tmux 托着，重启 app 不会杀掉正在跑的活。布局、滚动历史、上下文都留着。</p>
-      </div>
-    </div>
-  </section>
-
-  <section>
-    <h2>派活长这样</h2>
-    <pre><span class="c"># 把活派给画布上另一个终端里的 agent</span>
-tb ask <span class="k">t-7k3</span> "把 auth 那块的测试补齐"
-
-<span class="c"># 跨机器同理，走你已有的 ssh 别名</span>
-tb ask <span class="k">mac-mini:t2</span> "跑一遍完整回归"
-
-<span class="c"># 让 agent 查生产库，但拿不到连接串</span>
-tb db <span class="k">prod</span> "select count(*) from orders where created_at > now() - interval '1 day'"</pre>
-    <p class="note" style="margin-top:16px">
-      最后一条是刻意设计的：连接串只在主进程里流转，<strong>一个字节都不进终端</strong>。
-      agent 用得到这个数据库，但看不到密码。
-    </p>
-  </section>
-
-  <section>
-    <h2>装之前</h2>
-    <div class="card">
-      <p>
-        需要 macOS 12 或更新，Apple Silicon 与 Intel 都有包。安装包已通过 Apple 公证，正常不会被 Gatekeeper 拦。<br /><br />
-        首次启动会问你要不要写入 Claude Code / Codex 的 hook 配置 —— 那是状态灯的数据来源。
-        <strong>你可以拒绝</strong>，其余功能照常，只是节点边框不会跟着 agent 状态变。
-      </p>
-    </div>
-  </section>
-
-  <footer>
-    <span id="ver-foot"></span><a href="https://updates.termspace.app/latest-mac.yml">更新源</a>
-  </footer>
+<!-- 真实截图，缩到 LOD 档拍的：终端正文不可读，项目名与邮箱已换成 demo 值 -->
+<div class="stage">
+  <img src="/canvas.png" width="1720" height="725"
+       alt="Termspace 界面：多个终端节点铺在画布上，边框颜色表示各自状态，右上角是账号额度面板" />
 </div>
 
-<script>
-/* 版本号和下载链接**都从更新源实时读**，页面本身不写死任何版本 ——
-   写死的话一定会有某次发版忘记改，然后用户下到旧包还不知道。
-   走 /api/feed 同源代理：R2 桶没有 CORS 头（实测），直接 fetch 会被浏览器拦。 */
-const CDN = 'https://updates.termspace.app/'
-const btn = document.getElementById('dl')
-const alt = document.getElementById('alt')
-const meta = document.getElementById('meta')
+<div class="ticker">
+  <div class="ticker-in">
+    <i>无限画布</i><i>hook 驱动的状态灯</i><i>多订阅号并行</i><i>三家额度实时</i><i>agent 互相派活</i><i>跨机 ssh</i><i>git worktree 隔离</i><i>tmux 续存</i><i>手机端审批</i>
+    <i>无限画布</i><i>hook 驱动的状态灯</i><i>多订阅号并行</i><i>三家额度实时</i><i>agent 互相派活</i><i>跨机 ssh</i><i>git worktree 隔离</i><i>tmux 续存</i><i>手机端审批</i>
+  </div>
+</div>
 
-/** 这台机器是 Apple Silicon 还是 Intel。**判不出就返回 null** —— 交给用户自己选，别猜。 */
-function arch() {
-  const d = navigator.userAgentData
-  if (d && typeof d.architecture === 'string') return d.architecture.includes('arm') ? 'arm64' : 'x64'
-  /* userAgent 认不出 Mac 的芯片（Safari 和 Chrome 都报 Intel），
-     所以退到 WebGL 渲染器名 —— 那里面有 "Apple M1/M2/…" */
-  try {
-    const gl = document.createElement('canvas').getContext('webgl')
-    const ext = gl && gl.getExtension('WEBGL_debug_renderer_info')
-    const r = ext ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : ''
-    if (/apple\s*m\d/i.test(r)) return 'arm64'
-    if (/intel|radeon/i.test(r)) return 'x64'
-  } catch (_) { /* 隐私模式可能禁 WebGL —— 判不出就往下走 */ }
-  return null
-}
+<!-- ── 问题 ──────────────────────────────────────────────── -->
+<section class="band first">
+  <div class="wrap">
+    <div class="sec-head rise">
+      <p class="eyebrow">为什么</p>
+      <h2>同时开十几个 agent 之后，问题不再是算力，是注意力</h2>
+      <p class="lead">你不知道哪个跑完了、哪个卡在权限弹窗上、哪个已经错了十分钟。
+        Tab 栏上全是一样的标题，只能一个个点进去看。</p>
+    </div>
 
-fetch('/api/feed', { cache: 'no-store' })
-  .then((r) => (r.ok ? r.text() : Promise.reject(new Error('HTTP ' + r.status))))
-  .then((yml) => {
-    const version = (yml.match(/^version:\s*(.+)$/m) || [])[1]
-    const dmgs = [...yml.matchAll(/url:\s*(\S+\.dmg)/g)].map((m) => m[1])
-    if (!version || !dmgs.length) throw new Error('feed 形状变了')
+    <div class="grid g3 rise">
+      <div class="cell">
+        <div class="dots" style="margin-bottom:6px">
+          <span class="dot run"></span><span class="dot"></span><span class="dot att"></span><span class="dot err"></span><span class="dot run"></span>
+        </div>
+        <h3>状态是真的，不是猜的</h3>
+        <p>蓝色在跑、橙色在等你、红色出错。数据来自 hook 事件，不是从终端输出里正则匹配出来的。</p>
+      </div>
+      <div class="cell">
+        <div class="dots" style="margin-bottom:6px;flex-wrap:wrap">
+          <span class="chip b">CLAUDE 周 48%</span><span class="chip g">CODEX 周 2%</span>
+        </div>
+        <h3>一台机器，多个订阅号</h3>
+        <p>凭证是画布上的节点，连一根线到终端就是「这个终端用这个号」。额度实时显示。</p>
+      </div>
+      <div class="cell">
+        <div class="num" style="margin-bottom:8px">TB ASK</div>
+        <h3>agent 互相派活</h3>
+        <p>把活派给画布上另一个 agent，跨机器也行 —— 走你已有的 ssh，不新开端口。</p>
+      </div>
+      <div class="cell">
+        <div class="num">01</div>
+        <h3>关掉再打开还在原处</h3>
+        <p>会话由 tmux 托着，重启应用不杀正在跑的活。布局和滚动历史都留着。</p>
+      </div>
+      <div class="cell">
+        <div class="num">02</div>
+        <h3>并行不打架</h3>
+        <p>一个组一棵 git worktree，各改各的分支和目录。物理隔离，不靠提示词求它们别乱动。</p>
+      </div>
+      <div class="cell">
+        <div class="num">03</div>
+        <h3>出门也能批一下</h3>
+        <p>手机上看同一块画布。只绑回环或 Tailscale，永远不绑所有网卡。</p>
+      </div>
+    </div>
 
-    const armUrl = dmgs.find((u) => /arm64/.test(u))
-    const x64Url = dmgs.find((u) => !/arm64/.test(u))
-    const a = arch()
-    const link = (u, t) => '<a href="' + CDN + u + '" download>' + t + '</a>'
-    const set = (u, label) => { btn.href = CDN + u; btn.textContent = label; btn.setAttribute('download', '') }
+    <p style="margin-top:32px"><a class="arrow" href="/features/">看完整功能 →</a></p>
+  </div>
+</section>
 
-    if (a === 'arm64' && armUrl) {
-      set(armUrl, '下载 for macOS · Apple 芯片')
-      if (x64Url) alt.innerHTML = '用 Intel Mac？' + link(x64Url, '下载 Intel 版')
-    } else if (a === 'x64' && x64Url) {
-      set(x64Url, '下载 for macOS · Intel')
-      if (armUrl) alt.innerHTML = '用 Apple 芯片？' + link(armUrl, '下载 Apple 芯片版')
-    } else {
-      /* 判不出芯片就**两个都给** —— 下错架构是最常见的下载失败点，
-         而"替用户猜错"比"多问一句"糟得多 */
-      set(armUrl || x64Url, '下载 for macOS')
-      alt.innerHTML = [armUrl && link(armUrl, 'Apple 芯片'), x64Url && link(x64Url, 'Intel')].filter(Boolean).join(' · ')
-    }
-    meta.textContent = 'v' + version + ' · macOS 12+ · 已公证'
-    document.getElementById('ver-foot').textContent = 'v' + version + ' · '
-  })
-  .catch(() => {
-    /* 取不到就**如实说**并给出更新源地址，绝不显示一个写死的旧版本号假装正常 ——
-       那会让用户下到过期的包。 */
-    btn.textContent = '暂时取不到下载地址'
-    btn.setAttribute('aria-disabled', 'true')
-    btn.href = CDN + 'latest-mac.yml'
-    alt.innerHTML = '直接看 <a href="' + CDN + 'latest-mac.yml">更新源</a>'
-    meta.textContent = ''
-  })
-</script>
+<!-- ── 派活 ──────────────────────────────────────────────── -->
+<section class="band tint">
+  <div class="wrap">
+    <div class="row rise">
+      <div>
+        <p class="eyebrow">派活</p>
+        <h2>让一个 agent 去指挥另一个</h2>
+        <p>目标可以在同一块画布上，也可以在你的另一台机器上。跨机走的是你已有的免密 ssh ——
+          不新开任何端口，没有新增的暴露面。</p>
+        <p>最后一条是刻意设计的：连接串只在主进程里流转，<strong>一个字节都不进终端</strong>。
+          agent 用得到这个数据库，但看不到密码。</p>
+        <p style="margin-top:24px"><a class="arrow" href="/features/#delegate">派活的四道闸 →</a></p>
+      </div>
+      <div class="win">
+        <div class="win-bar"><span class="t">t-4a2 — zsh</span></div>
+<pre><span class="c"># 派给画布上另一个终端里的 agent</span>
+tb ask <span class="k">t-7k3</span> <span class="s">"把 auth 那块的测试补齐"</span>
+
+<span class="c"># 跨机器同理，走你已有的 ssh 别名</span>
+tb ask <span class="k">mac-mini:t2</span> <span class="s">"跑一遍完整回归"</span>
+
+<span class="c"># 让 agent 查生产库 —— 但它拿不到连接串</span>
+tb db <span class="k">prod</span> <span class="s">"select count(*) from orders"</span></pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── 账号 ──────────────────────────────────────────────── -->
+<section class="band">
+  <div class="wrap">
+    <div class="row flip rise">
+      <div>
+        <p class="eyebrow">账号</p>
+        <h2>同一条命令，两个终端登两个号</h2>
+        <p>靠给每个终端注入不同的配置目录做到，不是靠反复登出登入。
+          凭证内容用系统钥匙串加密后落盘，界面层从设计上就拿不到值 —— 只拿得到有哪些变量名。</p>
+        <p>还能<strong>显式删掉</strong>某个环境变量：你 shell 里 export 的 API key
+          会被应用继承，让订阅号白开还产生账单。</p>
+        <p style="margin-top:24px"><a class="arrow" href="/features/#identities">账号与凭证 →</a></p>
+      </div>
+      <div class="grid g2" style="grid-template-columns:1fr">
+        <div class="cell">
+          <div class="dots" style="margin-bottom:4px"><span class="chip b">订阅</span><span class="chip">周 48% · 5H 12%</span></div>
+          <h3>工作号</h3>
+          <p>3 个终端在用 · 已登录</p>
+        </div>
+        <div class="cell">
+          <div class="dots" style="margin-bottom:4px"><span class="chip g">订阅</span><span class="chip">周 2%</span></div>
+          <h3>副脑号</h3>
+          <p>1 个终端在用 · 已登录</p>
+        </div>
+        <div class="cell">
+          <div class="dots" style="margin-bottom:4px"><span class="chip o">按量计费</span></div>
+          <h3>临时 key</h3>
+          <p>没有额度接口可查 —— 如实显示，不画一个空进度条</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── 立场 ──────────────────────────────────────────────── -->
+<section class="band tint">
+  <div class="wrap">
+    <div class="sec-head rise" style="margin-bottom:36px">
+      <p class="eyebrow">立场</p>
+      <h2>我们不说「军用级加密」</h2>
+      <p class="lead">画布上所有终端和应用本身跑在同一个用户身份下。
+        任何已经能在你机器上执行命令的进程，都可以绕开这里的全部检查。</p>
+    </div>
+    <div class="card rise">
+      <p style="color:var(--ink);font-size:17px;line-height:1.65">
+        所以画布上的「连线即授权」和弹窗确认，<strong>是产品护栏，不是安全边界</strong>。
+        它防的是 agent 拿错账号、连错库、把活派到你没打算派的地方 ——
+        不防一个已经拿到你 shell 的攻击者。
+      </p>
+      <p style="margin-top:14px">这条写在文档里、注释里，也写在这。</p>
+      <p style="margin-top:18px"><a class="arrow" href="/security/">安全模型详解 →</a></p>
+    </div>
+  </div>
+</section>
+
+<!-- ── CTA ───────────────────────────────────────────────── -->
+<section class="band">
+  <div class="wrap rise">
+    <p class="eyebrow">下载</p>
+    <h2>装上试试</h2>
+    <p class="lead">macOS 12 或更新。Apple 芯片和 Intel 都有包，已通过 Apple 公证。</p>
+    <div style="margin-top:30px;display:flex;gap:20px;align-items:center;flex-wrap:wrap">
+      <a class="btn" href="/download/">去下载页</a>
+      <a class="ul" href="/changelog/">看更新日志</a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap cols">
+    <a href="/features/">功能</a>
+    <a href="/security/">安全</a>
+    <a href="/download/">下载</a>
+    <a href="/changelog/">更新日志</a>
+    <a href="https://updates.termspace.app/latest-mac.yml">更新源</a>
+    <span class="ver" id="ver-foot"></span>
+  </div>
+</footer>
+
+<script src="/assets/site.js"></script>
+<script>Termspace.wireDownload({ btn: 'dl', alt: 'alt', meta: 'meta' })</script>
 </body>
 </html>

@@ -1,0 +1,322 @@
+<!doctype html>
+<html lang="zh-CN" class="no-js">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>功能 — Termspace</title>
+<meta name="description" content="画布、状态灯、多账号并行、额度面板、派活、git worktree 隔离、手机端。以及明确没做的部分。" />
+<meta name="color-scheme" content="dark" />
+<link rel="icon" href="/favicon.png" />
+<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+<link rel="stylesheet" href="/assets/site.css" />
+</head>
+<body>
+
+<nav class="nav">
+  <div class="nav-in">
+    <a class="brand" href="/"><img src="/favicon.png" alt="" width="22" height="22" /><span>Termspace</span></a>
+    <a class="link" href="/features/">功能</a>
+    <a class="link" href="/security/">安全</a>
+    <a class="link" href="/changelog/">更新日志</a>
+    <a class="btn btn-sm" href="/download/">下载</a>
+  </div>
+</nav>
+
+
+  <section class="band first">
+  <div class="wrap">
+    <p class="eyebrow">功能</p>
+    <h1>八件事，每件都能在界面上指出来</h1>
+    <p class="lead">每一条都能在应用里找到对应的界面。做到一半的会写「部分」，
+      没做的单独列在最后一节，不混在里面充数。</p></div>
+  </section>
+
+  <!-- ── 画布 ────────────────────────────────────────────── -->
+  <section class="band rise tint" id="canvas">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow">01 · 画布</p>
+      <h2>终端是节点，不是标签页</h2>
+      <p class="lead">拖到哪就在哪。相关的放一起，不相关的推远。空间本身就是一种组织方式 ——
+        这是 tab 栏给不了的。</p>
+    </div>
+    <div class="grid g3">
+      <div class="cell">
+        <h3>缩到全景不读字</h3>
+        <p>缩放低于阈值时终端退化成色块，只留标题和状态点。
+          几十个节点一屏看完，靠颜色分布做判断。</p>
+      </div>
+      <div class="cell">
+        <h3>成组</h3>
+        <p>框选即成组，整组拖动、折叠、群发命令。组标题显示成员状态聚合，
+          按最紧急的那个显示。</p>
+      </div>
+      <div class="cell">
+        <h3>浏览器节点</h3>
+        <p>画布上也能放网页，agent 可以驱动它。
+          每个浏览器节点一个独立的登录空间，互不串。</p>
+      </div>
+    </div></div>
+  </section>
+
+  <!-- ── 状态 ────────────────────────────────────────────── -->
+  <section class="band rise" id="status">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow">02 · 状态</p>
+      <h2>边框颜色就是 agent 在干什么</h2>
+      <p class="lead">状态来自 hook 事件，不是从终端输出里正则匹配的。
+        agent 说它在等你，节点才变橙。</p>
+    </div>
+
+    <div class="scroll-x">
+      <table class="tbl">
+        <thead><tr><th>状态</th><th>视觉</th><th>什么时候</th></tr></thead>
+        <tbody>
+          <tr><td><span class="chip b"><span class="dot run"></span>运行中</span></td>
+              <td>蓝边框 + 呼吸 glow</td><td>agent 正在工作</td></tr>
+          <tr><td><span class="chip o"><span class="dot att"></span>需要你</span></td>
+              <td>橙边框 + 静态 glow</td><td>等你审批工具调用，或等你回话</td></tr>
+          <tr><td><span class="chip"><span class="dot"></span>空闲</span></td>
+              <td>无 glow</td><td>shell 在，没有 agent 在跑</td></tr>
+          <tr><td><span class="chip r"><span class="dot err"></span>出错</span></td>
+              <td>红状态点 + 内容灰化</td><td>进程退出异常</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p class="note" style="margin-top:24px">
+      <strong>装不装 hook 由你决定。</strong> 首次启动会问要不要写入 Claude Code / Codex 的 hook 配置。
+      拒绝的话其余功能照常，只是边框不再跟着 agent 状态变。
+      目前只有这两家有真状态 —— 其他 CLI 的 hook 形态不同，还没接。
+    </p></div>
+  </section>
+
+  <!-- ── 账号 ────────────────────────────────────────────── -->
+  <section class="band rise tint" id="identities">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow">03 · 账号</p>
+      <h2>同一条命令，两个终端登两个号</h2>
+      <p class="lead">靠给每个终端注入不同的配置目录做到 —— 不是靠反复登出登入。</p>
+    </div>
+    <div class="grid g2">
+      <div class="cell">
+        <h3>凭证是画布上的节点</h3>
+        <p>从凭证节点拉一根线到终端，就是「这个终端用这个号」。
+          拉线会重启该终端的会话，所以拉之前会问一次。</p>
+      </div>
+      <div class="cell">
+        <h3>连线不等于自动登录</h3>
+        <p>隔离目录是空的，第一次仍要在那个终端里跑一次登录命令。
+          节点上会显示登录态 —— 查不到就如实说查不到，不猜。</p>
+      </div>
+      <div class="cell">
+        <h3>值加密存，界面只显示键名</h3>
+        <p>凭证内容用系统钥匙串加密后落盘。界面层拿得到有哪些环境变量，
+          拿不到它们的值 —— 已保存的明文永不回传。</p>
+      </div>
+      <div class="cell">
+        <h3>能显式删掉一个变量</h3>
+        <p>你 shell 里 export 的 API key 会被应用继承，让订阅号白开还产生账单。
+          所以每个变量有三种操作：保留、替换、<strong>删除</strong>。</p>
+      </div>
+    </div></div>
+  </section>
+
+  <!-- ── 额度 ────────────────────────────────────────────── -->
+  <section class="band rise" id="quota">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow">04 · 额度</p>
+      <h2>还剩多少，一眼看到</h2>
+      <p class="lead">Claude、Codex、Copilot 三家实时查，五分钟一轮。
+        一个账号拉一次，广播给所有用它的节点 —— 额度是账号级的。</p>
+    </div>
+    <div class="grid g3">
+      <div class="cell">
+        <h3>窗口语义从数据来</h3>
+        <p>五小时窗还是周窗，由接口返回的窗口时长决定，不按返回顺序猜。
+          没有的窗口就不显示，不虚构一行。</p>
+      </div>
+      <div class="cell">
+        <h3>「查不到」和「用了 0%」是两回事</h3>
+        <p>还有第三种：「未登录」。这三个必须分开显示 ——
+          未登录你能自己修，查不到只能等。</p>
+      </div>
+      <div class="cell">
+        <h3>按量计费会明说</h3>
+        <p>某个账号实际在按 token 计费时，卡片上直说，
+          不让它伪装成一个「还剩很多」的订阅号。</p>
+      </div>
+    </div>
+    <p class="note" style="margin-top:24px">
+      不是所有 provider 都能查 —— 有的没有公开的用量接口。查不了的会列出来并说明原因，
+      而不是显示一个空的进度条。
+    </p></div>
+  </section>
+
+  <!-- ── 派活 ────────────────────────────────────────────── -->
+  <section class="band rise tint" id="delegate">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow">05 · 派活</p>
+      <h2>agent 指挥 agent</h2>
+      <p class="lead">这是整个产品里最危险的一段 —— 派活就是替你敲回车。所以闸门比别处都密。</p>
+    </div>
+
+    <div class="win">
+      <div class="win-bar"><span class="t">t-4a2 — zsh</span></div>
+<pre><span class="c"># 同一块画布上</span>
+tb ask <span class="k">t-7k3</span> <span class="s">"把 auth 那块的测试补齐"</span>
+
+<span class="c"># 跨机器，走你已有的 ssh 别名，不开任何新端口</span>
+tb ask <span class="k">mac-mini:t2</span> <span class="s">"跑一遍完整回归"</span></pre>
+    </div>
+
+    <ul class="items" style="margin-top:28px">
+      <li>
+        <span class="t">只往活着的 agent 会话里派</span>
+        <span class="src">状态判定 fail-closed</span>
+        <span class="d">目标终端里如果不是一个正在运行的 agent，而是一个光秃秃的 shell，派活会被拒绝 ——
+          否则任务正文就成了直接执行的 shell 命令。</span>
+      </li>
+      <li>
+        <span class="t">控制字符会被摘掉</span>
+        <span class="src">sanitizeTask</span>
+        <span class="d">任务正文里的退出键（Ctrl-C / Ctrl-D 之类）会让 agent 退出，
+          剩下的字节就落到重新拿回终端的 shell 手里。这些字符在确认弹窗里根本不可见。</span>
+      </li>
+      <li>
+        <span class="t">断线不自动重试</span>
+        <span class="src">十分钟幂等表</span>
+        <span class="d">注入不可撤回，重试就是往对面 agent 里注两遍。
+          人工重发也挡得住 —— 同一个任务十分钟内只生效一次，直接返回上次的结果。</span>
+      </li>
+      <li>
+        <span class="t">完成判定认会话，不认时间</span>
+        <span class="src">transcript 路径比对</span>
+        <span class="d">目标中途退出重开的话，新会话产生的回答不会被当成本轮结果返回。</span>
+      </li>
+    </ul></div>
+  </section>
+
+  <!-- ── worktree ────────────────────────────────────────── -->
+  <section class="band rise" id="worktree">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow">06 · 隔离</p>
+      <h2>一个组一棵 git worktree</h2>
+      <p class="lead">并行 agent 打架的根子是共享工作目录。与其在提示词里求它们别乱动，
+        不如物理隔离 —— 每组一个独立分支、独立目录。</p>
+    </div>
+    <div class="grid g2">
+      <div class="cell">
+        <h3>组头显示分支和脏文件数</h3>
+        <p>不是 git 仓库的目录上，这个功能完全不出现 —— 不做无关的噪音。</p>
+      </div>
+      <div class="cell">
+        <h3>脏的时候拒绝删除</h3>
+        <p>git 本身就会拒绝，那个拒绝是特性不是障碍。
+          把改动数量摆给你看，你自己决定，绝不替你加 <code>--force</code>。</p>
+      </div>
+    </div></div>
+  </section>
+
+  <!-- ── 手机 ────────────────────────────────────────────── -->
+  <section class="band rise tint" id="mobile">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow">07 · 手机</p>
+      <h2>出门也能看一眼、批一下</h2>
+      <p class="lead">只绑回环地址或 Tailscale 网卡，永远不绑 0.0.0.0。
+        手机上是同一块画布的地图视图。</p>
+    </div>
+    <div class="grid g3">
+      <div class="cell">
+        <h3>写操作只有两类</h3>
+        <p>往终端敲字、批准工具调用。各自独立开关，
+          <strong>没有新建和删除节点的入口</strong> —— 手机丢了损失更小。</p>
+      </div>
+      <div class="cell">
+        <h3>开关关掉立刻断</h3>
+        <p>不是「下次重启生效」。点关通常是在应急撤权，等重启就晚了。</p>
+      </div>
+      <div class="cell">
+        <h3>审批内容脱敏后才出网</h3>
+        <p>工具调用的完整参数不出主进程，只发够你做判断的部分。</p>
+      </div>
+    </div></div>
+  </section>
+
+  <!-- ── 续存与更新 ──────────────────────────────────────── -->
+  <section class="band rise" id="persist">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow">08 · 续存</p>
+      <h2>不怕关，也不怕更新</h2>
+    </div>
+    <div class="grid g2">
+      <div class="cell">
+        <h3>会话活过应用重启</h3>
+        <p>底下是 tmux。退出应用不杀会话，重开接回原来那个。
+          布局和滚动历史一起留着。</p>
+      </div>
+      <div class="cell">
+        <h3>更新永远等你点</h3>
+        <p>后台检查、后台下载，装不装你说了算。
+          终端里跑着你的活，自动重启会把正在进行的对话掐掉。</p>
+      </div>
+    </div></div>
+  </section>
+
+  <!-- ── 没做的 ──────────────────────────────────────────── -->
+  <section class="band rise tint" id="not-yet">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow">没做</p>
+      <h2>明确不在里面的东西</h2>
+      <p class="lead">列出来是因为不列的话，你要装上之后才发现。</p>
+    </div>
+    <div class="scroll-x">
+      <table class="tbl">
+        <thead><tr><th>没有</th><th>原因</th></tr></thead>
+        <tbody>
+          <tr><td>MCP server 形态</td>
+              <td>派活和工具中枢现在走命令行 + 本地回环 HTTP，够用。跨 provider 统一的收益还没兑现</td></tr>
+          <tr><td>Claude / Codex 之外的真状态</td>
+              <td>其他 CLI 的 hook 形态不同。裸终端只能靠输出活跃度猜，那不算真状态</td></tr>
+          <tr><td>节点拆成独立系统窗口</td>
+              <td>多个渲染进程共享 pty 所有权太复杂，而且还没看到真实需求</td></tr>
+          <tr><td>手机端后台推送</td>
+              <td>目前是前台轮询，退到后台就不再收。真通知需要推送服务，本地服务器做不到</td></tr>
+          <tr><td>Windows / Linux</td>
+              <td>只有 macOS 版本。签名、钥匙串、tmux 这几条链路都是按 macOS 写的</td></tr>
+        </tbody>
+      </table>
+    </div></div>
+  </section>
+
+  <section class="band rise" style="text-align:center">
+  <div class="wrap">
+    <h2>装上试试</h2>
+    <p class="lead" style="margin:0 auto 26px">macOS 12 或更新，Apple 芯片和 Intel 都有包。</p>
+    <a class="btn" href="/download/">去下载页</a></div>
+  </section>
+
+
+<footer>
+  <div class="wrap cols">
+    <a href="/features/">功能</a>
+    <a href="/security/">安全</a>
+    <a href="/download/">下载</a>
+    <a href="/changelog/">更新日志</a>
+    <a href="https://updates.termspace.app/latest-mac.yml">更新源</a>
+    <span class="ver" id="ver-foot"></span>
+  </div>
+</footer>
+
+<script src="/assets/site.js"></script>
+<script>Termspace.wireDownload({})</script>
+</body>
+</html>
