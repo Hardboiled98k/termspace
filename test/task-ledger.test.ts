@@ -134,3 +134,36 @@ test('派活返回文本 → 账本状态的分类（判据只有一份）', asy
   assert.equal(c('[派活中断：t-x 在等待期间换了会话…]'), 'failed')
   assert.equal(c('好的，我把测试跑绿了。'), 'done')
 })
+
+/* ── 压实竞态（发版前审计实测复现）────────────────────────────────────
+   账本满 MAX_RECORDS 之后**每一次 finish 都会触发压实**（压实后正好等于上限，
+   下一条 finish 就是上限+1），而老实现把「读全量 → 写 tmp → rename」整段
+   放在 append 的串行链**之外**。落在这个窗口里的 append 会被 rename 整份盖掉。
+
+   丢开始记录 → 那条 finish 补丁成孤儿，被 mergeLedger 的「没有 startedAt 就丢」
+   过滤掉 → **整次派活在账本里从未存在过**。
+   丢 finish 补丁 → 任务永远停在「运行中」。两种都不报错。 */
+
+test('**压实进行中并发写入，新记录不能被整份盖掉**', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'ledger-race-'))
+  const file = path.join(dir, 'tasks.jsonl')
+  const led = createLedger(file)
+
+  // 预置到刚好触发压实的条数
+  const ids: string[] = []
+  for (let i = 0; i < 501; i++) {
+    ids.push(await led.start({ source: 's', target: 't', brief: `任务 ${i}` }))
+  }
+
+  // finish 触发压实；**不 await**，让下一次写入落进压实窗口
+  const finishing = led.finish(ids[500]!, { state: 'done', result: 'ok' })
+  await new Promise((r) => setImmediate(r))
+  const b = await led.start({ source: 's', target: 't', brief: '压实窗口里新建的' })
+  await finishing
+
+  const rows = await led.list()
+  assert.ok(
+    rows.some((r) => r.id === b),
+    '压实把窗口内新建的记录整份盖掉了 —— 这次派活在账本里从未存在过'
+  )
+})

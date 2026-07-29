@@ -336,6 +336,10 @@ function AccountBlock({
       {/* 邮箱是区分两个同 provider 订阅号的唯一可靠标识 —— planType 都叫 'pro'。
           但那是**要查的时候才需要**，日常占两行不值，所以收进展开态。 */}
       {expanded && a.email && <div className="quota-email">{maskEmail(a.email)}</div>}
+      {/* handle 是 GitHub login 这类**非邮箱**标识，不脱敏 ——
+          maskEmail 会把不含 `@` 的串整个打成 `***`，而这一行的全部理由
+          就是让用户分得出是哪个号 */}
+      {expanded && !a.email && a.handle && <div className="quota-email">{a.handle}</div>}
       {expanded && <div className="quota-account-note">{a.presence.detail}</div>}
       {hasData ? (
         <div className="quota-provider-rows">

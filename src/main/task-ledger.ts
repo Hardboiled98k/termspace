@@ -168,14 +168,17 @@ export function createLedger(file: string, now: () => number = Date.now): Ledger
   /* 写入串行化。两个派活可以同时结束，而 appendFile 本身不保证多次调用之间
      不交错（大 payload 时会分块写）。记录都很小，但"很小"不是判据。 */
   let chain: Promise<unknown> = Promise.resolve()
-  const append = (rec: Partial<TaskRecord>): Promise<void> => {
-    const run = chain.then(async () => {
-      await mkdir(path.dirname(file), { recursive: true })
-      await appendFile(file, `${JSON.stringify(rec)}\n`)
-    })
+  /** **所有**碰这个文件的操作都要过这里，不只是 append —— 见下面压实那段的注释 */
+  const serialize = <T>(fn: () => Promise<T>): Promise<T> => {
+    const run = chain.then(fn, fn)
     chain = run.catch(() => undefined)
     return run
   }
+  const append = (rec: Partial<TaskRecord>): Promise<void> =>
+    serialize(async () => {
+      await mkdir(path.dirname(file), { recursive: true })
+      await appendFile(file, `${JSON.stringify(rec)}\n`)
+    })
 
   return {
     start: async (r) => {
@@ -192,14 +195,26 @@ export function createLedger(file: string, now: () => number = Date.now): Ledger
         ...(patch.error ? { error: briefly(patch.error, 200) } : {})
       })
       /* 顺手压实：条数超上限时重写一份合并后的。
-         **压实必须原子**（tmp+rename）—— 直接截断重写时被杀就是整份账本没了。 */
-      const all = mergeLedger(parseLedger(existsSync(file) ? await readFile(file, 'utf8') : ''))
-      if (all.length > MAX_RECORDS) {
-        const keep = all.slice(0, MAX_RECORDS)
-        const tmp = `${file}.${randomUUID().slice(0, 8)}.tmp`
-        await writeFile(tmp, keep.map((r) => JSON.stringify(r)).join('\n') + '\n')
-        await rename(tmp, file)
-      }
+         **压实必须原子**（tmp+rename）—— 直接截断重写时被杀就是整份账本没了。
+
+         ⚠️ **而且必须和 append 走同一条串行链。** 老实现把这整段放在链外，
+         于是「读全量 → 写 tmp → rename」中间任何一次 append 都会被 rename 整份盖掉。
+         而账本一旦满 MAX_RECORDS，**之后每一次 finish 都会触发压实**
+         （压实后正好等于上限，下一条 finish 就是上限+1），窗口一直开着。
+         实测复现：finish(A) 不 await → 一个 setImmediate → start(B)，
+         **B 的开始记录直接消失**；B 完成时那条 finish 补丁成了孤儿，
+         被 `mergeLedger` 的 "没有 startedAt 就丢" 过滤掉 ——
+         **整次派活在账本里从未存在过**。丢的若是 finish 补丁，则症状变成
+         任务永远停在「运行中」。全程不报错、typecheck 和测试全绿。 */
+      await serialize(async () => {
+        const all = mergeLedger(parseLedger(existsSync(file) ? await readFile(file, 'utf8') : ''))
+        if (all.length > MAX_RECORDS) {
+          const keep = all.slice(0, MAX_RECORDS)
+          const tmp = `${file}.${randomUUID().slice(0, 8)}.tmp`
+          await writeFile(tmp, keep.map((r) => JSON.stringify(r)).join('\n') + '\n')
+          await rename(tmp, file)
+        }
+      })
     },
     list: async () => {
       if (!existsSync(file)) return []

@@ -154,7 +154,11 @@ export async function collectCopilot(args: {
     state: windows.length ? 'ok' : 'unknown-shape',
     source: 'GitHub API（未文档化路径）',
     plan: body.copilot_plan,
-    email: body.login,
+    /* **不要塞进 `email`**：这是 GitHub 的 login 名（`octocat`），不是邮箱。
+       渲染层无条件 `maskEmail(a.email)`，而它对不含 `@` 的串直接返回 `***`
+       —— 于是这一行永远是 `***`，而它存在的**全部理由**就是区分两个同 provider 的号。
+       仓库自己的判据：脱敏过度和脱敏不足一样是 bug。 */
+    handle: body.login,
     windows,
     hint: windows.length ? undefined : '所有配额桶都不可用（套餐不含？）'
   }

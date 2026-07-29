@@ -104,6 +104,8 @@ interface AccountQuota {
   plan?: string
   /** 账号邮箱 —— 区分两个同 provider 订阅号的唯一可靠标识（planType 都是 'pro'） */
   email?: string
+  /** 非邮箱形态的账号标识（GitHub login 之类）。**不走 maskEmail** */
+  handle?: string
   windows: QuotaWindow[]
   spend?: QuotaSpend[]
   hint?: string

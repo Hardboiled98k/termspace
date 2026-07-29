@@ -111,6 +111,8 @@ export interface AccountQuota {
    * planType 只给 'pro'，看不出 20x，两个 pro 号长得一模一样。
    */
   email?: string
+  /** 非邮箱形态的账号标识（GitHub login 之类）。**不走 maskEmail** —— 它会把不含 `@` 的串整个打成 `***` */
+  handle?: string
   windows: QuotaWindow[]
   spend?: QuotaSpend[]
   /** state != 'ok' 时给用户的人话，**必须能指出下一步动作** */
