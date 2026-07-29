@@ -4,3 +4,6 @@ dist/
 *.log
 .DS_Store
 *.local
+
+# wrangler pages dev 的本地缓存/状态（miniflare 产物，不该进仓库）
+site/.wrangler/
