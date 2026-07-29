@@ -90,6 +90,11 @@ export interface BrokerDeps {
   findBin?: (name: string) => string | null
 }
 
+/** 用户 options 在前，只读约束在后，确保后一个 `-c` 最终生效。 */
+export function readonlyPgOptions(userOptions: string | undefined): string {
+  return [userOptions, '-c default_transaction_read_only=on'].filter(Boolean).join(' ')
+}
+
 const defaultFind = (name: string): string | null =>
   [`/opt/homebrew/bin/${name}`, `/usr/local/bin/${name}`, `/usr/bin/${name}`].find(existsSync) ??
   null
@@ -192,7 +197,7 @@ export async function brokerRun(
           ...conn.env,
           /* 只读**在服务端也再保一道**：上面的语句判据只是提前给个好错误，
              真正的保证是这个 —— 它让整个会话进只读事务。 */
-          ...(profile.readOnly ? { PGOPTIONS: '-c default_transaction_read_only=on' } : {})
+          ...(profile.readOnly ? { PGOPTIONS: readonlyPgOptions(conn.env['PGOPTIONS']) } : {})
         }
       },
       (err, stdout, stderr) =>
@@ -202,10 +207,17 @@ export async function brokerRun(
           err
             ? {
                 ok: false,
-                output: scrubSecrets(stdout ?? '', conn.secrets),
-                error: scrubSecrets((stderr || err.message || '').slice(0, 2000), conn.secrets)
+                output: scrubSecrets(stdout ?? '', conn.secrets, conn.passwords),
+                error: scrubSecrets(
+                  (stderr || err.message || '').slice(0, 2000),
+                  conn.secrets,
+                  conn.passwords
+                )
               }
-            : { ok: true, output: scrubSecrets((stdout ?? '').slice(0, 100_000), conn.secrets) }
+            : {
+                ok: true,
+                output: scrubSecrets((stdout ?? '').slice(0, 100_000), conn.secrets, conn.passwords)
+              }
         )
     )
     child.stdin?.end(`${payload}\n`)

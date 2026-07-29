@@ -12,7 +12,7 @@
  * 就是防止用户以为"拉了线就等于登录了"—— 判反了比不显示更糟。
  */
 
-import { maskEmail } from '../shared/mask.ts'
+import { maskEmail, maskEmailsInText } from '../shared/mask.ts'
 export interface LoginStatus {
   state: 'in' | 'out' | 'unknown'
   detail: string
@@ -51,12 +51,12 @@ export function parseClaudeAuth(stdout: string, home?: string): LoginStatus {
        数字则读出 undefined → 被判成「未登录」，而它其实是「没看懂」。
        两种都必须落到 unknown。 */
     if (!v || typeof v !== 'object' || Array.isArray(v)) {
-      return { state: 'unknown', detail: stdout.trim().slice(0, 80) || '查不出来', home }
+      return { state: 'unknown', detail: maskEmailsInText(stdout.trim()).slice(0, 80) || '查不出来', home }
     }
     j = v as ClaudeAuth
   } catch {
     // 认不出就 unknown，**不猜**（命令换形状了也不能编一个登录态出来）
-    return { state: 'unknown', detail: stdout.trim().slice(0, 80) || '查不出来', home }
+    return { state: 'unknown', detail: maskEmailsInText(stdout.trim()).slice(0, 80) || '查不出来', home }
   }
   if (j.loggedIn !== true) {
     return { state: 'out', detail: '未登录 —— 在连着的终端里跑一次 claude 登录', home }
@@ -89,7 +89,7 @@ export function parseCodexLogin(out: string, home?: string): LoginStatus {
   if (OUT.test(text)) {
     return { state: 'out', detail: '未登录 —— 在连着的终端里跑一次 codex login', home }
   }
-  if (IN.test(text)) return { state: 'in', detail: text.slice(0, 80), home }
+  if (IN.test(text)) return { state: 'in', detail: maskEmailsInText(text).slice(0, 80), home }
   // 认不出的输出如实报 unknown，**不猜**（猜"已登录"会让用户白等一个不存在的号）
-  return { state: 'unknown', detail: text.slice(0, 80), home }
+  return { state: 'unknown', detail: maskEmailsInText(text).slice(0, 80), home }
 }

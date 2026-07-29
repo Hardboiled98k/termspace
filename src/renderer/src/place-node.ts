@@ -39,12 +39,32 @@ export function placeNewNode(
   existing: Rect[] = []
 ): { x: number; y: number } {
   const base = { x: Math.round(center.x - size.width / 2), y: Math.round(center.y - size.height / 2) }
+
+  /**
+   * 「这个位置不能用」有**两个**判据，缺一条都会真出问题：
+   *
+   * 1. **中心贴太近** —— 同尺寸节点严丝合缝地盖住，等于看不见新开的那个。
+   * 2. **新节点会被完全罩住** —— 比中心那条更阴：小节点落在大节点里，
+   *    两者中心相距很远（不触发判据 1），但新节点**一个像素都露不出来**。
+   *    实测过的原数：终端 600×400 在视口中心，再建凭证 220×132 →
+   *    落点 `(-42, 2)`，**完全落在终端内部**。上一版只比中心，这条漏掉了。
+   *
+   * 判据 2 特意用"完全包含"而不是"矩形相交"：
+   * 相交就算占用的话，同尺寸节点错开 34px 仍然相交 → 会一路推到 600 多像素外，
+   * 把有意为之的 macOS 层叠手感毁掉。而**层叠永远不会造成完全包含**
+   * （新节点总从右下角露出来），所以这两条判据不打架。
+   */
   const taken = (p: { x: number; y: number }): boolean =>
-    existing.some(
-      (e) =>
-        Math.abs(e.x + (e.width ?? size.width) / 2 - (p.x + size.width / 2)) < NEAR &&
-        Math.abs(e.y + (e.height ?? size.height) / 2 - (p.y + size.height / 2)) < NEAR
-    )
+    existing.some((e) => {
+      const ew = e.width ?? size.width
+      const eh = e.height ?? size.height
+      const centersNear =
+        Math.abs(e.x + ew / 2 - (p.x + size.width / 2)) < NEAR &&
+        Math.abs(e.y + eh / 2 - (p.y + size.height / 2)) < NEAR
+      const swallowed =
+        p.x >= e.x && p.y >= e.y && p.x + size.width <= e.x + ew && p.y + size.height <= e.y + eh
+      return centersNear || swallowed
+    })
 
   let p = base
   for (let i = 0; i < MAX_TRIES && taken(p); i++) {

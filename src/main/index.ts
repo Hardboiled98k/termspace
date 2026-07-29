@@ -38,7 +38,7 @@ import { openInEditor, editorNames } from './open-in-editor'
 import { toTemplate, fromTemplate, type LayoutTemplate } from './layout-template'
 import { brokerRun } from './broker'
 import { getBrokerTarget, setBrokerTarget, deleteBrokerTarget } from './broker-store'
-import { handleBroker } from './broker-handler'
+import { createBrokerMutations, handleBroker } from './broker-handler'
 import { sanitizeImportedWorkspace } from './workspace-import'
 import {
   createLedger,
@@ -1638,6 +1638,14 @@ ipcMain.handle('workspace:export', async (e, data: unknown) => {
  */
 /* 代理连接的管理。**连接串只进不出** —— 没有任何 IPC 能把它读回渲染层，
    那正是这层设计的意义（见 broker-store.ts）。 */
+const brokerMutations = createBrokerMutations({
+  getSettings,
+  setSettings,
+  setBrokerTarget,
+  deleteBrokerTarget,
+  randomId: randomUUID
+})
+
 ipcMain.handle('broker:save', async (e, input: unknown) => {
   if (!fromMainWin(e)) return { ok: false, error: 'denied' }
   const b = input as {
@@ -1650,30 +1658,18 @@ ipcMain.handle('broker:save', async (e, input: unknown) => {
   if (!b?.name || (b.kind !== 'ssh' && b.kind !== 'postgres')) {
     return { ok: false, error: '参数不合法' }
   }
-  const id = b.id || randomUUID()
-  const st = await getSettings()
-  if (st.brokers.some((x) => x.id !== id && x.kind === b.kind && x.name === b.name)) {
-    return { ok: false, error: '已有同名同类型的连接，先删掉那个' }
-  }
-  const rest = st.brokers.filter((x) => x.id !== id)
-  const next = [...rest, { id, name: b.name, kind: b.kind, readOnly: b.readOnly !== false }]
-  try {
-    // 有给新连接串才写；编辑名字/只读时不必重填
-    if (typeof b.target === 'string' && b.target) await setBrokerTarget(id, b.target)
-    await setSettings({ brokers: next })
-    return { ok: true, brokers: next }
-  } catch (err) {
-    return { ok: false, error: String((err as Error)?.message ?? err) }
-  }
+  return brokerMutations.save({
+    id: b.id,
+    name: b.name,
+    kind: b.kind,
+    readOnly: b.readOnly,
+    target: b.target
+  })
 })
 
 ipcMain.handle('broker:delete', async (e, id: unknown) => {
   if (!fromMainWin(e) || typeof id !== 'string') return { ok: false }
-  const st = await getSettings()
-  await deleteBrokerTarget(id)
-  const next = st.brokers.filter((b) => b.id !== id)
-  await setSettings({ brokers: next })
-  return { ok: true, brokers: next }
+  return brokerMutations.delete(id)
 })
 
 ipcMain.handle('layout:export', async (e, payload: unknown) => {

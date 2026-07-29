@@ -26,6 +26,7 @@ import {
   defaultPresence,
   apiKeyUnavailable,
   pickQuota,
+  mayProbe,
   startQuotaHub,
   type QuotaAccount
 } from '../src/main/quota/index.ts'
@@ -156,4 +157,39 @@ test('账号自带的 email 和 plan 会覆盖采集器结果。', () => {
   const out = decorateQuota(a, defaultPresence(a), collected({ email: 'old@z.com' }))
   assert.equal(out.email, 'x@y.com')
   assert.equal(out.plan, 'pro')
+})
+
+/* ── 允不允许探测（codex 第二轮 P0）─────────────────────────────────────
+   老判据 `env['CODEX_HOME'] || env['CLAUDE_CONFIG_DIR']` 有两个反例，
+   两个都会把**别人的**额度标到这个凭证名下，而且不报错： */
+
+test('**codex 凭证只配了 CLAUDE_CONFIG_DIR → 不许探测**（否则读的是系统默认 ~/.codex）', () => {
+  assert.equal(
+    mayProbe(acct({ accountId: 'u1', provider: 'codex', env: { CLAUDE_CONFIG_DIR: '/x' } })),
+    false
+  )
+})
+
+test('**同时配了隔离目录和 API key → 不许探测**（登录态那条路已经判它按量计费）', () => {
+  /* 界面上会出现「订阅剩余 92%」而真实调用在按量出账 ——
+     identity-env.ts 明写登录态和额度必须共用 billingKind 这一个判据。 */
+  assert.equal(
+    mayProbe(acct({ accountId: 'u2', provider: 'codex', kind: 'api-key', env: { CODEX_HOME: '/x' } })),
+    false
+  )
+})
+
+test('配了自己 provider 隔离目录的订阅凭证 → 允许探测', () => {
+  assert.equal(mayProbe(acct({ accountId: 'u3', provider: 'codex', env: { CODEX_HOME: '/x' } })), true)
+  assert.equal(
+    mayProbe(acct({ accountId: 'u4', provider: 'claude', env: { CLAUDE_CONFIG_DIR: '/x' } })),
+    true
+  )
+})
+
+test('**系统账号永远放行** —— 它查默认目录本来就是查它自己', () => {
+  /* 这一支是「观测压过推断」那次回归修复的落点：
+     shell 里 export 的 OPENAI_API_KEY 会让 system:codex 被判成 api-key，
+     但它的订阅额度是真查得到的，不能因为 kind 就不查。 */
+  assert.equal(mayProbe(acct({ accountId: 'system:codex', kind: 'api-key', env: {} })), true)
 })

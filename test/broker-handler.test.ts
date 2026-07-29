@@ -2,11 +2,17 @@
  * 钉住 `tb db` / `tb ssh` 曾经绕过授权和任务账本的漏洞。
  *
  * 这里测的是可注入依赖的主进程 handler：拒绝授权或缺失 source 时绝不能触发
- * brokerRun；profile 换 id 后不能继承旧授权；成功或失败的返回文本都不能泄露连接串。
+ * brokerRun；profile 换 id 后不能继承旧授权；并发保存不能丢更新或留下孤儿连接串；
+ * SQL/ssh 内嵌的新密码不能进入授权详情和持久化账本摘要。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { handleBroker, classifyBrokerResult, type BrokerHandlerDeps } from '../src/main/broker-handler.ts'
+import {
+  createBrokerMutations,
+  handleBroker,
+  classifyBrokerResult,
+  type BrokerHandlerDeps
+} from '../src/main/broker-handler.ts'
 import { classifyDelegateResult } from '../src/main/delegate.ts'
 
 const secret = 'postgres://admin:TOPSECRET@prod.example/app'
@@ -96,8 +102,8 @@ test('同名同类型连接换了 id 后必须使用不同授权 key', async () 
 
   const targets = calls.authorize.map((a) => a.target)
   assert.deepEqual(targets, [
-    'broker:postgres:prod#old-prof',
-    'broker:postgres:prod#new-prof'
+    'broker:postgres:prod#old-profile-id',
+    'broker:postgres:prod#new-profile-id'
   ])
   assert.notEqual(targets[0], targets[1], '新 profile 继承了旧 profile 的授权')
 })
@@ -151,6 +157,72 @@ test('账本 task 摘要和授权详情都不含连接串', async () => {
   assert.ok((calls.ledger[0]?.task?.length ?? 0) <= 200)
   assert.ok(!calls.ledger[0]?.task?.includes(secret))
   assert.ok(!calls.authorize[0]?.detail.includes(secret))
+})
+
+test('并发保存两个代理连接时最终列表完整且连接串没有孤儿', async () => {
+  let brokers: Array<{ id: string; name: string; kind: 'ssh' | 'postgres'; readOnly: boolean }> = []
+  const targets = new Map<string, string>()
+  let sequence = 0
+  const mutations = createBrokerMutations({
+    getSettings: async () => {
+      await Promise.resolve()
+      return { brokers: brokers.map((broker) => ({ ...broker })) }
+    },
+    setSettings: async (patch) => {
+      await Promise.resolve()
+      brokers = patch.brokers
+    },
+    setBrokerTarget: async (id, target) => {
+      targets.set(id, target)
+    },
+    deleteBrokerTarget: async (id) => {
+      targets.delete(id)
+    },
+    randomId: () => `broker-${++sequence}`
+  })
+
+  const results = await Promise.all([
+    mutations.save({
+      name: 'primary',
+      kind: 'postgres',
+      readOnly: true,
+      target: 'postgres://primary-secret'
+    }),
+    mutations.save({
+      name: 'backup',
+      kind: 'ssh',
+      readOnly: true,
+      target: 'backup-password'
+    })
+  ])
+
+  assert.ok(results.every((result) => result.ok))
+  assert.deepEqual(
+    brokers.map((broker) => broker.name).sort(),
+    ['backup', 'primary']
+  )
+  assert.deepEqual(
+    [...targets.keys()].sort(),
+    brokers.map((broker) => broker.id).sort()
+  )
+})
+
+test('各类改密语法的密码都不会进入授权详情或账本任务', async () => {
+  const cases = [
+    { kind: 'postgres', payload: "ALTER ROLE alice PASSWORD 'S3cret'", password: 'S3cret' },
+    { kind: 'postgres', payload: 'ALTER ROLE alice PASSWORD "DoubleSecret"', password: 'DoubleSecret' },
+    { kind: 'postgres', payload: "CREATE USER alice IDENTIFIED BY 'IdentSecret'", password: 'IdentSecret' },
+    { kind: 'ssh', payload: 'tool --password=LongSecret status', password: 'LongSecret' },
+    { kind: 'ssh', payload: 'tool -pShortSecret status', password: 'ShortSecret' }
+  ] as const
+
+  for (const row of cases) {
+    const { deps, calls } = makeDeps()
+    await handleBroker(deps, 'term-1', row.kind, 'prod', row.payload)
+
+    assert.ok(!calls.authorize[0]?.detail.includes(row.password), `${row.payload} 泄露到授权详情`)
+    assert.ok(!calls.ledger[0]?.task?.includes(row.password), `${row.payload} 泄露到账本任务`)
+  }
 })
 
 test('授权通过后账本有 start 和 finish 两条且 brokerRun 只执行一次', async () => {

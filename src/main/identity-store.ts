@@ -4,6 +4,7 @@
  */
 import { app, safeStorage } from 'electron'
 import { readFile, writeFile, rename, unlink, copyFile } from 'node:fs/promises'
+import { constants as FS } from 'node:fs'
 import { existsSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { execFile } from 'node:child_process'
@@ -95,8 +96,12 @@ async function load(): Promise<Identity[]> {
          项目对 workspace.json 已有同一条判据（tmp+rename + .bak + 损坏隔离），
          凭证比画布更值钱，没理由反而没有退路。
          备份失败**不阻断迁移** —— 迁移本身是对的，备份只是保险。 */
-      await copyFile(file(), `${file()}.pre-envops.bak`).catch((err) =>
-        console.error('凭证迁移前的备份没写成（迁移继续）：', err)
+      /* `COPYFILE_EXCL`：**已有备份就不覆盖**。codex 指出的真实路径 ——
+         第一次备份成功但 persist 失败，旧格式还在盘上；下次启动又进这个分支，
+         默认的 copyFile 会把那份**最早的**原始密文覆盖掉。
+         已存在时报 EEXIST，落到下面的 catch，迁移照常继续。 */
+      await copyFile(file(), `${file()}.pre-envops.bak`, FS.COPYFILE_EXCL).catch((err) =>
+        console.error('凭证迁移前的备份跳过（已有一份或写不成，迁移继续）：', err)
       )
       await persist(cache).catch((err) =>
         console.error('凭证迁移重写没成功（内存已是新格式，下次写入会补上）：', err)

@@ -4,6 +4,22 @@ interface BrokerSettings {
   brokers: Array<Omit<BrokerProfile, 'target'>>
 }
 
+export interface BrokerMutationDeps {
+  getSettings: () => Promise<BrokerSettings>
+  setSettings: (patch: BrokerSettings) => Promise<unknown>
+  setBrokerTarget: (id: string, target: string) => Promise<void>
+  deleteBrokerTarget: (id: string) => Promise<void>
+  randomId: () => string
+}
+
+export interface BrokerSaveInput {
+  id?: string
+  name: string
+  kind: 'ssh' | 'postgres'
+  readOnly?: boolean
+  target?: string
+}
+
 type LedgerState = 'done' | 'failed' | 'timeout' | 'rejected'
 
 interface LedgerMeta {
@@ -25,6 +41,94 @@ export interface BrokerHandlerDeps {
 
 const redact = (text: string, secret: string): string =>
   secret ? text.split(secret).join('«已隐去»') : text
+
+/**
+ * 只生成授权弹窗和任务账本使用的摘要；执行器仍收到未经修改的原始 payload。
+ * 除完整连接串外，还要遮住 SQL 改密语句和 ssh 常见的命令行密码参数。
+ */
+export function summarizeBrokerPayload(kind: string, payload: string, target: string): string {
+  let summary = redact(payload, target)
+  if (kind === 'postgres') {
+    summary = summary
+      .replace(/\b(PASSWORD)\s+(?:'[^']*'|"[^"]*")/gi, '$1 «已隐去»')
+      .replace(/\b(IDENTIFIED\s+BY)\s+(?:'[^']*'|"[^"]*")/gi, '$1 «已隐去»')
+  } else if (kind === 'ssh') {
+    summary = summary
+      .replace(/(--password=)(?:"[^"]*"|'[^']*'|[^\s]+)/gi, '$1«已隐去»')
+      .replace(/(^|\s)(-p)(?:"[^"]*"|'[^']*'|[^\s]+)/g, '$1$2«已隐去»')
+  }
+  return summary
+}
+
+/**
+ * broker 元数据和连接串分处两个存储，必须把它们的整段读改写放进同一条队列。
+ * 否则并发保存会各自从旧列表计算 next，后写者覆盖前写者。
+ */
+export function createBrokerMutations(deps: BrokerMutationDeps): {
+  save: (input: BrokerSaveInput) => Promise<
+    { ok: true; brokers: BrokerSettings['brokers'] } | { ok: false; error: string }
+  >
+  delete: (id: string) => Promise<{ ok: true; brokers: BrokerSettings['brokers'] }>
+} {
+  let mutationChain: Promise<unknown> = Promise.resolve()
+  const serialize = <T>(fn: () => Promise<T>): Promise<T> => {
+    const next = mutationChain.then(fn, fn)
+    mutationChain = next.catch(() => undefined)
+    return next
+  }
+
+  return {
+    save: (input) =>
+      serialize(async () => {
+        const id = input.id || deps.randomId()
+        const st = await deps.getSettings()
+        if (
+          st.brokers.some(
+            (broker) =>
+              broker.id !== id && broker.kind === input.kind && broker.name === input.name
+          )
+        ) {
+          return { ok: false as const, error: '已有同名同类型的连接，先删掉那个' }
+        }
+        const existed = st.brokers.some((broker) => broker.id === id)
+        const next = [
+          ...st.brokers.filter((broker) => broker.id !== id),
+          {
+            id,
+            name: input.name,
+            kind: input.kind,
+            readOnly: input.readOnly !== false
+          }
+        ]
+        let targetWritten = false
+        try {
+          if (typeof input.target === 'string' && input.target) {
+            await deps.setBrokerTarget(id, input.target)
+            targetWritten = true
+          }
+          await deps.setSettings({ brokers: next })
+          const keep = new Set(next.map((broker) => broker.id))
+          await Promise.all(
+            st.brokers
+              .filter((broker) => !keep.has(broker.id))
+              .map((broker) => deps.deleteBrokerTarget(broker.id))
+          )
+          return { ok: true as const, brokers: next }
+        } catch (err) {
+          if (targetWritten && !existed) await deps.deleteBrokerTarget(id).catch(() => undefined)
+          return { ok: false as const, error: String((err as Error)?.message ?? err) }
+        }
+      }),
+    delete: (id) =>
+      serialize(async () => {
+        const st = await deps.getSettings()
+        const next = st.brokers.filter((broker) => broker.id !== id)
+        await deps.setSettings({ brokers: next })
+        await deps.deleteBrokerTarget(id)
+        return { ok: true as const, brokers: next }
+      })
+  }
+}
 
 const DENIED = '已拒绝：'
 const FAILED = '执行失败：'
@@ -76,12 +180,16 @@ export async function handleBroker(
     const avail = cfg.brokers.filter((b) => b.kind === kind).map((b) => b.name)
     return `没有名为「${name}」的${kind}连接。${avail.length ? `可用：${avail.join('、')}` : '去设置 → 代理连接里加一个。'}`
   }
-  const authTarget = `${profileLabel}#${prof.id.slice(0, 8)}`
+  /* **用完整 id，不截前缀**。8 个十六进制字符只有 32 bit —— 随机 UUID 撞的概率虽低，
+     但设置里的 id 并不强制是 UUID，可以**确定性地构造**一个同前缀的。
+     撞上的后果是旧 grant 跳过授权弹窗、而连接串按新的完整 id 去取
+     = 授权被转移给了另一条连接。授权 key 是给机器比对的，没有截短的理由。 */
+  const authTarget = `${profileLabel}#${prof.id}`
 
   const target = await deps.getBrokerTarget(prof.id)
   if (!target) return `连接「${name}」还没配连接串（设置 → 代理连接）`
 
-  const safePayload = redact(payload, target)
+  const safePayload = summarizeBrokerPayload(kind, payload, target)
 
   return deps.withLedger(
     {

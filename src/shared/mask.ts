@@ -22,3 +22,17 @@ export function maskEmail(email: string): string {
   if (at <= 0) return '***'
   return `${email[0]}***${email.slice(at)}`
 }
+
+/**
+ * 把一段**自由文本**里的邮箱全部脱敏。
+ *
+ * 光有 `maskEmail` 不够 —— 还有第三条路径：CLI 的**原始输出**被整段当成
+ * 展示文案。实测：`parseCodexLogin('Authenticated as alice@example.com')`
+ * 把整行放进 `detail`，凭证节点的 tooltip 直接显示；Claude 那边认不出的输出
+ * 也会原样回显前 80 字符。
+ *
+ * 判据仍是那一条：**谁把外部文本拿去给人看，谁就得先过这里。**
+ */
+export function maskEmailsInText(text: string): string {
+  return text.replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, (m) => maskEmail(m))
+}

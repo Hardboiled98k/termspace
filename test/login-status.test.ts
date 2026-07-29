@@ -83,3 +83,28 @@ test('claude auth 返回 null / 数字 → unknown，不抛也不报"未登录"'
     assert.equal(r.state, 'unknown', `${s} 应该是 unknown，得到 ${r.state}`)
   }
 })
+
+/* ── 第三条邮箱路径（codex 第二轮 P1-6）───────────────────────────────
+   光把 `maskEmail` 提到 shared 还不够：CLI 的**原始输出**会被整段当成展示文案。
+   `parseCodexLogin('Authenticated as alice@example.com')` 把整行放进 detail，
+   凭证节点的 tooltip 直接显示它；认不出的输出也会原样回显前 80 字符。
+   判据：**谁把外部文本拿去给人看，谁就得先过 maskEmailsInText。** */
+
+test('**codex 登录输出里的邮箱也要脱敏**（它整行进 tooltip）', () => {
+  const r = parseCodexLogin('Logged in using ChatGPT account alice@example.com')
+  assert.equal(r.state, 'in')
+  assert.ok(!r.detail.includes('alice@example.com'), `明文邮箱进了 detail：${r.detail}`)
+  assert.match(r.detail, /a\*\*\*@example\.com/)
+})
+
+test('认不出的原始输出回显时同样脱敏', () => {
+  const r = parseCodexLogin('weird output for bob@corp.io please check')
+  assert.equal(r.state, 'unknown')
+  assert.ok(!r.detail.includes('bob@corp.io'), r.detail)
+})
+
+test('Claude 那边非 JSON 的原始回显也脱敏', () => {
+  const r = parseClaudeAuth('not json at all, carol@x.org')
+  assert.equal(r.state, 'unknown')
+  assert.ok(!r.detail.includes('carol@x.org'), r.detail)
+})

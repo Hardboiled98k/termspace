@@ -8,6 +8,7 @@ import { collectClaude } from './claude.ts'
 import { collectCodex } from './codex.ts'
 import { collectCopilot } from './copilot.ts'
 import { now, type AccountPresence, type AccountQuota, type QuotaCapability } from './types.ts'
+import { PROVIDERS } from '../../shared/provider-manifest.ts'
 
 export type {
   AccountPresence,
@@ -149,6 +150,35 @@ export function pickQuota(
   return null
 }
 
+/**
+ * 这个账号**允许不允许**去查额度。
+ *
+ * 判据必须同时满足两条，缺一条都会出跨账号错标：
+ *
+ * 1. **隔离目录要是这个 provider 自己的那一个**。老实现写的是
+ *    `env['CODEX_HOME'] || env['CLAUDE_CONFIG_DIR']` —— 于是一个 **codex** 凭证
+ *    只配了 `CLAUDE_CONFIG_DIR` 也会放行，然后去读**系统默认的** `~/.codex`，
+ *    把系统号的额度、邮箱、「已验证登录」全标到这个凭证名下。
+ *    键名从 manifest 的 `homeEnvKey` 取，**不在这里再硬编码一份**
+ *    （上一轮 P0-4 就是硬编码那份漏了变量）。
+ *
+ * 2. **不能是按量计费的**。`billingKind` 判成 api-key 的凭证（哪怕它同时配了
+ *    `CODEX_HOME`），登录态那条路已经在 probe **之前**短路成「按量计费，
+ *    没有订阅登录态」（`identity-store.ts`）。额度这边要是还去探测那个目录、
+ *    再让订阅窗口压过 api-key，界面就会显示**订阅剩余额度、而真实调用在按量出账**。
+ *    `identity-env.ts` 明写这两处必须共用同一个判据。
+ *
+ * 系统账号（`system:*`）是唯一的例外，显式放行：它查默认目录**本来就是查它自己**。
+ * 那条「观测压过推断」的回归修复（shell 里 export 的 key 让 system:codex 被误判成
+ * api-key，真实订阅额度被顶掉）正是靠这一支继续生效的。
+ */
+export function mayProbe(a: QuotaAccount): boolean {
+  if (a.accountId.startsWith('system:')) return true
+  if (a.kind === 'api-key') return false
+  const homeKey = PROVIDERS.find((p) => p.id === a.provider)?.homeEnvKey
+  return !!homeKey && !!a.env[homeKey]
+}
+
 export function startQuotaHub(
   homeDir: string,
   onUpdate: (list: AccountQuota[]) => void,
@@ -186,11 +216,7 @@ export function startQuotaHub(
         }
         return null
       }
-      const own =
-        a.accountId.startsWith('system:') ||
-        a.env['CODEX_HOME'] ||
-        a.env['CLAUDE_CONFIG_DIR']
-      const r = own ? await probe() : null
+      const r = mayProbe(a) ? await probe() : null
       /* **`kind` 绝不能在采集之前短路**（实测回归：本机 `OPENAI_API_KEY` 在登录 shell 里
          export 着，于是 `billingKind` 把 `system:codex` 判成 api-key，
          而 codex CLI 实际走的是 OAuth 订阅 —— 真实的 `pro` + 周窗 1% 被三行

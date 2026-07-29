@@ -106,6 +106,7 @@ export function SettingsPanel({
   const [brokerRO, setBrokerRO] = useState(true)
   /** 连接串草稿。**只在内存里活一次** —— 保存后主进程不会再回传它 */
   const [brokerTarget, setBrokerTarget] = useState('')
+  const [brokerSaving, setBrokerSaving] = useState(false)
 
   useEffect(() => {
     void window.termspace.getSettings().then(setS)
@@ -424,8 +425,10 @@ export function SettingsPanel({
                 />
                 <button
                   className="settings-btn"
-                  disabled={!brokerName.trim() || !brokerTarget.trim()}
+                  disabled={brokerSaving || !brokerName.trim() || !brokerTarget.trim()}
                   onClick={() => {
+                    if (brokerSaving) return
+                    setBrokerSaving(true)
                     void window.termspace
                       .saveBroker({
                         name: brokerName.trim(),
@@ -439,9 +442,10 @@ export function SettingsPanel({
                         setBrokerTarget('')
                         void window.termspace.getSettings().then(setS)
                       })
+                      .finally(() => setBrokerSaving(false))
                   }}
                 >
-                  保存
+                  {brokerSaving ? '保存中…' : '保存'}
                 </button>
               </div>
               <p className="settings-note">

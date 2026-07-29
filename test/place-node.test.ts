@@ -31,13 +31,37 @@ test('中心被占了就往右下错开，不叠在一起', () => {
   assert.ok(second.x > first.x && second.y > first.y, '错开方向要和 macOS 新窗口一致（右下）')
 })
 
-test('混合尺寸节点按中心判占用，凭证不会完整落进已有终端内部', () => {
-  const p = placeNewNode(
-    { x: 0, y: 0 },
-    { width: 420, height: 320 },
-    [{ x: -300, y: -200, width: 600, height: 400 }]
-  )
-  assert.notDeepEqual(p, { x: -210, y: -160 })
+test('**用真实的凭证尺寸**：小节点绝不能完整落进已有终端内部', () => {
+  /* 这条用例的**上一版用的是 420×320**，而标题说的是"凭证" ——
+     凭证节点真实尺寸是 220×132。420×320 恰好能过，220×132 过不了：
+     实测落点 (-42, 2)，**一个像素都露不出来**。
+     教训：用例里的数字要跟被声称的场景对得上，凑一个能过的尺寸等于没测。 */
+  const TERM = { x: -300, y: -200, width: 600, height: 400 }
+  const CRED = { width: 220, height: 132 }
+  const p = placeNewNode({ x: 0, y: 0 }, CRED, [TERM])
+  const swallowed =
+    p.x >= TERM.x && p.y >= TERM.y &&
+    p.x + CRED.width <= TERM.x + TERM.width &&
+    p.y + CRED.height <= TERM.y + TERM.height
+  assert.equal(swallowed, false, `凭证完整落在终端内部：${JSON.stringify(p)}`)
+})
+
+test('层叠手感不能被"防吞没"毁掉：同尺寸节点仍然只错开一点点', () => {
+  /* 判据 2 如果写成"矩形相交就算占用"，同尺寸节点错开 34px 仍然相交，
+     会一路推到 600 多像素外 —— 那是另一种坏。所以判据 2 必须是**完全包含**，
+     而层叠永远不会造成完全包含（新节点总从右下角露出来）。 */
+  const a = placeNewNode({ x: 0, y: 0 }, SIZE)
+  const b = placeNewNode({ x: 0, y: 0 }, SIZE, [{ ...a, ...SIZE }])
+  assert.ok(b.x - a.x > 0 && b.x - a.x < 200, `层叠推太远了：${b.x - a.x}px`)
+  assert.equal(b.x - a.x, b.y - a.y, '要沿对角线')
+})
+
+test('大节点落在小节点上不算被吞（方向不能反）', () => {
+  const p = placeNewNode({ x: 0, y: 0 }, { width: 600, height: 400 }, [
+    { x: -110, y: -66, width: 220, height: 132 }
+  ])
+  // 中心几乎重合 → 判据 1 会让它错开；但绝不能因为"包含"判反而无限推
+  assert.ok(Math.abs(p.x) < 400, `被推太远：${JSON.stringify(p)}`)
 })
 
 test('**错开按"占没占"判，不按节点总数**', () => {
