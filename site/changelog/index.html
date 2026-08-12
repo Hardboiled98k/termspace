@@ -48,9 +48,38 @@
 
     <div class="rel rise">
       <div>
+        <div class="v">0.4.0</div>
+        <div class="d">2026-08-13</div>
+        <div style="margin-top:8px"><span class="chip g">当前</span></div>
+      </div>
+      <div>
+        <h3>新增</h3>
+        <ul>
+          <li><strong>⌫ / ⌦ 直接删除选中节点</strong> —— 不必每次右键。走的是和右键菜单
+            同一个入口：确认框、⌘Z 撤回、连带删连线与组内子节点都保留。
+            在终端里打字时按退格不会误删（判据是「焦点不在任何可输入的地方」，
+            而不是「有没有选中节点」）</li>
+        </ul>
+
+        <h3>改进</h3>
+        <ul>
+          <li><strong>缩小画布时终端内容能撑得更久</strong> —— 判据从「画布缩放」改成
+            <strong>「这行字在屏幕上有几像素高」</strong>。以前是一刀切，与节点多大、
+            字号多少都无关，把节点拉大照样被收成占位。现在能看到内容的缩放范围拉大一倍多</li>
+          <li>中间那一档（内容已看不清、还没到全景）现在会显示<strong>恒定大小</strong>的
+            节点标题。以前那行字跟着画布一起缩，缩到远处只剩几个像素，
+            这一档等于「内容没了、字也读不出」</li>
+          <li><strong>全景视图去掉空闲节点的灰块</strong> —— 「空闲」本来就没有语义，
+            却因为画布上多数节点都空闲而最抢眼。现在只留极淡的底，
+            蓝（运行中）/ 橙（需要你）/ 红（出错）照旧实心。扫一眼跳出来的只有真需要你的</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="rel rise">
+      <div>
         <div class="v">0.3.0</div>
         <div class="d">2026-07-29</div>
-        <div style="margin-top:8px"><span class="chip g">当前</span></div>
       </div>
       <div>
         <h3>新增</h3>
