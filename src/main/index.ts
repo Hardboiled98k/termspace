@@ -2524,6 +2524,30 @@ app.whenReady().then(async () => {
               })()`
             )
             await new Promise((r) => setTimeout(r, 700))
+            /* **报出真正缩到了多少。** 缩放是按 1.2 倍离散点击实现的，落点必然量化 ——
+               请求 0.15 可能停在 0.17。不报的话，每次拿这个开关做的测量都是在拿
+               请求值当实测值，而 LOD 阈值这类判断恰恰只在真实值上成立。
+               （定 LOD 阈值时我就这么误判过一轮。） */
+            const got = await win.webContents.executeJavaScript(
+              `(() => {
+                const vp = document.querySelector('.react-flow__viewport')
+                const m = /scale\\(([\\d.]+)\\)/.exec(vp?.style.transform || '')
+                /* 标题在**屏幕上**多高，是这几档能不能读的唯一判据 ——
+                   canvas 坐标里的 font-size 会被画布缩放吃掉，只看它等于没量。
+                   getBoundingClientRect 已经是屏幕像素，直接可比。 */
+                const t = document.querySelector('.term-node-lod-title')
+                const c = document.querySelector('.term-node-far-chip')
+                return JSON.stringify({
+                  zoom: m ? Number(m[1]) : null,
+                  terminals: document.querySelectorAll('.react-flow__node-terminal').length,
+                  lod: document.querySelectorAll('.term-node-lod').length,
+                  farChips: document.querySelectorAll('.term-node-far-chip').length,
+                  lodTitlePx: t ? Math.round(t.getBoundingClientRect().height) : null,
+                  farChipPx: c ? Math.round(c.getBoundingClientRect().height) : null
+                })
+              })()`
+            )
+            console.log(`[demo] 请求 zoom=${z}，实际 ${got}`)
           }
         }
         /* `TERMBOARD_CLICK=<CSS 选择器>[|<选择器>…]`：截图前依次点一遍。

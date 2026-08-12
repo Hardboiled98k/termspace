@@ -2286,10 +2286,36 @@ function Board(): React.JSX.Element {
         e.preventDefault()
         void undoDelete()
       }
+      /* ⌫ / ⌦ 删除选中节点。
+         React Flow 自带的 deleteKeyCode 仍然关着（`deleteKeyCode={null}`）——
+         它直接删，没有确认也不进可撤回记录。这里自己接，是为了走 `removeNodes`
+         那一个入口（确认 + ⌘Z 撤回 + 连带删连线和组内子节点）。
+
+         ⚠️ **退格是终端里最高频的键**，误伤一次就是杀掉一个跑着的 shell。
+         所以判据必须是「焦点不在任何可输入的地方」，而不是「有没有选中节点」——
+         终端里可以既有选中的节点、又正在打字。浏览器节点的 <webview> 是独立进程，
+         它的按键根本不冒泡到这里，天然安全；但地址栏是本文档的 input，要挡。 */
+      if (e.key === 'Backspace' || e.key === 'Delete') {
+        const t = e.target as HTMLElement | null
+        if (
+          t?.closest(
+            '.term-node-body, .browser-body, .browser-addr, .context-node-body, input, textarea, select, [contenteditable]'
+          )
+        )
+          return
+        const selIds = new Set(nodesRef.current.filter((n) => n.selected).map((n) => n.id))
+        if (!selIds.size) return
+        // 选中里若有集群，子节点要一起删 —— 否则组没了、子节点变成看不见也删不掉的孤儿
+        const gone = nodesRef.current
+          .filter((n) => n.selected || (n.parentId && selIds.has(n.parentId)))
+          .map((n) => n.id)
+        e.preventDefault()
+        void removeNodes(gone, gone.length > 1 ? `删除选中的 ${gone.length} 个节点` : '删除该节点')
+      }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [undoDelete])
+  }, [undoDelete, removeNodes])
 
   const deleteMenuNode = useCallback(() => {
     if (!menuNode) return

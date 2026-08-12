@@ -41,8 +41,30 @@ export type TermNode = Node<
   'terminal'
 >
 
-// 缩放低于此值 → 隐藏活终端，显示 LOD 占位（性能 + 可读性）
-const LOD_ZOOM = 0.35
+/**
+ * 退化成 LOD 占位的判据：**屏幕上的有效字号**，不是画布缩放。
+ *
+ * 老判据是 `zoom < 0.35` —— 一刀切，与节点多大、字号多少无关。
+ * 于是把节点拉大、或把字号调到 20，屏幕上明明还看得见纹理，却照样被收成一块占位。
+ * 用户报的就是这个：节点在屏幕上还很大，内容已经没了。
+ *
+ * 换成 `fontSize × zoom`，它直接就是「这行字在屏幕上有几个像素高」——
+ * 也就是「还看不看得出东西」本身。字号 13 时等价 zoom 0.154（旧的是 0.35），
+ * 字号 20 时等价 0.10，正是你把字调大时想要的行为。
+ *
+ * **为什么是 2 而不是更大**：判据不是"读得出字"，是"看得出结构"。
+ * 实测（TERMBOARD_ZOOM 逐档拍图）有效字号 2.4px 时段落分块、彩色行、
+ * 空白分布都还认得出 —— 那正是用户要的「缩小但别消失」。低于 2px 塌成均匀灰带。
+ *
+ * 再往下由 `FAR_ZOOM`(0.14) 接管，直接给状态胶囊。字号 13 时这两条线
+ * 几乎重合，所以 LOD 占位实际只在很窄一段出现 —— 这是有意的：
+ * 中间态本来就该短，要么看得见内容，要么看状态。
+ *
+ * 代价已实测（CLAUDE.md「LOD 的账记在 GPU 上」）：16 个终端满负荷时
+ * 全渲染 GPU 6.1% / LOD 1.1%，renderer 两者几乎不动。晚一点退化多花的是
+ * 合成绘制，不是 xterm 解析 —— 6% 没有要解决的问题。
+ */
+const LOD_EFFECTIVE_FONT_PX = 2
 
 // macOS Terminal.app 深色系配色 + 系统色
 const XTERM_THEME = {
@@ -85,7 +107,8 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
   const zoom = useStore((s) => s.transform[2])
-  const lod = zoom < LOD_ZOOM
+  // 判据是屏幕上的有效字号，不是缩放本身 —— 见 LOD_EFFECTIVE_FONT_PX
+  const lod = (data.fontSize ?? FONT_DEFAULT) * zoom < LOD_EFFECTIVE_FONT_PX
   const far = zoom < FAR_ZOOM
   // 连到本终端的简报节点（画布连线决定注入哪份上下文）
   const ctxIds = useStore((s) =>
@@ -442,8 +465,20 @@ function TerminalNodeImpl({ id, data, selected }: NodeProps<TermNode>): React.JS
       />
       {lod && !far && (
         <div className="term-node-lod">
-          <span className={`status-dot big ${data.status}`} />
-          <span className="term-node-lod-title">{data.title}</span>
+          {/* 内容 ×(1/zoom)，再被画布 ×zoom → **屏幕尺寸恒定**，和 FarChip 同一招。
+              不加这个的话 28px 是画布坐标：缩到 0.11 只剩 3px 高，
+              这一档就变成「内容没了、字也读不出」，比它两边都糟。
+              系数 0.5 让标题固定落在 28×0.5 ≈ 14px 的屏幕高度。
+              ⚠️ 是 `max` 不是 `min` —— 这里要的是"至少放大到 1 倍"，
+              写成 min 会把 4.6 夹回 1，等于整个反缩放没生效（实测 5px 而不是 17px，
+              一量就露馅；靠眼睛看只会觉得"好像没变"）。 */}
+          <div
+            className="term-node-lod-inner"
+            style={{ transform: `scale(${Math.max(1, 0.5 / zoom)})` }}
+          >
+            <span className={`status-dot big ${data.status}`} />
+            <span className="term-node-lod-title">{data.title}</span>
+          </div>
         </div>
       )}
       {far && (

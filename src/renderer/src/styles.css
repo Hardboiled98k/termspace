@@ -538,13 +538,19 @@ body {
 }
 
 /* ── 极远缩放：节点退化成状态色块 + 恒定尺寸标签 ─────── */
+/* 远景默认态 = **几乎不占视觉重量**。
+   老实现给空闲节点填 #4a4a4f 一块实心灰 —— 而「空闲」恰恰是没有语义的那个状态，
+   却因此在全景里最抢眼（画布上多数节点都空闲，于是满屏灰块）。
+   这与 DESIGN.md「glow 只给语义」是同一条：**无语义的状态不该占视觉重量**。
+   现在空闲只留一层极淡的底 + 发丝描边（说明"这儿有个节点"），
+   而蓝/橙/红照旧实心 —— 全景一眼扫过去，跳出来的只有真需要你的那几个。 */
 .term-node.far,
 .worker-node.far,
 .browser-node.far,
 .context-node.far {
   border-width: 0;
-  box-shadow: none;
-  background: #4a4a4f; /* 空闲块也要在近黑画布上看得见 */
+  background: rgba(255, 255, 255, 0.05);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.09);
   height: 100%;
   padding: 0;
   gap: 0;
@@ -553,20 +559,27 @@ body {
 .context-node.far > *:not(.term-node-far) {
   display: none;
 }
+/* 有语义的状态才实心。`box-shadow: none` 是把上面那层空闲描边摘掉 ——
+   留着会在纯色块上再压一道发丝线，全景里看着脏 */
 .context-node.far {
   background: rgba(191, 90, 242, 0.85);
+  box-shadow: none;
 }
 .worker-node.far-running,
 .term-node.far-running {
   background: rgba(10, 132, 255, 0.9);
+  box-shadow: none;
 }
 .worker-node.far-attention,
 .term-node.far-attention {
   background: rgba(255, 159, 10, 0.92);
+  box-shadow: none;
   animation: far-pulse 1.6s ease-in-out infinite;
 }
-.worker-node.far-error {
+.worker-node.far-error,
+.term-node.far-error {
   background: rgba(255, 69, 58, 0.85);
+  box-shadow: none;
 }
 .status-dot.context {
   background: #bf5af2;
@@ -638,9 +651,17 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 14px;
   background: var(--tb-terminal);
   border-radius: 0 0 calc(var(--tb-radius) - 0.5px) calc(var(--tb-radius) - 0.5px);
+  overflow: hidden; /* 反缩放后的内容可能宽过节点，别溢出到画布上 */
+}
+/* 反画布缩放的那一层，见 TerminalNode 里的 scale(0.5/zoom) */
+.term-node-lod-inner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  white-space: nowrap;
 }
 .term-node-lod-title {
   font-size: 28px;

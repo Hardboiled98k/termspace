@@ -73,7 +73,18 @@ TERMBOARD_FITPROBE=1                      # 量终端 canvas 溢出内容区多�
 - **vite 锁 7.x**（electron-vite 5 不支持 vite 8）、**@vitejs/plugin-react 锁 5.x**（6 要 vite 8）
 - **不用 React StrictMode** — dev 双跑 effect 会 spawn+kill pty 两次
 - 终端区域必须 `nodrag nowheel` class，否则 React Flow 抢拖拽/滚轮
-- LOD 阈值 zoom 0.35，占位层挂在 `.term-node-lod`
+- **缩放三档的判据（2026-08-13 重定，用户报「过早隐藏内容」）**：
+  - 内容 → LOD：`fontSize × zoom < 2`，即**屏幕上的有效字号**，不是 zoom 本身。
+    老判据 `zoom < 0.35` 一刀切，与节点多大、字号多少无关 —— 把节点拉大照样被收掉
+  - LOD → 远景：`FAR_ZOOM` 0.14 → **0.075**。老值和 LOD 阈值几乎重合，中间没有过渡
+  - LOD 占位与远景胶囊的正文都要 **×(1/zoom) 反缩放**，否则 canvas 坐标里的字号
+    被画布缩放吃掉（实测 28px 标题在 zoom 0.11 只剩 5px）。⚠️ 是 `Math.max(1, …)`
+    不是 `min` —— 写成 min 会把 4.6 夹回 1，整个反缩放静默失效
+  - **远景的空闲态不填实心灰**：「空闲」没有语义，却因为节点多而在全景里最抢眼。
+    只留极淡底 + 发丝描边；蓝/橙/红照旧实心 —— 与「glow 只给语义」同一条
+- **`TERMBOARD_ZOOM` 会报实际缩放**：它按 1.2 倍离散点击实现，落点必然量化
+  （请求 0.15 停在 0.156）。它以前不报，于是每次拿它做的测量都是拿请求值当实测值 ——
+  定这几档阈值时我就这么误判过一轮。现在还会报标题/胶囊在**屏幕上**的像素高度
 - **pty 已 tmux 续存**：socket `termboard`、会话 `tb-<nodeId>`、conf 在 userData（`destroy-unattached off` 是命根）。reload/HMR/app 退出=releasePty（会话活）；节点 ✕/换身份=destroyPty（kill-session）。调试残留：`tmux -L termboard ls / kill-server`
 - deleteKeyCode=null：防误删节点杀 shell，删除走 ✕（已实现 destroy 语义）
 - 启动状态推送必须走 renderer:ready 握手（首推早于订阅会竞态丢失）
